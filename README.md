@@ -136,103 +136,74 @@ Any other text message starts or continues an interactive study session with the
 
 ### System Design
 
-```mermaid
-graph TB
-    subgraph Telegram
-        TG["Telegram API"]
-    end
-
-    subgraph Bot Process
-        direction TB
-        AIOGRAM["aiogram Dispatcher"]
-
-        subgraph Middlewares
-            MW1["DBSession"] --> MW2["Auth"] --> MW3["RateLimit"]
-        end
-
-        subgraph Routers
-            R1["start"]
-            R2["chat"]
-            R3["settings"]
-            R4["review"]
-            R5["stats"]
-        end
-
-        SM["SessionManager"]
-
-        subgraph Agent Session
-            direction TB
-            SDK["ClaudeSDKClient
-            Claude CLI subprocess"]
-            SP["System Prompt
-            13 sections"]
-            MCP["MCP Server
-            11 tools"]
-            HK["Hooks
-            PostToolUse + UserPromptSubmit + Stop"]
-        end
-
-        PP["Post-Session Pipeline
-        streak + difficulty + milestones"]
-
-        subgraph Proactive Engine
-            direction TB
-            SCHED["APScheduler 60s tick"]
-            TR["10 Event Triggers"]
-            DISP["Dispatcher
-            template / LLM / hybrid"]
-        end
-
-        ADMIN_RPT["Health Alerts + Stats Reports"]
-    end
-
-    subgraph Admin Process
-        GRADIO["Gradio Admin Panel
-        port 7860"]
-    end
-
-    subgraph Infrastructure
-        PG[("PostgreSQL 16
-        7 tables")]
-        RD[("Redis 7
-        locks + rate limits + dedup")]
-    end
-
-    subgraph External
-        CLAUDE["Anthropic API
-        Haiku 4.5 + Sonnet 4.6"]
-    end
-
-    TG <-->|"polling"| AIOGRAM
-    AIOGRAM --> Middlewares
-    MW3 --> Routers
-    R2 --> SM
-    SM --> SDK
-    SDK <--> CLAUDE
-    SDK --- SP
-    SDK --- MCP
-    SDK --- HK
-    MCP -->|"tool calls"| PG
-    SM -->|"on close"| PP
-    PP --> PG
-
-    SCHED --> TR
-    TR --> DISP
-    DISP -->|"template"| TG
-    DISP -->|"LLM session"| CLAUDE
-    ADMIN_RPT --> TG
-
-    SM -->|"session lock"| RD
-    MW3 -->|"rate limit"| RD
-    DISP -->|"dedup + counters"| RD
-
-    GRADIO --> PG
-    GRADIO --> RD
-
-    R4 -->|"FSRS due cards"| PG
-    R5 -->|"stats queries"| PG
-
-    PROM["Prometheus port 9090"] -.->|"scrape"| AIOGRAM
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                            Bot Process                                  │
+│                                                                         │
+│  ┌──────────────┐    ┌─────────────────────────────────────────────┐    │
+│  │   Telegram    │    │              Interactive Path                │    │
+│  │     API       │    │                                             │    │
+│  │              ◄├───►│  aiogram Dispatcher                         │    │
+│  │  (polling)    │    │    │                                        │    │
+│  │               │    │    ▼                                        │    │
+│  │               │    │  Middlewares: DBSession → Auth → RateLimit  │    │
+│  │               │    │    │                                        │    │
+│  │               │    │    ▼                                        │    │
+│  │               │    │  Routers: start│chat│settings│review│stats  │    │
+│  │               │    │               │                             │    │
+│  │               │    │               ▼                             │    │
+│  │               │    │         SessionManager                      │    │
+│  │               │    │               │                             │    │
+│  │               │    │               ▼                             │    │
+│  │               │    │  ┌──── Agent Session ────────────────────┐  │    │
+│  │               │    │  │  ClaudeSDKClient (CLI subprocess)     │  │    │
+│  │               │    │  │    ├── System Prompt (13 sections)    │  │    │
+│  │               │    │  │    ├── MCP Server (11 tools) ────────►├──├───►│
+│  │               │    │  │    └── Hooks (PostToolUse,            │  │    │
+│  │               │    │  │         UserPromptSubmit, Stop)       │  │    │
+│  │               │    │  └──────────────┬───────────────────────┘  │    │
+│  │               │    │                 │ on close                  │    │
+│  │               │    │                 ▼                           │    │
+│  │               │    │  Post-Session Pipeline                     │    │
+│  │               │    │  (streak, difficulty, milestones) ────────►├───►│
+│  │               │    └─────────────────────────────────────────────┘    │
+│  │               │                                                      │
+│  │               │    ┌─────────────────────────────────────────────┐    │
+│  │               │    │              Proactive Path                  │    │
+│  │               │    │                                             │    │
+│  │  ◄────────────├────│  APScheduler (60s tick)                     │    │
+│  │  (template)   │    │    │                                        │    │
+│  │               │    │    ▼                                        │    │
+│  │               │    │  10 Event Triggers (priority-ordered)       │    │
+│  │               │    │    │                                        │    │
+│  │               │    │    ▼                                        │    │
+│  │               │    │  Dispatcher (template / LLM / hybrid) ────►├───►│
+│  │               │    └─────────────────────────────────────────────┘    │
+│  │               │                                                      │
+│  │  ◄────────────├──── Health Alerts + Stats Reports (to admins)        │
+│  └──────────────┘                                                       │
+│                        Prometheus metrics :9090                          │
+└──────────┬──────────────────────────┬───────────────────────────────────┘
+           │                          │
+           ▼                          ▼
+┌─────────────────────┐   ┌─────────────────────────┐   ┌────────────────┐
+│    PostgreSQL 16     │   │        Redis 7           │   │  Anthropic API │
+│    (7 tables)        │   │  session locks           │   │                │
+│                      │   │  rate limits             │   │  Haiku 4.5     │
+│  users, vocabulary,  │   │  notification dedup      │   │  Sonnet 4.6    │
+│  sessions, schedules,│   │  proactive tick lock     │   │                │
+│  exercises, notifs,  │   │  admin alert dedup       │   │  (via Claude   │
+│  review_log          │   │                          │   │   Agent SDK)   │
+└──────────▲──────────┘   └─────────────────────────┘   └────────────────┘
+           │
+┌──────────┴──────────┐
+│   Gradio Admin       │
+│   Panel :7860        │
+│                      │
+│  Users │ Sessions    │
+│  Costs │ Alerts      │
+│  System              │
+└─────────────────────┘
 ```
 
 ### Directory Structure
