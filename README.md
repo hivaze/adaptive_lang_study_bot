@@ -108,14 +108,14 @@ All configuration is via environment variables (loaded by `pydantic-settings` fr
 |-----------|------|---------|
 | Model | claude-haiku-4-5 | claude-sonnet-4-6 |
 | Max turns/session | 20 | 30 |
-| Max sessions/day | 5 | unlimited |
+| Max sessions/day | 7 | unlimited |
 | Session idle timeout | 5 min | 10 min |
 | Thinking mode | adaptive | adaptive |
 | Effort | medium | medium |
 | LLM notifications/day | 2 | 8 |
-| Rate limit | 8 msg/min | 20 msg/min |
-| Max cost/session | $0.20 | $1.50 |
-| Max cost/day | $0.50 | $8.00 |
+| Rate limit | 5 msg/min | 20 msg/min |
+| Max cost/session | $0.30 | $1.50 |
+| Max cost/day | $2.00 | $8.00 |
 
 To grant a user premium access, use the admin panel or update the `tier` column in the `users` table directly.
 

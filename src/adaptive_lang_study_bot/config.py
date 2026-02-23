@@ -116,13 +116,13 @@ TIER_LIMITS: dict[UserTier, TierLimits] = {
     UserTier.FREE: TierLimits(
         model="claude-haiku-4-5",
         max_turns_per_session=20,
-        max_sessions_per_day=5,
-        max_cost_per_day_usd=0.50,
+        max_sessions_per_day=7,
+        max_cost_per_day_usd=2.00,
         session_idle_timeout_seconds=300,
         thinking_type="adaptive",
         max_llm_notifications_per_day=2,
-        rate_limit_per_minute=8,
-        max_cost_per_session_usd=0.20,
+        rate_limit_per_minute=5,
+        max_cost_per_session_usd=0.30,
         redis_session_ttl_seconds=420,  # idle_timeout (300) + 120s buffer for cleanup loop delays
     ),
     UserTier.PREMIUM: TierLimits(
