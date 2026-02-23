@@ -4,6 +4,8 @@ A personalized AI language tutor that runs on Telegram. The bot adapts exercises
 
 Powered by Claude (via `claude-agent-sdk`), PostgreSQL, Redis, and aiogram. Most of the codebase was developed with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (Opus 4.6).
 
+Try the live bot: [@personal_lang_study_bot](https://t.me/personal_lang_study_bot)
+
 ## Features
 
 - **Adaptive exercises** — the AI generates exercises tailored to the user's level (A1-C2), interests, weak areas, and preferred difficulty. No static exercise bank.
@@ -137,61 +139,71 @@ Any other text message starts or continues an interactive study session with the
 ```mermaid
 graph TB
     subgraph Telegram
-        TG[Telegram API]
+        TG["Telegram API"]
     end
 
     subgraph Bot Process
         direction TB
-        AIOGRAM[aiogram Dispatcher]
+        AIOGRAM["aiogram Dispatcher"]
 
         subgraph Middlewares
-            MW1[DBSession] --> MW2[Auth] --> MW3[RateLimit]
+            MW1["DBSession"] --> MW2["Auth"] --> MW3["RateLimit"]
         end
 
         subgraph Routers
-            R1[/start]
-            R2[chat]
-            R3[/settings]
-            R4[/review]
-            R5[/stats]
+            R1["start"]
+            R2["chat"]
+            R3["settings"]
+            R4["review"]
+            R5["stats"]
         end
 
-        SM[SessionManager]
+        SM["SessionManager"]
 
         subgraph Agent Session
             direction TB
-            SDK[ClaudeSDKClient<br/>Claude CLI subprocess]
-            SP[System Prompt<br/>13 sections]
-            MCP[MCP Server<br/>11 tools]
-            HK[Hooks<br/>PostToolUse · UserPromptSubmit · Stop]
+            SDK["ClaudeSDKClient
+            Claude CLI subprocess"]
+            SP["System Prompt
+            13 sections"]
+            MCP["MCP Server
+            11 tools"]
+            HK["Hooks
+            PostToolUse + UserPromptSubmit + Stop"]
         end
 
-        PP[Post-Session Pipeline<br/>streak · difficulty · milestones]
+        PP["Post-Session Pipeline
+        streak + difficulty + milestones"]
 
         subgraph Proactive Engine
             direction TB
-            SCHED[APScheduler 60s tick]
-            TR[10 Event Triggers]
-            DISP[Dispatcher<br/>template · LLM · hybrid]
+            SCHED["APScheduler 60s tick"]
+            TR["10 Event Triggers"]
+            DISP["Dispatcher
+            template / LLM / hybrid"]
         end
 
-        ADMIN_RPT[Health Alerts · Stats Reports]
+        ADMIN_RPT["Health Alerts + Stats Reports"]
     end
 
     subgraph Admin Process
-        GRADIO[Gradio Admin Panel<br/>:7860]
+        GRADIO["Gradio Admin Panel
+        port 7860"]
     end
 
     subgraph Infrastructure
-        PG[(PostgreSQL 16<br/>7 tables)]
-        RD[(Redis 7<br/>locks · rate limits · dedup)]
+        PG[("PostgreSQL 16
+        7 tables")]
+        RD[("Redis 7
+        locks + rate limits + dedup")]
     end
 
     subgraph External
-        CLAUDE[Anthropic API<br/>Haiku 4.5 / Sonnet 4.6]
+        CLAUDE["Anthropic API
+        Haiku 4.5 + Sonnet 4.6"]
     end
 
-    TG <-->|webhooks / polling| AIOGRAM
+    TG <-->|"polling"| AIOGRAM
     AIOGRAM --> Middlewares
     MW3 --> Routers
     R2 --> SM
@@ -200,28 +212,27 @@ graph TB
     SDK --- SP
     SDK --- MCP
     SDK --- HK
-    MCP -->|tool calls| PG
-    SM -->|on close| PP
+    MCP -->|"tool calls"| PG
+    SM -->|"on close"| PP
     PP --> PG
 
     SCHED --> TR
     TR --> DISP
-    DISP -->|template $0| TG
-    DISP -->|LLM session| SDK
-    DISP -->|LLM session| CLAUDE
+    DISP -->|"template"| TG
+    DISP -->|"LLM session"| CLAUDE
     ADMIN_RPT --> TG
 
-    SM -->|session lock| RD
-    MW3 -->|rate limit| RD
-    DISP -->|dedup · counters| RD
+    SM -->|"session lock"| RD
+    MW3 -->|"rate limit"| RD
+    DISP -->|"dedup + counters"| RD
 
     GRADIO --> PG
     GRADIO --> RD
 
-    R4 -->|FSRS due cards| PG
-    R5 -->|stats queries| PG
+    R4 -->|"FSRS due cards"| PG
+    R5 -->|"stats queries"| PG
 
-    PROM[Prometheus :9090] -.->|scrape| Bot Process
+    PROM["Prometheus port 9090"] -.->|"scrape"| Bot Process
 ```
 
 ### Directory Structure
@@ -410,15 +421,19 @@ The bot uses `loguru` for structured logging. All significant events are logged:
 
 ## Cost Estimates
 
-| Tier | Avg session cost | Daily (typical user) | Monthly (1 user) |
+Estimates assume prompt caching is active (system prompt + tool definitions cached across turns). Pricing: Haiku 4.5 — $1/$5 per MTok (input/output), Sonnet 4.6 — $3/$15 per MTok. Proactive notifications use Haiku regardless of tier.
+
+| Tier | Avg session cost | Daily (1-2 sessions) | Monthly (1 user) |
 |------|-----------------|---------------------|------------------|
-| Free (Haiku 4.5) | $0.003-0.008 | ~$0.05 | ~$1.50 |
-| Premium (Sonnet 4.6) | $0.04-0.08 | ~$0.20 | ~$6.00 |
+| Free (Haiku 4.5) | $0.03-0.08 | ~$0.10 | ~$3 |
+| Premium (Sonnet 4.6) | $0.20-0.50 | ~$0.80 | ~$25 |
+
+Scale estimates assume 60% daily active rate and 1.5 sessions per active user per day:
 
 | Scale | All Free | Mixed (90/10) | All Premium |
 |-------|----------|---------------|-------------|
-| 100 users | ~$15/mo | ~$32/mo | ~$180/mo |
-| 1,000 users | ~$150/mo | ~$315/mo | ~$1,800/mo |
+| 100 users | ~$180/mo | ~$320/mo | ~$1,500/mo |
+| 1,000 users | ~$1,800/mo | ~$3,200/mo | ~$15,000/mo |
 
 ## Docker Compose Operations
 

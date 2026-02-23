@@ -20,5 +20,8 @@ htmlcov/
 # Claude Code
 .claude/
 
+# Project-specific
+development/code_sandbox/output/
+
 # OS
 .DS_Store
