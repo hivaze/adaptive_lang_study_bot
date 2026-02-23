@@ -232,7 +232,7 @@ graph TB
     R4 -->|"FSRS due cards"| PG
     R5 -->|"stats queries"| PG
 
-    PROM["Prometheus port 9090"] -.->|"scrape"| Bot Process
+    PROM["Prometheus port 9090"] -.->|"scrape"| AIOGRAM
 ```
 
 ### Directory Structure
