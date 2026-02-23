@@ -2,7 +2,7 @@
 
 A personalized AI language tutor that runs on Telegram. The bot adapts exercises to each user's level, tracks vocabulary with spaced repetition (FSRS), and sends proactive study reminders on user-configured schedules.
 
-Powered by Claude (via `claude-agent-sdk`), PostgreSQL, Redis, and aiogram.
+Powered by Claude (via `claude-agent-sdk`), PostgreSQL, Redis, and aiogram. Most of the codebase was developed with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (Opus 4.6).
 
 ## Features
 
@@ -131,6 +131,100 @@ To grant a user premium access, use the admin panel or update the `tier` column 
 Any other text message starts or continues an interactive study session with the AI tutor.
 
 ## Architecture
+
+### System Design
+
+```mermaid
+graph TB
+    subgraph Telegram
+        TG[Telegram API]
+    end
+
+    subgraph Bot Process
+        direction TB
+        AIOGRAM[aiogram Dispatcher]
+
+        subgraph Middlewares
+            MW1[DBSession] --> MW2[Auth] --> MW3[RateLimit]
+        end
+
+        subgraph Routers
+            R1[/start]
+            R2[chat]
+            R3[/settings]
+            R4[/review]
+            R5[/stats]
+        end
+
+        SM[SessionManager]
+
+        subgraph Agent Session
+            direction TB
+            SDK[ClaudeSDKClient<br/>Claude CLI subprocess]
+            SP[System Prompt<br/>13 sections]
+            MCP[MCP Server<br/>11 tools]
+            HK[Hooks<br/>PostToolUse · UserPromptSubmit · Stop]
+        end
+
+        PP[Post-Session Pipeline<br/>streak · difficulty · milestones]
+
+        subgraph Proactive Engine
+            direction TB
+            SCHED[APScheduler 60s tick]
+            TR[10 Event Triggers]
+            DISP[Dispatcher<br/>template · LLM · hybrid]
+        end
+
+        ADMIN_RPT[Health Alerts · Stats Reports]
+    end
+
+    subgraph Admin Process
+        GRADIO[Gradio Admin Panel<br/>:7860]
+    end
+
+    subgraph Infrastructure
+        PG[(PostgreSQL 16<br/>7 tables)]
+        RD[(Redis 7<br/>locks · rate limits · dedup)]
+    end
+
+    subgraph External
+        CLAUDE[Anthropic API<br/>Haiku 4.5 / Sonnet 4.6]
+    end
+
+    TG <-->|webhooks / polling| AIOGRAM
+    AIOGRAM --> Middlewares
+    MW3 --> Routers
+    R2 --> SM
+    SM --> SDK
+    SDK <--> CLAUDE
+    SDK --- SP
+    SDK --- MCP
+    SDK --- HK
+    MCP -->|tool calls| PG
+    SM -->|on close| PP
+    PP --> PG
+
+    SCHED --> TR
+    TR --> DISP
+    DISP -->|template $0| TG
+    DISP -->|LLM session| SDK
+    DISP -->|LLM session| CLAUDE
+    ADMIN_RPT --> TG
+
+    SM -->|session lock| RD
+    MW3 -->|rate limit| RD
+    DISP -->|dedup · counters| RD
+
+    GRADIO --> PG
+    GRADIO --> RD
+
+    R4 -->|FSRS due cards| PG
+    R5 -->|stats queries| PG
+
+    PROM[Prometheus :9090] -.->|scrape| Bot Process
+```
+
+### Directory Structure
 
 ```
 src/adaptive_lang_study_bot/
