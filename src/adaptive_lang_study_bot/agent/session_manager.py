@@ -209,6 +209,7 @@ async def run_proactive_llm_session(
             model=tuning.proactive_model,
             max_turns=tuning.proactive_max_turns,
             thinking={"type": "disabled"},
+            effort="medium",
             mcp_servers={"langbot": server},
             allowed_tools=allowed_tool_names,
             permission_mode="bypassPermissions",
@@ -353,6 +354,7 @@ async def run_summary_llm_session(
             model=tuning.proactive_model,
             max_turns=tuning.summary_max_turns,
             thinking={"type": "disabled"},
+            effort="medium",
             permission_mode="bypassPermissions",
             system_prompt=system_prompt,
         )
@@ -928,7 +930,7 @@ class SessionManager:
             if limits.thinking_type == "disabled":
                 thinking = {"type": "disabled"}
             else:
-                thinking = {"type": "enabled", "budget_tokens": 3000}
+                thinking = {"type": "adaptive"}
 
 
             # Create SDK client
@@ -936,6 +938,7 @@ class SessionManager:
                 model=limits.model,
                 max_turns=limits.max_turns_per_session,
                 thinking=thinking,
+                effort="medium",
                 mcp_servers={"langbot": server},
                 allowed_tools=allowed_tool_names,
                 permission_mode="bypassPermissions",

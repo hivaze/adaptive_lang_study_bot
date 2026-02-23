@@ -110,7 +110,8 @@ All configuration is via environment variables (loaded by `pydantic-settings` fr
 | Max turns/session | 20 | 30 |
 | Max sessions/day | 5 | unlimited |
 | Session idle timeout | 5 min | 10 min |
-| Thinking mode | disabled | adaptive (3000 budget tokens) |
+| Thinking mode | adaptive | adaptive |
+| Effort | medium | medium |
 | LLM notifications/day | 2 | 8 |
 | Rate limit | 8 msg/min | 20 msg/min |
 | Max cost/session | $0.20 | $1.50 |

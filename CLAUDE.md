@@ -93,11 +93,11 @@ Each `ClaudeSDKClient` instance spawns a Claude CLI subprocess. Sessions are ass
 
 3. **Hooks** (`hooks.py`) — per-session `SessionHookState` tracks exercise scores, tool calls, turn count. `PostToolUse` injects adaptive difficulty hints after exercises (cheap behavior steering — no extra LLM call). `UserPromptSubmit` injects wrap-up hint at 80% of turn limit.
 
-4. **Config** — model, max turns, thinking budget, cost limits — all tier-dependent from `TIER_LIMITS`.
+4. **Config** — model, max turns, thinking (adaptive), effort (medium), cost limits — all tier-dependent from `TIER_LIMITS`.
 
 ### Two-tier system
 
-Free vs premium tiers (admin-assigned, no billing). Defined in `config.py:TIER_LIMITS` as `dict[UserTier, TierLimits]`. Affects: model (haiku/sonnet), turn limits (20/30), cost caps (per-session and daily), idle timeout (5/10 min), thinking (disabled/enabled), notification limits (2/8 LLM/day), rate limits (8/20 msg/min).
+Free vs premium tiers (admin-assigned, no billing). Defined in `config.py:TIER_LIMITS` as `dict[UserTier, TierLimits]`. Affects: model (haiku/sonnet), turn limits (20/30), cost caps (per-session and daily), idle timeout (5/10 min), thinking (adaptive for both), effort (medium), notification limits (2/8 LLM/day), rate limits (8/20 msg/min).
 
 ### Concurrency model
 
