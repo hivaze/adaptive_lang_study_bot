@@ -17,7 +17,7 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from adaptive_lang_study_bot.agent.session_manager import session_manager
-from adaptive_lang_study_bot.bot.helpers import build_filterable_keyboard, get_user_lang, safe_edit_markup, safe_edit_text
+from adaptive_lang_study_bot.bot.helpers import build_filterable_keyboard, get_user_lang, safe_edit_markup, safe_edit_text, split_agent_sections
 from adaptive_lang_study_bot.bot.routers.chat import TELEGRAM_MSG_MAX_LEN, _split_message
 from adaptive_lang_study_bot.db.models import User
 from adaptive_lang_study_bot.enums import NotificationTier, ScheduleType
@@ -934,8 +934,10 @@ async def on_cta_words(callback: CallbackQuery, user: User, db_session: AsyncSes
 
 
 @router.callback_query(lambda c: c.data == "cta:session")
-async def on_cta_session(callback: CallbackQuery, user: User) -> None:
-    """CTA button from notification — encourage user to start a session."""
+async def on_cta_session(
+    callback: CallbackQuery, user: User, db_session: AsyncSession,
+) -> None:
+    """CTA button from notification — auto-start an interactive session."""
     lang = _lang(user)
     if not user.onboarding_completed:
         await callback.answer(t("start.setup_first", lang), show_alert=True)
@@ -943,8 +945,54 @@ async def on_cta_session(callback: CallbackQuery, user: User) -> None:
     if callback.message is None:
         await callback.answer()
         return
-    await callback.message.answer(t("start.cta_session_prompt", lang))
+
+    # Release middleware DB connection before the long LLM call.
+    await db_session.commit()
+
+    await callback.message.answer(t("start.cta_session_continuing", lang))
     await callback.answer()
+
+    async def _keep_typing() -> None:
+        try:
+            while True:
+                await callback.message.chat.do(ChatAction.TYPING)
+                await asyncio.sleep(4)
+        except asyncio.CancelledError:
+            pass
+
+    typing_task = asyncio.create_task(_keep_typing())
+
+    try:
+        prompt = t("start.cta_continue_prompt", lang)
+        response_chunks = await session_manager.handle_message(user, prompt)
+    except Exception:
+        logger.exception("CTA session start failed for user {}", user.telegram_id)
+        await callback.message.answer(t("start.cta_session_prompt", lang))
+        return
+    finally:
+        typing_task.cancel()
+
+    if not response_chunks or all(not c.strip() for c in response_chunks):
+        return
+
+    for chunk in response_chunks:
+        sections = split_agent_sections(chunk)
+        for section in sections:
+            parts = (
+                _split_message(section, max_len=TELEGRAM_MSG_MAX_LEN)
+                if len(section) > TELEGRAM_MSG_MAX_LEN else [section]
+            )
+            for part in parts:
+                try:
+                    await callback.message.answer(part)
+                except TelegramBadRequest:
+                    try:
+                        await callback.message.answer(part, parse_mode=None)
+                    except Exception:
+                        logger.exception(
+                            "Failed to send CTA session message to user {}",
+                            user.telegram_id,
+                        )
 
 
 # ---------------------------------------------------------------------------

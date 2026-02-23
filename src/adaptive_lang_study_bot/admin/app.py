@@ -63,9 +63,10 @@ ADMIN_CSS = """
     --input-border-color: #27272a !important;
     --input-placeholder-color: #3f3f46 !important;
     /* Buttons */
-    --button-primary-background-fill: #fafafa !important;
-    --button-primary-text-color: #09090b !important;
-    --button-primary-background-fill-hover: #d4d4d8 !important;
+    --button-primary-background-fill: #27272a !important;
+    --button-primary-text-color: #e4e4e7 !important;
+    --button-primary-background-fill-hover: #3f3f46 !important;
+    --button-primary-border-color: #3f3f46 !important;
     --button-secondary-background-fill: #18181b !important;
     --button-secondary-text-color: #a1a1aa !important;
     --button-secondary-border-color: #27272a !important;
@@ -86,6 +87,67 @@ ADMIN_CSS = """
 body, .gradio-container {
     background: #09090b !important;
     color: #a1a1aa !important;
+}
+
+/* ─────────────────────────────────────────────────────────
+   Dataframe / table — eliminate white corners (Gradio 6.x)
+   ───────────────────────────────────────────────────────── */
+[data-testid="dataframe"],
+.gradio-dataframe,
+.gradio-dataframe > div,
+.gradio-dataframe .table-wrap,
+.gradio-dataframe .wrap,
+.gradio-dataframe .svelte-virtual-table-viewport {
+    background: #0f0f11 !important;
+    border-radius: 8px !important;
+    overflow: hidden !important;
+}
+.gradio-dataframe .svelte-virtual-table-viewport,
+.gradio-dataframe .wrap {
+    border: 1px solid #1e1e22 !important;
+}
+.gradio-dataframe table {
+    background: #0f0f11 !important;
+    border-radius: 0 !important;
+}
+.gradio-dataframe th,
+.gradio-dataframe td {
+    background: transparent !important;
+    border-color: #1e1e22 !important;
+}
+.gradio-dataframe thead th {
+    background: #141416 !important;
+    color: #71717a !important;
+    font-weight: 500 !important;
+    font-size: 0.78rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.04em !important;
+    border-bottom: 1px solid #27272a !important;
+}
+.gradio-dataframe tbody tr:nth-child(odd) td {
+    background: #0f0f11 !important;
+}
+.gradio-dataframe tbody tr:nth-child(even) td {
+    background: #111113 !important;
+}
+.gradio-dataframe tbody tr:hover td {
+    background: #18181b !important;
+}
+/* Search input inside dataframe */
+.gradio-dataframe input {
+    background: #111113 !important;
+    border-color: #27272a !important;
+    color: #a1a1aa !important;
+}
+
+/* ─────────────────────────────────────────────────────────
+   Button refinement — softer primary, visible border
+   ───────────────────────────────────────────────────────── */
+button.primary {
+    border: 1px solid #3f3f46 !important;
+}
+button.secondary {
+    border: 1px solid #27272a !important;
 }
 
 /* ─────────────────────────────────────────────────────────
@@ -838,7 +900,7 @@ async def _load_system_data() -> tuple[str, str]:
 def create_admin_app() -> gr.Blocks:
     """Create the Gradio admin dashboard."""
 
-    with gr.Blocks(title="LangBot Admin") as app:
+    with gr.Blocks(title="LangBot Admin", theme=ADMIN_THEME, css=ADMIN_CSS) as app:
 
         # --- Header ---
         gr.HTML(

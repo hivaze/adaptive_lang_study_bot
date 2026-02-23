@@ -25,6 +25,8 @@
   "start.cta_review": "Avvio del ripasso del vocabolario! Usa /words per iniziare.",
   "start.cta_session": "Pronto per esercitarti! Mandami un messaggio per iniziare una sessione.",
   "start.cta_session_prompt": "Scrivi qualsiasi cosa per iniziare — ad esempio, <i>\"Facciamo pratica\"</i> o <i>\"Insegnami qualcosa di nuovo\"</i>",
+  "start.cta_session_continuing": "Avvio della sessione...",
+  "start.cta_continue_prompt": "Riprendiamo da dove ci siamo fermati",
   "start.target_strengthen": "{label} (rafforzare)",
   "start.btn_back": "<< Indietro",
   "start.btn_more_languages": "Altre lingue...",
@@ -315,7 +317,7 @@
     "Non preoccuparti dei punteggi recenti — una sessione di ripasso veloce aiuterà!"
   ],
   "notif.incomplete_exercise": [
-    "Hai lasciato <b>{remaining}</b> domande incomplete su <b>{topic}</b>. Vuoi riprendere da dove ti eri fermato?",
+    "Non hai finito il tuo esercizio su <b>{topic}</b>. Vuoi riprendere da dove ti eri fermato?",
     "Pronto a finire il tuo esercizio su <b>{topic}</b>? Stavi andando alla grande!"
   ],
   "notif.milestone_vocab": [

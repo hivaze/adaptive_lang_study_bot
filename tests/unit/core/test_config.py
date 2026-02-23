@@ -28,8 +28,9 @@ def test_free_tier_stricter_than_premium():
     assert free.max_llm_notifications_per_day < premium.max_llm_notifications_per_day
 
 
-def test_free_tier_thinking_disabled():
-    assert TIER_LIMITS[UserTier.FREE].thinking_type == "disabled"
+def test_both_tiers_thinking_adaptive():
+    assert TIER_LIMITS[UserTier.FREE].thinking_type == "adaptive"
+    assert TIER_LIMITS[UserTier.PREMIUM].thinking_type == "adaptive"
 
 
 def test_premium_tier_unlimited_sessions():

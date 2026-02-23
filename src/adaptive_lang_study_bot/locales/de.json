@@ -25,6 +25,8 @@
   "start.cta_review": "Starte die Vokabelwiederholung! Nutze /words, um zu beginnen.",
   "start.cta_session": "Bereit zum Üben! Schick mir eine Nachricht, um eine Sitzung zu starten.",
   "start.cta_session_prompt": "Schreib einfach etwas, um loszulegen — zum Beispiel <i>\"Lass uns üben\"</i> oder <i>\"Bring mir etwas Neues bei\"</i>",
+  "start.cta_session_continuing": "Sitzung wird gestartet...",
+  "start.cta_continue_prompt": "Lass uns dort weitermachen, wo wir aufgeh\u00f6rt haben",
   "start.target_strengthen": "{label} (vertiefen)",
   "start.btn_back": "<< Zurück",
   "start.btn_more_languages": "Mehr Sprachen...",
@@ -315,7 +317,7 @@
     "Mach dir keine Sorgen wegen der letzten Ergebnisse — eine kurze Wiederholungssitzung hilft!"
   ],
   "notif.incomplete_exercise": [
-    "Du hast <b>{remaining}</b> Fragen bei <b>{topic}</b> offengelassen. Dort weitermachen, wo du aufgehört hast?",
+    "Du hast deine <b>{topic}</b>-\u00dcbung nicht beendet. Dort weitermachen, wo du aufgeh\u00f6rt hast?",
     "Bereit, deine <b>{topic}</b>-Übung abzuschließen? Du warst richtig gut dabei!"
   ],
   "notif.milestone_vocab": [

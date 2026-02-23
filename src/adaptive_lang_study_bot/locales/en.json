@@ -25,6 +25,8 @@
   "start.cta_review": "Starting vocabulary review! Use /words to begin.",
   "start.cta_session": "Ready to practice! Send me a message to start a session.",
   "start.cta_session_prompt": "Type anything to start — for example, <i>\"Let's practice\"</i> or <i>\"Teach me something new\"</i>",
+  "start.cta_session_continuing": "Starting session...",
+  "start.cta_continue_prompt": "Let's continue where we left off",
   "start.target_strengthen": "{label} (strengthen)",
   "start.btn_back": "<< Back",
   "start.btn_more_languages": "More languages...",
@@ -315,7 +317,7 @@
     "Don't worry about the recent scores — a quick review session will help!"
   ],
   "notif.incomplete_exercise": [
-    "You left <b>{remaining}</b> questions unfinished on <b>{topic}</b>. Pick up where you stopped?",
+    "You didn't finish your <b>{topic}</b> exercise. Pick up where you stopped?",
     "Ready to finish your <b>{topic}</b> exercise? You were doing great!"
   ],
   "notif.milestone_vocab": [

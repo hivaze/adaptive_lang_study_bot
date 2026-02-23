@@ -25,6 +25,8 @@
   "start.cta_review": "Lancement de la r\u00e9vision de vocabulaire ! Utilise /words pour commencer.",
   "start.cta_session": "Pr\u00eat \u00e0 pratiquer ! Envoie-moi un message pour d\u00e9marrer une session.",
   "start.cta_session_prompt": "Écris n'importe quoi pour commencer — par exemple, <i>« Entraînons-nous »</i> ou <i>« Apprends-moi quelque chose de nouveau »</i>",
+  "start.cta_session_continuing": "D\u00e9marrage de la session...",
+  "start.cta_continue_prompt": "Reprenons l\u00e0 o\u00f9 on s'est arr\u00eat\u00e9",
   "start.target_strengthen": "{label} (renforcer)",
   "start.btn_back": "<< Retour",
   "start.btn_more_languages": "Plus de langues...",
@@ -315,7 +317,7 @@
     "Ne t'inqui\u00e8te pas pour les scores r\u00e9cents \u2014 une petite session de r\u00e9vision va aider !"
   ],
   "notif.incomplete_exercise": [
-    "Tu as laiss\u00e9 <b>{remaining}</b> questions inachev\u00e9es sur <b>{topic}</b>. On reprend l\u00e0 o\u00f9 tu t'es arr\u00eat\u00e9(e) ?",
+    "Tu n'as pas termin\u00e9 ton exercice sur <b>{topic}</b>. On reprend l\u00e0 o\u00f9 tu t'es arr\u00eat\u00e9(e) ?",
     "Pr\u00eat(e) \u00e0 finir ton exercice de <b>{topic}</b> ? Tu t'en sortais tr\u00e8s bien !"
   ],
   "notif.milestone_vocab": [

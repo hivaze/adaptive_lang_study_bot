@@ -176,11 +176,14 @@ def check_incomplete_exercise(user: User, *, due_count: int = 0) -> Trigger | No
     if gap_hours < 1 or gap_hours > 24:
         return None
 
+    topic = last.get("topic")
+    if not topic:
+        return None
+
     return make_trigger(
         "incomplete_exercise",
         name=user.first_name,
-        topic=last.get("topic", "your exercise"),
-        remaining="some",
+        topic=topic,
     )
 
 
