@@ -604,6 +604,58 @@ class ManagedSession:
     exit_stack: AsyncExitStack = field(default_factory=AsyncExitStack)
 
 
+async def _force_close_sdk_client(client: ClaudeSDKClient) -> None:
+    """Close SDK client without going through anyio TaskGroup ``__aexit__``.
+
+    The normal path (``client.__aexit__`` → ``query.close()`` →
+    ``tg.__aexit__``) raises ``RuntimeError: Attempted to exit cancel scope
+    in a different task`` when called from a different asyncio task than the
+    one that created the session.  This helper bypasses the TaskGroup exit
+    and terminates the subprocess directly via the transport.
+    """
+    query = getattr(client, "_query", None)
+    if query is None:
+        return
+
+    # Signal the read loop to stop.
+    query._closed = True
+
+    # Cancel running tasks inside the TaskGroup without trying to __aexit__.
+    tg = getattr(query, "_tg", None)
+    if tg is not None:
+        try:
+            tg.cancel_scope.cancel()
+        except Exception:
+            pass
+        # Detach so a later accidental close() doesn't retry __aexit__.
+        query._tg = None
+
+    # Close the subprocess transport (sends SIGTERM + waits).
+    transport = getattr(query, "transport", None)
+    if transport is not None:
+        try:
+            await transport.close()
+        except Exception:
+            pass
+
+    # Clear references so the client is inert.
+    client._query = None
+    client._transport = None
+
+
+def _kill_sdk_subprocess(client: ClaudeSDKClient) -> None:
+    """Last-resort synchronous SIGKILL for a leaked subprocess."""
+    try:
+        transport = getattr(client, "_transport", None) or (
+            getattr(getattr(client, "_query", None), "transport", None)
+        )
+        if transport is not None:
+            proc = getattr(transport, "_process", None)
+            if proc is not None and proc.returncode is None:
+                proc.kill()
+    except Exception:
+        pass
+
 
 class SessionManager:
     """Manages Claude SDK session lifecycle for all users."""
@@ -1051,21 +1103,24 @@ class SessionManager:
             user_id, reason, managed.turn_count, managed.accumulated_cost,
         )
 
-        # Close all resources via exit stack (SDK client).
+        # Close SDK client by terminating the subprocess directly.
+        # We cannot use exit_stack.aclose() → client.__aexit__() because
+        # the SDK's internal anyio TaskGroup must be exited from the same
+        # asyncio task that entered it.  Sessions are created in one aiogram
+        # handler task but closed from another (cost/turn limit, cleanup
+        # loop, shutdown), so we bypass the TaskGroup and close the
+        # transport (subprocess) directly.
         try:
             await asyncio.wait_for(
-                managed.exit_stack.aclose(),
+                _force_close_sdk_client(managed.client),
                 timeout=tuning.sdk_close_timeout_seconds,
             )
         except asyncio.TimeoutError:
             logger.warning("Resource cleanup timed out for user {} — killing subprocess", user_id)
-            try:
-                if hasattr(managed.client, '_process') and managed.client._process:
-                    managed.client._process.kill()
-            except Exception:
-                logger.warning("Failed to kill leaked subprocess for user {}", user_id)
+            _kill_sdk_subprocess(managed.client)
         except Exception:
             logger.exception("Error during resource cleanup for user {}", user_id)
+            _kill_sdk_subprocess(managed.client)
 
         await self._release_lock_and_pool(user_id, managed.is_proactive, lock_token=managed.lock_token)
 
