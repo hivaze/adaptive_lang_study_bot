@@ -57,7 +57,7 @@ from adaptive_lang_study_bot.db.repositories import (
     UserRepo,
     VocabularyRepo,
 )
-from adaptive_lang_study_bot.bot.helpers import split_agent_sections
+from adaptive_lang_study_bot.bot.helpers import localize_value, split_agent_sections
 from adaptive_lang_study_bot.i18n import DEFAULT_LANGUAGE, t
 from adaptive_lang_study_bot.metrics import (
     MESSAGE_COST_USD,
@@ -196,6 +196,7 @@ async def run_proactive_llm_session(
             session_type=session_type,
             user_timezone=user.timezone or "UTC",
             notification_sink=notification_sink,
+            user_tier=user.tier,
         )
 
         # 6. Filter tools and create MCP server
@@ -761,7 +762,7 @@ class SessionManager:
                     if today_count >= limits.max_sessions_per_day:
                         return [t("session.daily_limit", lang,
                                   max_sessions=limits.max_sessions_per_day,
-                                  tier=tier.value)]
+                                  tier=localize_value(tier.value, lang))]
                 except SQLAlchemyError:
                     logger.warning("Failed to check daily session count for user {}", user_id)
                     return [t("session.verify_error", lang)]
@@ -818,9 +819,7 @@ class SessionManager:
             if 0 < remaining <= threshold:
                 managed.limit_warned = True
                 response_chunks.append(
-                    t("session.turn_limit_warn", lang,
-                      remaining=remaining, tier=tier.value,
-                      max=limits.max_turns_per_session)
+                    t("session.turn_limit_warn", lang)
                 )
 
         # Warn when approaching per-session cost limit (80% threshold).
@@ -903,6 +902,7 @@ class SessionManager:
                 session_id=str(db_session_id),
                 session_type=session_type,
                 user_timezone=user.timezone or "UTC",
+                user_tier=tier,
             )
 
             # Primary filter: exclude disallowed tools from the MCP server.
@@ -1219,19 +1219,24 @@ class SessionManager:
                             remaining = int(idle_timeout - idle_seconds)
                             to_warn.append((user_id, remaining))
 
-                # Send idle warnings (best-effort, don't block cleanup)
+                # Send idle warnings in parallel (best-effort, don't block cleanup)
                 if self._bot and to_warn:
-                    for user_id, remaining in to_warn:
+                    async def _send_idle_warn(uid: int, remaining: int) -> None:
                         try:
-                            managed_w = self._sessions.get(user_id)
+                            managed_w = self._sessions.get(uid)
                             warn_lang = managed_w.native_language if managed_w else DEFAULT_LANGUAGE
                             minutes = max(1, round(remaining / 60))
                             await self._bot.send_message(
-                                user_id,
+                                uid,
                                 t("session.idle_warn", warn_lang, minutes=minutes),
                             )
                         except Exception:
-                            logger.debug("Failed to send idle warning to user {}", user_id)
+                            logger.debug("Failed to send idle warning to user {}", uid)
+
+                    await asyncio.gather(
+                        *(_send_idle_warn(uid, rem) for uid, rem in to_warn),
+                        return_exceptions=True,
+                    )
 
                 for user_id, managed in to_close:
                     # Collect session data before releasing resources (data survives SDK close)

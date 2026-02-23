@@ -2,7 +2,7 @@ import sys
 
 from loguru import logger
 
-from adaptive_lang_study_bot.admin.app import create_admin_app
+from adaptive_lang_study_bot.admin.app import ADMIN_CSS, ADMIN_THEME, create_admin_app
 from adaptive_lang_study_bot.config import settings
 from adaptive_lang_study_bot.logging_config import configure_logging
 
@@ -26,6 +26,8 @@ def main() -> None:
         server_port=settings.admin_port,
         share=False,
         auth=auth,
+        theme=ADMIN_THEME,
+        css=ADMIN_CSS,
     )
 
 

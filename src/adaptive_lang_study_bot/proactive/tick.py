@@ -250,6 +250,14 @@ async def _handle_schedule_failure(schedule, bot: Bot) -> None:
 # Phase 2: Event triggers
 # ---------------------------------------------------------------------------
 
+# TODO: Replace scan-all-then-filter loop with either:
+#   1. Trigger-specific SQL queries (short term, no new infra) — one query per
+#      trigger returning only candidate users, instead of loading all active
+#      users and filtering in Python.  O(candidates) vs O(all_users).
+#   2. arq / Taskiq event-driven enqueue (medium term) — tools and post-session
+#      pipeline enqueue per-user trigger checks on state change; the tick
+#      becomes a thin catch-up sweep, not the primary dispatch path.
+
 async def _phase_event_triggers(bot: Bot) -> None:
     """Evaluate event-based triggers for active users.
 

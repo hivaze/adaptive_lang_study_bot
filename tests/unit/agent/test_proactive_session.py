@@ -91,7 +91,7 @@ def _setup_tools_mock(mock_create_tools, notification_messages=None):
     tool_b = MagicMock()
     tool_b.name = "send_notification"
 
-    def side_effect(*, session_factory, user_id, session_id, session_type, user_timezone, notification_sink=None):
+    def side_effect(*, session_factory, user_id, session_id, session_type, user_timezone, notification_sink=None, **_kwargs):
         if notification_sink is not None and notification_messages:
             notification_sink.extend(notification_messages)
         can_use = lambda name: True

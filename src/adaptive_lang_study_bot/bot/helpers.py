@@ -9,6 +9,44 @@ from loguru import logger
 from adaptive_lang_study_bot.db.models import User
 from adaptive_lang_study_bot.i18n import DEFAULT_LANGUAGE, t
 
+# Maps raw DB enum values to their i18n keys for display.
+_DISPLAY_VALUE_KEYS: dict[str, str] = {
+    # preferred_difficulty
+    "easy": "settings.btn_easy",
+    "normal": "settings.btn_normal",
+    "hard": "settings.btn_hard",
+    # session_style
+    "casual": "settings.btn_casual",
+    "structured": "settings.btn_structured",
+    "intensive": "settings.btn_intensive",
+    # user tier
+    "free": "stats.tier_free",
+    "premium": "stats.tier_premium",
+}
+
+# Maps DB field names to their i18n keys for display.
+_DISPLAY_FIELD_KEYS: dict[str, str] = {
+    "preferred_difficulty": "settings.field_preferred_difficulty",
+    "session_style": "settings.field_session_style",
+}
+
+
+def localize_value(value: str, lang: str) -> str:
+    """Translate a raw enum value (e.g. "normal") to the user's language."""
+    key = _DISPLAY_VALUE_KEYS.get(value)
+    if key:
+        return t(key, lang)
+    return value
+
+
+def localize_field_name(field: str, lang: str) -> str:
+    """Translate a DB field name (e.g. "preferred_difficulty") to the user's language."""
+    key = _DISPLAY_FIELD_KEYS.get(field)
+    if key:
+        return t(key, lang)
+    return field.replace("_", " ")
+
+
 # Regex to split agent output on a === line (with optional horizontal whitespace).
 # Uses [ \t]* instead of \s* so newlines are not consumed greedily.
 _SECTION_SPLIT_RE = re.compile(r"\n[ \t]*===[ \t]*\n")

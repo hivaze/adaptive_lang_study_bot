@@ -4,11 +4,15 @@ import pytest
 
 from adaptive_lang_study_bot.agent.tools import (
     TOOL_NAMES,
+    _MAX_SCHEDULES_PER_TYPE,
+    _MAX_SCHEDULES_PER_USER,
     _SESSION_TYPE_TOOLS,
     _USER_MUTABLE_FIELDS,
+    _rrule_interval_minutes,
     create_session_tools,
 )
-from adaptive_lang_study_bot.enums import SessionType
+from adaptive_lang_study_bot.config import TIER_LIMITS, tuning
+from adaptive_lang_study_bot.enums import SessionType, UserTier
 
 
 class TestToolConstants:
@@ -167,5 +171,45 @@ class TestCanUseTool:
             assert expected_names.issubset(tool_names), (
                 f"{session_type}: expected tools {expected_names - tool_names} not in created tools"
             )
+
+
+class TestScheduleValidation:
+    """Validate schedule safety constants and RRULE interval helper."""
+
+    def test_rrule_interval_daily(self):
+        assert _rrule_interval_minutes("RRULE:FREQ=DAILY") == 1440
+
+    def test_rrule_interval_hourly(self):
+        assert _rrule_interval_minutes("RRULE:FREQ=HOURLY") == 60
+
+    def test_rrule_interval_hourly_2(self):
+        assert _rrule_interval_minutes("RRULE:FREQ=HOURLY;INTERVAL=2") == 120
+
+    def test_rrule_interval_minutely_30(self):
+        assert _rrule_interval_minutes("RRULE:FREQ=MINUTELY;INTERVAL=30") == 30
+
+    def test_rrule_interval_secondly(self):
+        assert _rrule_interval_minutes("RRULE:FREQ=SECONDLY") < 1
+
+    def test_rrule_interval_weekly(self):
+        assert _rrule_interval_minutes("RRULE:FREQ=WEEKLY") == 10080
+
+    def test_rrule_interval_invalid_raises(self):
+        with pytest.raises((ValueError, TypeError)):
+            _rrule_interval_minutes("not a valid rrule")
+
+    def test_min_interval_tuning_is_at_least_hourly(self):
+        assert tuning.min_schedule_interval_minutes >= 60
+
+    def test_max_per_type_within_total(self):
+        assert 1 <= _MAX_SCHEDULES_PER_TYPE <= _MAX_SCHEDULES_PER_USER
+
+    def test_free_tier_llm_limit_is_reasonable(self):
+        free = TIER_LIMITS[UserTier.FREE]
+        assert 1 <= free.max_llm_notifications_per_day <= 10
+
+    def test_premium_tier_llm_limit_is_reasonable(self):
+        premium = TIER_LIMITS[UserTier.PREMIUM]
+        assert premium.max_llm_notifications_per_day >= TIER_LIMITS[UserTier.FREE].max_llm_notifications_per_day
 
 

@@ -42,17 +42,18 @@ POSTGRES_PORT=5432
 POSTGRES_USER=langbot
 POSTGRES_DB=langbot
 REDIS_URL=redis://localhost:6379/0
-MAX_CONCURRENT_INTERACTIVE_SESSIONS=50
-MAX_CONCURRENT_PROACTIVE_SESSIONS=10
+MAX_CONCURRENT_INTERACTIVE_SESSIONS=100
+MAX_CONCURRENT_PROACTIVE_SESSIONS=20
 PROACTIVE_TICK_INTERVAL_SECONDS=60
 ADMIN_HOST=0.0.0.0
 ADMIN_PORT=7860
 ADMIN_TELEGRAM_IDS=[]         # JSON array of admin user IDs, e.g. [123456,789012]
 LOG_LEVEL=INFO
 METRICS_PORT=9090
-DB_POOL_SIZE=30
-DB_MAX_OVERFLOW=40
+DB_POOL_SIZE=50
+DB_MAX_OVERFLOW=30
 DB_POOL_RECYCLE=3600          # seconds
+DB_POOL_TIMEOUT=10            # seconds to wait for a connection before raising
 REDIS_MAX_CONNECTIONS=50
 ```
 
@@ -66,7 +67,7 @@ This starts 4 containers:
 - **bot** — Telegram bot + APScheduler proactive engine (single process)
 - **admin** — Gradio admin panel on port 7860
 - **postgres** — PostgreSQL 16
-- **redis** — Redis 7 (128MB max, LRU eviction)
+- **redis** — Redis 7 (256MB, noeviction — used for locks/coordination, not caching)
 
 3. Run database migrations:
 
@@ -405,8 +406,8 @@ The stack runs 4 services:
 |---------|-------|---------|------|
 | `bot` | custom (Dockerfile) | Telegram bot + APScheduler proactive engine | 9090 (Prometheus metrics) |
 | `admin` | custom (Dockerfile) | Gradio admin panel | 7860 |
-| `postgres` | postgres:16-alpine | Database (max_connections=200) | 5432 (internal) |
-| `redis` | redis:7-alpine | Locks, rate limits, dedup (128MB, LRU) | 6379 (internal) |
+| `postgres` | postgres:16-alpine | Database (max_connections=200, tuned shared_buffers/work_mem) | 5432 (internal) |
+| `redis` | redis:7-alpine | Locks, rate limits, dedup (256MB, noeviction) | 6379 (internal) |
 
 ### Lifecycle
 
@@ -617,7 +618,7 @@ Or via the admin panel's System tab.
 
 ### Docker resource requirements
 
-The bot container is allocated 8GB memory to support up to 50 concurrent agent sessions (~100MB each for the Claude CLI subprocess). Redis is capped at 128MB with LRU eviction.
+The bot container is allocated 8GB memory to support up to 100 concurrent interactive agent sessions (~50-80MB each for the Claude CLI subprocess). PostgreSQL is tuned with `shared_buffers=512MB`, `work_mem=4MB`, and SSD-optimized settings. Redis is capped at 256MB with `noeviction` policy (Redis stores locks and coordination data, not cache — eviction would cause correctness bugs).
 
 ## Troubleshooting
 

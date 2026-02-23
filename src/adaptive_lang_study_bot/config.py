@@ -90,6 +90,9 @@ class BotTuning:
     post_session_timeout_seconds: float = 60.0
     idle_warn_fraction: float = 0.7  # fraction of idle timeout before warning (e.g. 0.7 = 70%)
 
+    # -- Schedule validation --
+    min_schedule_interval_minutes: int = 60  # minimum RRULE recurrence interval
+
 
 # Singleton — import this everywhere instead of using hardcoded magic numbers.
 tuning = BotTuning()
@@ -163,14 +166,15 @@ class Settings(BaseSettings):
     db_pool_size: int = 50
     db_max_overflow: int = 30
     db_pool_recycle: int = 3600  # seconds
+    db_pool_timeout: int = 10  # seconds to wait for a connection before raising
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"
     redis_max_connections: int = 50
 
     # Session manager
-    max_concurrent_interactive_sessions: int = 50
-    max_concurrent_proactive_sessions: int = 10
+    max_concurrent_interactive_sessions: int = 100
+    max_concurrent_proactive_sessions: int = 20
 
     # Proactive engine
     proactive_tick_interval_seconds: int = 60

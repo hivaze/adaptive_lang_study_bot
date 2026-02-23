@@ -9,7 +9,9 @@ from loguru import logger
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
-from adaptive_lang_study_bot.config import tuning
+from dateutil.rrule import DAILY, HOURLY, MINUTELY, MONTHLY, SECONDLY, WEEKLY, YEARLY, rrulestr
+
+from adaptive_lang_study_bot.config import TIER_LIMITS, tuning
 from adaptive_lang_study_bot.db.repositories import (
     ExerciseResultRepo,
     ScheduleRepo,
@@ -24,6 +26,7 @@ from adaptive_lang_study_bot.enums import (
     ScheduleType,
     SessionStyle,
     SessionType,
+    UserTier,
 )
 from adaptive_lang_study_bot.db.models import User
 from adaptive_lang_study_bot.fsrs_engine.scheduler import create_new_card, review_card
@@ -36,9 +39,27 @@ from adaptive_lang_study_bot.utils import compute_next_trigger, safe_zoneinfo, s
 _USER_MUTABLE_FIELDS = {"interests", "learning_goals", "preferred_difficulty", "session_style", "topics_to_avoid", "notifications_paused"}
 _LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]
 _MAX_SCHEDULES_PER_USER = 10
+_MAX_SCHEDULES_PER_TYPE = 3
 _VOCAB_SEARCH_LIMIT = 20
 _EXERCISE_HISTORY_MAX = 50
 _DUE_VOCAB_MAX = 50
+
+# Base period in minutes for each dateutil frequency constant.
+# Uses private _freq / _interval attrs — stable across all dateutil versions.
+_FREQ_BASE_MINUTES: dict[int, float] = {
+    YEARLY: 525960, MONTHLY: 43200, WEEKLY: 10080,
+    DAILY: 1440, HOURLY: 60, MINUTELY: 1, SECONDLY: 1 / 60,
+}
+
+
+def _rrule_interval_minutes(rrule_str: str) -> float:
+    """Compute effective recurrence interval in minutes from an RRULE string."""
+    rule = rrulestr(rrule_str)
+    base = _FREQ_BASE_MINUTES.get(rule._freq)
+    if base is None:
+        raise ValueError(f"Unknown RRULE frequency: {rule._freq}")
+    return base * rule._interval
+
 
 # Tool names with MCP prefix, used for allowed_tools config
 TOOL_NAMES = [
@@ -132,6 +153,7 @@ def create_session_tools(
     session_type: SessionType = SessionType.INTERACTIVE,
     user_timezone: str = "UTC",
     notification_sink: list[str] | None = None,
+    user_tier: str = UserTier.FREE,
 ) -> tuple[list, Callable[[str], bool]]:
     """Create tool functions with per-session state captured via closures.
 
@@ -539,8 +561,10 @@ def create_session_tools(
                 return _ok({"schedules": result, "count": len(result)})
 
             if action == "create":
-                count = await ScheduleRepo.count_for_user(db_session, user_id)
-                if count >= _MAX_SCHEDULES_PER_USER:
+                # Fetch all user schedules once (max 10 rows) for validation
+                existing = await ScheduleRepo.get_for_user(db_session, user_id)
+
+                if len(existing) >= _MAX_SCHEDULES_PER_USER:
                     return _err(f"Maximum {_MAX_SCHEDULES_PER_USER} schedules per user. Delete one first.")
 
                 rrule_str = args.get("rrule", "")
@@ -560,6 +584,42 @@ def create_session_tools(
                         f"Invalid notification_tier '{notification_tier}'. "
                         f"Use: {', '.join(sorted(NotificationTier))}"
                     )
+
+                # Per-type duplicate limit
+                type_count = sum(1 for s in existing if s.schedule_type == schedule_type)
+                if type_count >= _MAX_SCHEDULES_PER_TYPE:
+                    return _err(
+                        f"Already {type_count} '{schedule_type}' schedules "
+                        f"(max {_MAX_SCHEDULES_PER_TYPE} per type). "
+                        f"Delete one or use a different schedule type."
+                    )
+
+                # LLM/hybrid schedule cap — tied to tier's daily LLM notification limit
+                if notification_tier in (NotificationTier.LLM, NotificationTier.HYBRID):
+                    tier_limits = TIER_LIMITS.get(UserTier(user_tier))
+                    if tier_limits:
+                        llm_count = sum(
+                            1 for s in existing
+                            if s.notification_tier in (NotificationTier.LLM, NotificationTier.HYBRID)
+                        )
+                        if llm_count >= tier_limits.max_llm_notifications_per_day:
+                            return _err(
+                                f"LLM schedule limit reached ({tier_limits.max_llm_notifications_per_day}). "
+                                f"Excess would be downgraded to template at dispatch. "
+                                f"Use notification_tier='template' or delete an existing LLM schedule."
+                            )
+
+                # Minimum recurrence interval
+                try:
+                    interval = _rrule_interval_minutes(rrule_str)
+                    if interval < tuning.min_schedule_interval_minutes:
+                        return _err(
+                            f"Schedule fires too frequently (~{int(interval)} min). "
+                            f"Minimum interval is {tuning.min_schedule_interval_minutes} minutes. "
+                            f"Use FREQ=HOURLY or less frequent."
+                        )
+                except (ValueError, TypeError):
+                    pass  # Invalid RRULE — compute_next_trigger below provides the error
 
                 # Parse RRULE in the user's local timezone so BYHOUR values
                 # match what the user expects (e.g. "9am" = 9am local, not UTC).
@@ -611,6 +671,17 @@ def create_session_tools(
 
                 updates: dict[str, Any] = {}
                 if args.get("rrule"):
+                    # Minimum recurrence interval
+                    try:
+                        interval = _rrule_interval_minutes(args["rrule"])
+                        if interval < tuning.min_schedule_interval_minutes:
+                            return _err(
+                                f"Schedule fires too frequently (~{int(interval)} min). "
+                                f"Minimum interval is {tuning.min_schedule_interval_minutes} minutes."
+                            )
+                    except (ValueError, TypeError):
+                        pass  # compute_next_trigger below provides the error
+
                     upd_tz = safe_zoneinfo(user_timezone)
                     try:
                         upd_next = compute_next_trigger(args["rrule"], upd_tz)
@@ -629,7 +700,25 @@ def create_session_tools(
                             f"Invalid notification_tier '{args['notification_tier']}'. "
                             f"Use: {', '.join(sorted(NotificationTier))}"
                         )
-                    updates["notification_tier"] = args["notification_tier"]
+                    # LLM/hybrid cap when upgrading from template
+                    new_tier = args["notification_tier"]
+                    if (
+                        new_tier in (NotificationTier.LLM, NotificationTier.HYBRID)
+                        and schedule.notification_tier not in (NotificationTier.LLM, NotificationTier.HYBRID)
+                    ):
+                        tier_limits = TIER_LIMITS.get(UserTier(user_tier))
+                        if tier_limits:
+                            all_schedules = await ScheduleRepo.get_for_user(db_session, user_id)
+                            llm_count = sum(
+                                1 for s in all_schedules
+                                if s.notification_tier in (NotificationTier.LLM, NotificationTier.HYBRID)
+                            )
+                            if llm_count >= tier_limits.max_llm_notifications_per_day:
+                                return _err(
+                                    f"LLM schedule limit reached ({tier_limits.max_llm_notifications_per_day}). "
+                                    f"Delete an existing LLM schedule or keep template tier."
+                                )
+                    updates["notification_tier"] = new_tier
                 if args.get("schedule_type"):
                     if args["schedule_type"] not in ScheduleType:
                         return _err(

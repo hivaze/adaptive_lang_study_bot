@@ -152,6 +152,9 @@ class User(Base):
         ),
         Index("idx_users_is_admin", "telegram_id", postgresql_where="is_admin = TRUE"),
         Index("idx_users_created_at", "created_at"),
+        # Covers the proactive tick pagination query:
+        # SELECT ... WHERE is_active = TRUE ORDER BY telegram_id
+        Index("idx_users_active_paging", "telegram_id", postgresql_where="is_active = TRUE"),
     )
 
 

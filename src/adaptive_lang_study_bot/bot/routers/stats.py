@@ -5,6 +5,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from adaptive_lang_study_bot.bot.helpers import localize_value
 from adaptive_lang_study_bot.config import TIER_LIMITS, UserTier
 from adaptive_lang_study_bot.db.models import User
 from adaptive_lang_study_bot.db.repositories import ExerciseResultRepo, VocabularyRepo
@@ -40,8 +41,8 @@ async def cmd_stats(message: Message, user: User, db_session: AsyncSession) -> N
         t("stats.vocabulary", lang, count=user.vocabulary_count),
         t("stats.sessions", lang, count=user.sessions_completed),
         t("stats.cards_due", lang, count=due_count),
-        t("stats.difficulty", lang, value=esc(user.preferred_difficulty)),
-        t("stats.style", lang, value=esc(user.session_style)),
+        t("stats.difficulty", lang, value=esc(localize_value(user.preferred_difficulty, lang))),
+        t("stats.style", lang, value=esc(localize_value(user.session_style, lang))),
         t("stats.recent_scores", lang, scores=scores_display),
     ]
 
@@ -80,7 +81,7 @@ async def cmd_stats(message: Message, user: User, db_session: AsyncSession) -> N
         tier = UserTier.FREE
     limits = TIER_LIMITS[tier]
 
-    lines.append(t("stats.tier", lang, tier=tier.value))
+    lines.append(t("stats.tier", lang, tier=localize_value(tier.value, lang)))
     if limits.max_sessions_per_day > 0:
         lines.append(t("stats.sessions_per_day", lang, count=limits.max_sessions_per_day))
     else:

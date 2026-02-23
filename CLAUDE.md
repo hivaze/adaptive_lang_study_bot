@@ -37,7 +37,7 @@ src/adaptive_lang_study_bot/
 │   ├── hooks.py           # PostToolUse (adaptive hints), UserPromptSubmit (turn limit), Stop hooks
 │   ├── prompt_builder.py  # build_system_prompt(), build_proactive_prompt(), compute_session_context()
 │   ├── session_manager.py # SessionManager (interactive) + run_proactive_llm_session() (standalone)
-│   └── pool.py            # SessionPool: asyncio.Semaphore (50 interactive, 10 proactive)
+│   └── pool.py            # SessionPool: asyncio.Semaphore (100 interactive, 20 proactive)
 ├── bot/
 │   ├── app.py             # Bot + Dispatcher setup, middleware/router registration, startup/shutdown
 │   ├── helpers.py         # get_user_lang, safe_edit_text, build_filterable_keyboard, split_agent_sections
@@ -102,7 +102,7 @@ Free vs premium tiers (admin-assigned, no billing). Defined in `config.py:TIER_L
 ### Concurrency model
 
 - **One session per user** — Redis SET NX lock with tier-based TTL (`cache/session_lock.py`)
-- **Global pool** — `SessionPool` with two `asyncio.Semaphore`s: 50 interactive, 10 proactive (`agent/pool.py`)
+- **Global pool** — `SessionPool` with two `asyncio.Semaphore`s: 100 interactive, 20 proactive (`agent/pool.py`)
 - **Idle cleanup** — `SessionManager` background loop (30s interval) closes sessions after tier-specific timeout, sends warning at 70%
 - **Proactive tick lock** — Redis distributed lock prevents concurrent tick evaluation across hypothetical multi-process deployments
 - **Rate limiting** — Redis-based per-user, enforced in middleware
@@ -172,10 +172,10 @@ The bot is a single async process. All stateful objects are module-level singlet
 |--------|--------|------|----------|-------|
 | `settings` | `config.py` | Import time (pydantic-settings, reads env) | — | Immutable `Settings` instance |
 | `tuning` | `config.py` | Import time | — | Immutable `BotTuning` frozen dataclass, centralized magic numbers |
-| `engine` | `db/engine.py` | Import time (`create_async_engine`) | `dispose_engine()` | SQLAlchemy async engine, pool_size=50, max_overflow=30 |
+| `engine` | `db/engine.py` | Import time (`create_async_engine`) | `dispose_engine()` | SQLAlchemy async engine, pool_size=50, max_overflow=30, pool_timeout=10s |
 | `async_session_factory` | `db/engine.py` | Import time (`async_sessionmaker`) | — (engine disposes pool) | Factory callable; `expire_on_commit=False` |
 | `_redis` | `cache/client.py` | Lazy on first `get_redis()` call, thread-safe via `asyncio.Lock` | `close_redis()` | `Redis` + `ConnectionPool` pair; all cache modules call `get_redis()` |
-| `session_pool` | `agent/pool.py` | Import time | — (semaphores don't need cleanup) | Two `asyncio.Semaphore`s (50 interactive, 10 proactive) + counters |
+| `session_pool` | `agent/pool.py` | Import time | — (semaphores don't need cleanup) | Two `asyncio.Semaphore`s (100 interactive, 20 proactive) + counters |
 | `session_manager` | `agent/session_manager.py` | Import time (empty) | `session_manager.stop()` | Owns `_sessions: dict[int, ManagedSession]`, started via `.start(bot)` which launches `_cleanup_loop` |
 | `_scheduler` | `fsrs_engine/scheduler.py` | Import time | — | FSRS `Scheduler()` instance, stateless evaluator |
 | Prometheus metrics | `metrics.py` | Import time (module-level `Counter`/`Gauge`/`Histogram`) | — | 17 metrics, HTTP server started in `on_startup` |

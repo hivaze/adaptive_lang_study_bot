@@ -30,7 +30,7 @@ from adaptive_lang_study_bot.db.repositories import (
     UserRepo,
     VocabularyRepo,
 )
-from adaptive_lang_study_bot.bot.helpers import build_filterable_keyboard, get_user_lang, safe_edit_markup, safe_edit_text
+from adaptive_lang_study_bot.bot.helpers import build_filterable_keyboard, get_user_lang, localize_field_name, localize_value, safe_edit_markup, safe_edit_text
 from adaptive_lang_study_bot.i18n import DEFAULT_LANGUAGE, get_localized_language_name, t
 from adaptive_lang_study_bot.logging_config import is_debug_logging, set_log_level
 from adaptive_lang_study_bot.utils import is_user_admin, user_local_now
@@ -137,8 +137,8 @@ def _build_settings_text_and_kb(user: User) -> tuple[str, InlineKeyboardMarkup]:
     lines = [
         t("settings.title", lang),
         t("settings.language_label", lang, lang_display=lang_display),
-        t("settings.difficulty_label", lang, difficulty=esc(user.preferred_difficulty)),
-        t("settings.style_label", lang, style=esc(user.session_style)),
+        t("settings.difficulty_label", lang, difficulty=esc(localize_value(user.preferred_difficulty, lang))),
+        t("settings.style_label", lang, style=esc(localize_value(user.session_style, lang))),
         t("settings.level_label", lang, level=esc(user.level)),
         t("settings.timezone_label", lang, timezone=esc(user.timezone)),
         t("settings.notifications_label", lang, status=notif_status),
@@ -299,7 +299,7 @@ async def on_difficulty(callback: CallbackQuery, user: User) -> None:
             [InlineKeyboardButton(text=t("settings.btn_back", lang), callback_data="set:back")],
         ],
     )
-    await _safe_edit_text(callback, t("settings.current_difficulty", lang, value=esc(user.preferred_difficulty)), keyboard, lang=lang)
+    await _safe_edit_text(callback, t("settings.current_difficulty", lang, value=esc(localize_value(user.preferred_difficulty, lang))), keyboard, lang=lang)
     await callback.answer()
 
 
@@ -316,7 +316,7 @@ async def on_style(callback: CallbackQuery, user: User) -> None:
             [InlineKeyboardButton(text=t("settings.btn_back", lang), callback_data="set:back")],
         ],
     )
-    await _safe_edit_text(callback, t("settings.current_style", lang, value=esc(user.session_style)), keyboard, lang=lang)
+    await _safe_edit_text(callback, t("settings.current_style", lang, value=esc(localize_value(user.session_style, lang))), keyboard, lang=lang)
     await callback.answer()
 
 
@@ -352,7 +352,7 @@ async def on_set_value(
             [InlineKeyboardButton(text=t("settings.btn_back", lang), callback_data="set:back")],
         ],
     )
-    text = t("settings.updated_field", lang, field=esc(field.replace("_", " ")), value=esc(value))
+    text = t("settings.updated_field", lang, field=esc(localize_field_name(field, lang)), value=esc(localize_value(value, lang)))
     if had_session:
         text += "\n\n" + t("settings.session_refreshed", lang)
     await _safe_edit_text(callback, text, reply_markup=keyboard, lang=lang)

@@ -336,6 +336,9 @@ async def dispatch_notification(
     # Atomically claim a daily notification slot BEFORE sending.
     # This prevents races where two concurrent dispatches both pass
     # the should_send() fast-path check and both deliver messages.
+    #
+    # We use a single DB session for both the daily-limit claim and the
+    # notification record to halve connection pool pressure at scale.
     daily_limit_claimed = False
     async with async_session_factory() as db:
         daily_limit_claimed = await UserRepo.check_and_increment_notification(
@@ -366,37 +369,35 @@ async def dispatch_notification(
                     pass
             return None
 
-    # Send via Telegram with HTML parse mode (templates use <b>, <i> tags)
-    try:
-        sent = await bot.send_message(
-            user.telegram_id,
-            message_text,
-            parse_mode=ParseMode.HTML,
-            reply_markup=cta_keyboard,
-        )
-        telegram_message_id = sent.message_id
-        status = NotificationStatus.SENT
-    except TelegramForbiddenError:
-        logger.warning("User {} blocked the bot — deactivating", user.telegram_id)
-        telegram_message_id = None
-        status = NotificationStatus.FAILED
+        # --- Daily limit claimed; send via Telegram while DB session is open ---
+
         try:
-            async with async_session_factory() as deact_db:
-                await UserRepo.update_fields(deact_db, user.telegram_id, is_active=False)
-                await deact_db.commit()
-        except Exception:
-            logger.warning("Failed to deactivate blocked user {}", user.telegram_id)
-    except Exception as e:
-        logger.error("Failed to send notification to user {}: {}", user.telegram_id, e)
-        telegram_message_id = None
-        status = NotificationStatus.FAILED
+            sent = await bot.send_message(
+                user.telegram_id,
+                message_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=cta_keyboard,
+            )
+            telegram_message_id = sent.message_id
+            status = NotificationStatus.SENT
+        except TelegramForbiddenError:
+            logger.warning("User {} blocked the bot — deactivating", user.telegram_id)
+            telegram_message_id = None
+            status = NotificationStatus.FAILED
+            try:
+                await UserRepo.update_fields(db, user.telegram_id, is_active=False)
+            except Exception:
+                logger.warning("Failed to deactivate blocked user {}", user.telegram_id)
+        except Exception as e:
+            logger.error("Failed to send notification to user {}: {}", user.telegram_id, e)
+            telegram_message_id = None
+            status = NotificationStatus.FAILED
 
-    # Release dedup slot on send failure so the next tick can retry.
-    if status != NotificationStatus.SENT and dedup_claimed:
-        await _release_dedup_slot(dedup_key, user.telegram_id)
+        # Release dedup slot on send failure so the next tick can retry.
+        if status != NotificationStatus.SENT and dedup_claimed:
+            await _release_dedup_slot(dedup_key, user.telegram_id)
 
-    # Record notification and update user state.
-    async with async_session_factory() as db:
+        # Record notification and update user state in the same session.
         await NotificationRepo.create(
             db,
             user_id=user.telegram_id,
