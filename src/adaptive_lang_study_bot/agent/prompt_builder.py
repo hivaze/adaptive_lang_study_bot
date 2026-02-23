@@ -1036,9 +1036,13 @@ def build_summary_prompt(
         "4. Keep the summary concise: 2-4 sentences maximum.\n"
         "5. Be warm and encouraging. NEVER guilt-trip or criticize.\n"
         "6. Do NOT repeat obvious facts like 'your session has ended'.\n"
-        "7. Write the summary as a direct message to the student — NO headers, titles, "
-        "or introductory phrases like 'Резюме сессии для ...:', 'Вот краткое резюме:', "
-        "'Summary for ...:', etc. Just write the summary text itself, addressed to the student.\n"
+        "7. Write the summary as a direct message to the student — start IMMEDIATELY "
+        "with the content. NEVER begin with ANY header, title, label, or introductory "
+        "phrase. Forbidden patterns include (but are not limited to): "
+        "'Резюме сессии ...', 'Вот краткое резюме ...', 'Вот резюме ...', "
+        "'Summary for ...:', 'Here is a summary ...', or ANY similar preamble in ANY "
+        "language. The very first word must be part of the actual message to the student "
+        "(e.g. start with praise, a greeting, or a comment about their work).\n"
         "8. If your summary has distinct parts (achievements vs encouragement), "
         "you may separate them with === on its own line to send as separate messages."
     )
@@ -1085,19 +1089,26 @@ def build_summary_prompt(
     # --- 4. Task ---
     has_progress = bool(exercise_count or vocab_count or review_count)
 
+    no_header_reminder = (
+        "Remember: do NOT start with any header or introductory phrase — "
+        "jump straight into the message content."
+    )
+
     if has_progress:
         task = (
             "Summarize the student's session achievements in 2-4 sentences. "
             "Mention specific topics they practiced and words they learned. "
             "If scores are available, comment on their performance positively. "
-            "End with brief encouragement about what they could focus on next time."
+            "End with brief encouragement about what they could focus on next time. "
+            + no_header_reminder
         )
     else:
         task = (
             "The student chatted but didn't complete any exercises or vocabulary work. "
             "Write a brief, encouraging message (2-3 sentences). "
             "Suggest they try an exercise, vocabulary review (/words), or a focused "
-            "study topic next time. Make it feel like a natural suggestion, not a lecture."
+            "study topic next time. Make it feel like a natural suggestion, not a lecture. "
+            + no_header_reminder
         )
 
     lang_reminder = f"\n\nIMPORTANT: Write the entire summary in {native_lang}."

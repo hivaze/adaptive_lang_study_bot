@@ -232,6 +232,30 @@ class TestBuildSummaryPrompt:
         assert "timeout" in idle_prompt.lower()
         assert "productivity" in turn_prompt.lower()
 
+    def test_no_header_rule_present(self):
+        prompt = build_summary_prompt(
+            "ru",
+            "en",
+            session_data={
+                "exercise_count": 2,
+                "exercise_scores": [7, 8],
+                "exercise_topics": ["verbs"],
+                "exercise_types": ["translation"],
+                "words_added": [],
+                "words_reviewed": 0,
+                "vocab_count": 0,
+                "review_count": 0,
+                "turn_count": 5,
+                "duration_minutes": 3,
+            },
+            close_reason=CloseReason.IDLE_TIMEOUT,
+            user_name="Сергей",
+            user_streak=3,
+            user_level="A2",
+        )
+        assert "NEVER begin with ANY header" in prompt
+        assert "jump straight into the message content" in prompt
+
     def test_native_language_instruction(self):
         prompt = build_summary_prompt(
             "ru",
