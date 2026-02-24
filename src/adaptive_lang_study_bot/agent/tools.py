@@ -292,7 +292,7 @@ def create_session_tools(
 
         # Normalize to 0-10 scale for consistent level/area thresholds
         normalized_score = round(score * 10 / max_score) if max_score != 10 else score
-        exercise_type = str(args["exercise_type"]).strip()[:100]
+        exercise_type = str(args["exercise_type"]).strip()[:50]
         topic = str(args["topic"]).strip()[:100]
 
         words_raw = args.get("words_involved", "[]")
@@ -398,7 +398,7 @@ def create_session_tools(
         {"word": str, "translation": str, "context_sentence": str, "topic": str},
     )
     async def add_vocabulary(args: dict[str, Any]) -> dict[str, Any]:
-        word = args["word"].strip()
+        word = args["word"].strip()[:200]
 
         async with session_factory() as db_session:
             # Case-insensitive dedup: "Bonjour" and "bonjour" are the same word
@@ -418,9 +418,9 @@ def create_session_tools(
                     db_session,
                     user_id=user_id,
                     word=word,
-                    translation=args.get("translation", "").strip() or None,
+                    translation=args.get("translation", "").strip()[:200] or None,
                     context_sentence=args.get("context_sentence", "").strip() or None,
-                    topic=args.get("topic", "").strip() or None,
+                    topic=args.get("topic", "").strip()[:100] or None,
                     fsrs_state=card_info["state"],
                     fsrs_stability=card_info["stability"],
                     fsrs_difficulty=card_info["difficulty"],

@@ -344,7 +344,7 @@ class ExerciseResult(Base):
     )
 
     # Exercise data
-    exercise_type: Mapped[str] = mapped_column(String(30))
+    exercise_type: Mapped[str] = mapped_column(String(50))
     topic: Mapped[str] = mapped_column(String(100))
     score: Mapped[int] = mapped_column(SmallInteger)
     max_score: Mapped[int] = mapped_column(SmallInteger, default=10)
