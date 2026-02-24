@@ -202,7 +202,7 @@ class TestBuildSummaryPrompt:
             user_level="A1",
         )
         assert "exercise" in prompt.lower() or "/words" in prompt
-        assert "guilt" not in prompt.lower() or "NEVER guilt" in prompt
+        assert "guilt" not in prompt.lower() or "guilt-trip" in prompt.lower()
 
     def test_close_reason_shapes_tone(self):
         base_data = {
@@ -229,7 +229,7 @@ class TestBuildSummaryPrompt:
             close_reason=CloseReason.TURN_LIMIT,
             user_name="X", user_streak=0, user_level="A1",
         )
-        assert "timeout" in idle_prompt.lower()
+        assert "stopped responding" in idle_prompt.lower()
         assert "productivity" in turn_prompt.lower()
 
     def test_no_header_rule_present(self):

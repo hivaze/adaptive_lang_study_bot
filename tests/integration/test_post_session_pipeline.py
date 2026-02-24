@@ -224,13 +224,32 @@ class TestLastActivity:
                 user_id=uid,
                 session_id=sess.id,
                 tools_called=["mcp__langbot__add_vocabulary"],
-                close_reason="idle_timeout",
+                close_reason=CloseReason.EXPLICIT_CLOSE,
             )
 
             updated = await _read_user(penv, uid)
             assert updated.last_activity is not None
             assert updated.last_activity["type"] == "session"
             assert updated.last_activity["status"] == "completed"
+            assert updated.last_activity["close_reason"] == CloseReason.EXPLICIT_CLOSE
+            assert updated.last_activity["exercise_count"] == 0
+        finally:
+            await _cleanup(penv, uid)
+
+    async def test_idle_timeout_marks_incomplete(self, penv):
+        """idle_timeout is a forced close — session should be incomplete."""
+        user, sess, uid = await _setup_user(penv)
+        try:
+            await run_post_session(
+                user_id=uid,
+                session_id=sess.id,
+                tools_called=["mcp__langbot__record_exercise_result"],
+                close_reason=CloseReason.IDLE_TIMEOUT,
+            )
+
+            updated = await _read_user(penv, uid)
+            assert updated.last_activity["status"] == "incomplete"
+            assert updated.last_activity["close_reason"] == CloseReason.IDLE_TIMEOUT
         finally:
             await _cleanup(penv, uid)
 
@@ -256,13 +275,16 @@ class TestLastActivity:
                 user_id=uid,
                 session_id=sess.id,
                 tools_called=["mcp__langbot__record_exercise_result"],
-                close_reason="idle_timeout",
+                close_reason=CloseReason.IDLE_TIMEOUT,
             )
 
             updated = await _read_user(penv, uid)
             assert len(updated.session_history) == 1
-            assert "summary" in updated.session_history[0]
-            assert "date" in updated.session_history[0]
+            entry = updated.session_history[0]
+            assert "summary" in entry
+            assert "date" in entry
+            assert entry["close_reason"] == CloseReason.IDLE_TIMEOUT
+            assert entry["status"] == "incomplete"
         finally:
             await _cleanup(penv, uid)
 
@@ -285,7 +307,7 @@ class TestLastActivity:
                 user_id=uid,
                 session_id=sess.id,
                 tools_called=["mcp__langbot__record_exercise_result"],
-                close_reason="idle_timeout",
+                close_reason=CloseReason.IDLE_TIMEOUT,
             )
 
             updated = await _read_user(penv, uid)
@@ -293,8 +315,58 @@ class TestLastActivity:
             assert activity["last_exercise"] == "translation"
             assert activity["topic"] == "food"
             assert activity["score"] == 8
+            assert activity["exercise_count"] == 1
+            assert activity["close_reason"] == CloseReason.IDLE_TIMEOUT
             assert "manzana" in activity["words_practiced"]
             assert "food" in activity["topics_covered"]
+        finally:
+            await _cleanup(penv, uid)
+
+    async def test_pending_context_on_idle_timeout(self, penv):
+        """When idle_timeout + no exercises + prep tools, pending_context is inferred."""
+        user, sess, uid = await _setup_user(penv)
+        try:
+            await run_post_session(
+                user_id=uid,
+                session_id=sess.id,
+                tools_called=["mcp__langbot__get_exercise_history"],
+                close_reason=CloseReason.IDLE_TIMEOUT,
+            )
+
+            updated = await _read_user(penv, uid)
+            activity = updated.last_activity
+            assert activity["status"] == "incomplete"
+            assert activity["pending_context"] == "preparing an exercise"
+        finally:
+            await _cleanup(penv, uid)
+
+    async def test_no_pending_context_with_exercises(self, penv):
+        """pending_context should NOT be set when exercises were completed."""
+        user, sess, uid = await _setup_user(penv)
+        try:
+            async with AsyncSession(bind=penv, expire_on_commit=False) as db:
+                await ExerciseResultRepo.create(
+                    db,
+                    user_id=uid,
+                    session_id=sess.id,
+                    exercise_type="translation",
+                    topic="food",
+                    score=7,
+                )
+                await db.commit()
+
+            await run_post_session(
+                user_id=uid,
+                session_id=sess.id,
+                tools_called=[
+                    "mcp__langbot__get_exercise_history",
+                    "mcp__langbot__record_exercise_result",
+                ],
+                close_reason=CloseReason.IDLE_TIMEOUT,
+            )
+
+            updated = await _read_user(penv, uid)
+            assert "pending_context" not in updated.last_activity
         finally:
             await _cleanup(penv, uid)
 

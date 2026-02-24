@@ -1154,6 +1154,7 @@ class SessionManager:
                     "last_activity": {
                         "type": "session",
                         "status": "incomplete",
+                        "close_reason": reason,
                         "session_summary": (
                             ". ".join(summary_parts) if summary_parts
                             else "Practice session"

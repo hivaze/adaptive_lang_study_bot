@@ -20,11 +20,13 @@ from adaptive_lang_study_bot.utils import compute_new_streak, strip_mcp_prefix, 
 
 _LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]
 
-# Close reasons that mean the session was truly cut short (not by user choice).
-# idle_timeout is excluded: the user stopped responding, indicating they were done.
+# Close reasons that mean the session ended without the user explicitly finishing.
+# idle_timeout is included: the user stopped responding mid-task, which means
+# unfinished work should be surfaced in the next session's continuation context.
 _FORCED_CLOSE_REASONS = frozenset({
     CloseReason.TURN_LIMIT, CloseReason.COST_LIMIT,
     CloseReason.SHUTDOWN, CloseReason.ERROR,
+    CloseReason.IDLE_TIMEOUT,
 })
 
 
@@ -213,6 +215,8 @@ async def run_post_session(
             activity: dict = {
                 "type": "session",
                 "status": status,
+                "close_reason": close_reason,
+                "exercise_count": len(exercises),
                 "session_summary": ". ".join(summary_parts) if summary_parts else "Practice session",
                 "tools_used": tool_names[:10],
             }
@@ -245,6 +249,24 @@ async def run_post_session(
                     for tp, sc in type_scores.items()
                 }
 
+            # Infer pending context when session ended with no completed exercises
+            # but the agent was clearly preparing something (called prep tools).
+            # This helps the next session know what was "in progress" when the
+            # user dropped off.
+            if not exercises and close_reason == CloseReason.IDLE_TIMEOUT and tool_names:
+                _PREP_TOOL_HINTS = {
+                    "get_exercise_history": "preparing an exercise",
+                    "get_due_vocabulary": "setting up vocabulary review",
+                    "search_vocabulary": "looking up vocabulary",
+                    "get_progress_summary": "reviewing progress",
+                }
+                hints = [
+                    _PREP_TOOL_HINTS[t] for t in tool_names
+                    if t in _PREP_TOOL_HINTS
+                ]
+                if hints:
+                    activity["pending_context"] = hints[0]
+
             updates["last_activity"] = activity
 
             # Append compact entry to session_history (rolling last 5)
@@ -253,6 +275,7 @@ async def run_post_session(
                 "date": local_now.strftime("%Y-%m-%d %H:%M"),
                 "summary": activity.get("session_summary", "Practice session"),
                 "status": status,
+                "close_reason": close_reason,
             }
             if all_topics:
                 history_entry["topics"] = all_topics[:5]

@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 from adaptive_lang_study_bot.agent.prompt_builder import (
     _build_comeback_section,
     build_proactive_prompt,
+    build_summary_prompt,
     build_system_prompt,
     compute_session_context,
 )
@@ -537,7 +538,7 @@ class TestIncompleteSessionEnriched:
         })
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
-        assert "last score was 5/10" in prompt
+        assert "Last score: 5/10" in prompt
 
     def test_words_practiced_shown(self):
         user = _make_user(last_activity={
@@ -549,9 +550,9 @@ class TestIncompleteSessionEnriched:
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
         assert "hacer" in prompt
-        assert "Words they were working on" in prompt
+        assert "Words practiced last time" in prompt
 
-    def test_offer_to_continue(self):
+    def test_offer_choice_to_continue_or_start_fresh(self):
         user = _make_user(last_activity={
             "status": "incomplete",
             "topic": "verbs",
@@ -559,7 +560,8 @@ class TestIncompleteSessionEnriched:
         })
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
-        assert "Offer to continue from where they stopped" in prompt
+        assert "continue where they left off" in prompt
+        assert "start something new" in prompt
 
     def test_struggling_topics_in_incomplete(self):
         """Incomplete session with struggling topics should include revisit advice."""
@@ -1059,3 +1061,283 @@ class TestActiveSchedules:
         ]
         prompt = build_system_prompt(user, ctx, active_schedules=schedules)
         assert "avoid duplicates" in prompt.lower()
+
+
+# ---------------------------------------------------------------------------
+# Engagement-aware continuation and close_reason context
+# ---------------------------------------------------------------------------
+
+
+class TestIdleTimeoutContinuation:
+    """Test that idle_timeout close_reason produces engagement-aware continuation."""
+
+    def test_idle_timeout_uses_abandoned_wording(self):
+        user = _make_user(last_activity={
+            "status": "incomplete",
+            "close_reason": "idle_timeout",
+            "topic": "verbs",
+            "session_summary": "Started verb practice",
+        })
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "abandoned" in prompt
+        assert "stopped responding" in prompt
+
+    def test_idle_timeout_minimal_exercises_noted(self):
+        user = _make_user(last_activity={
+            "status": "incomplete",
+            "close_reason": "idle_timeout",
+            "exercise_count": 1,
+            "topic": "verbs",
+            "session_summary": "Started verb practice",
+        })
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "Very little was accomplished" in prompt
+
+    def test_idle_timeout_good_exercises_not_flagged(self):
+        """If user did 3 exercises before timing out, don't say 'very little'."""
+        user = _make_user(last_activity={
+            "status": "incomplete",
+            "close_reason": "idle_timeout",
+            "exercise_count": 3,
+            "topic": "verbs",
+            "session_summary": "Verb practice",
+        })
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "Very little was accomplished" not in prompt
+
+    def test_turn_limit_uses_mid_conversation_wording(self):
+        user = _make_user(last_activity={
+            "status": "incomplete",
+            "close_reason": "turn_limit",
+            "topic": "grammar",
+            "session_summary": "Grammar session",
+        })
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "ended mid-conversation" in prompt
+        assert "abandoned" not in prompt
+
+    def test_no_close_reason_uses_default_wording(self):
+        """Legacy last_activity without close_reason uses default wording."""
+        user = _make_user(last_activity={
+            "status": "incomplete",
+            "topic": "verbs",
+            "session_summary": "Verb practice",
+        })
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "ended mid-conversation" in prompt
+
+    def test_pending_context_shown_for_idle_timeout(self):
+        """When agent was preparing an exercise, show what was pending."""
+        user = _make_user(last_activity={
+            "status": "incomplete",
+            "close_reason": "idle_timeout",
+            "exercise_count": 0,
+            "pending_context": "preparing an exercise",
+            "session_summary": "Practice session",
+        })
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "preparing an exercise" in prompt
+        assert "stopped responding" in prompt
+
+    def test_no_pending_context_when_absent(self):
+        """No pending_context field means no mention of what was being prepared."""
+        user = _make_user(last_activity={
+            "status": "incomplete",
+            "close_reason": "idle_timeout",
+            "exercise_count": 0,
+            "session_summary": "Practice session",
+        })
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "tutor was" not in prompt
+
+    def test_all_continuations_offer_choice(self):
+        """Both idle_timeout and non-idle_timeout continuations offer a choice."""
+        for close_reason in ["idle_timeout", "turn_limit", ""]:
+            user = _make_user(last_activity={
+                "status": "incomplete",
+                "close_reason": close_reason,
+                "topic": "verbs",
+                "session_summary": "Verb practice",
+            })
+            ctx = compute_session_context(user)
+            prompt = build_system_prompt(user, ctx)
+            assert "continue where they left off" in prompt, (
+                f"close_reason={close_reason!r} should offer choice"
+            )
+            assert "start something new" in prompt
+
+    def test_idle_timeout_playful_teasing(self):
+        """idle_timeout continuation should instruct playful teasing about disappearing."""
+        user = _make_user(last_activity={
+            "status": "incomplete",
+            "close_reason": "idle_timeout",
+            "topic": "verbs",
+            "session_summary": "Verb practice",
+        })
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "playful" in prompt.lower()
+        assert "teasing" in prompt.lower()
+        assert "disappearing" in prompt.lower()
+
+    def test_non_idle_timeout_no_teasing(self):
+        """Non-idle-timeout continuations should NOT include teasing instructions."""
+        user = _make_user(last_activity={
+            "status": "incomplete",
+            "close_reason": "turn_limit",
+            "topic": "verbs",
+            "session_summary": "Verb practice",
+        })
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "teasing" not in prompt.lower()
+
+
+class TestCloseReasonInSessionHistory:
+    """Test that close_reason is rendered in session history entries."""
+
+    def test_idle_timeout_shown(self):
+        user = _make_user(session_history=[
+            {"date": "2026-02-20", "summary": "Verb practice", "status": "incomplete", "close_reason": "idle_timeout"},
+        ])
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "(idle timeout)" in prompt
+
+    def test_turn_limit_shown(self):
+        user = _make_user(session_history=[
+            {"date": "2026-02-20", "summary": "Long session", "status": "incomplete", "close_reason": "turn_limit"},
+        ])
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "(turn limit)" in prompt
+
+    def test_cost_limit_shown(self):
+        user = _make_user(session_history=[
+            {"date": "2026-02-20", "summary": "Intensive", "status": "incomplete", "close_reason": "cost_limit"},
+        ])
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "(cost limit)" in prompt
+
+    def test_no_close_reason_shows_incomplete(self):
+        """Legacy entries without close_reason still show (incomplete)."""
+        user = _make_user(session_history=[
+            {"date": "2026-02-20", "summary": "Old session", "status": "incomplete"},
+        ])
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "(incomplete)" in prompt
+
+    def test_completed_no_annotation(self):
+        user = _make_user(session_history=[
+            {"date": "2026-02-20", "summary": "Good session", "status": "completed"},
+        ])
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "(incomplete)" not in prompt
+        assert "(idle timeout)" not in prompt
+
+
+class TestEngagementHint:
+    """Engagement instruction is now part of the idle_timeout continuation block."""
+
+    def test_engaging_start_after_idle_timeout(self):
+        """idle_timeout continuation should include 'immediately engaging' instruction."""
+        user = _make_user(last_activity={
+            "status": "incomplete",
+            "close_reason": "idle_timeout",
+            "session_summary": "Short session",
+        })
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "immediately engaging" in prompt
+
+    def test_no_engaging_hint_after_explicit_close(self):
+        user = _make_user(last_activity={
+            "close_reason": "explicit_close",
+            "session_summary": "Normal session",
+        })
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "immediately engaging" not in prompt
+
+    def test_no_engaging_hint_for_completed_session(self):
+        """Completed sessions (even with idle_timeout close_reason somehow) don't trigger it."""
+        user = _make_user(last_activity={
+            "status": "completed",
+            "close_reason": "idle_timeout",
+            "session_summary": "Normal session",
+        })
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "immediately engaging" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# Summary prompt: productivity-aware tiers
+# ---------------------------------------------------------------------------
+
+
+class TestBuildSummaryPrompt:
+    """Test the three-tier summary task generation."""
+
+    @staticmethod
+    def _build(*, exercise_count=0, vocab_count=0, review_count=0,
+               close_reason="explicit_close", duration_minutes=10,
+               exercise_scores=None, exercise_topics=None):
+        return build_summary_prompt(
+            "ru", "fr",
+            session_data={
+                "exercise_count": exercise_count,
+                "exercise_scores": exercise_scores or [],
+                "exercise_topics": exercise_topics or [],
+                "exercise_types": [],
+                "words_added": [],
+                "words_reviewed": 0,
+                "vocab_count": vocab_count,
+                "review_count": review_count,
+                "turn_count": 5,
+                "duration_minutes": duration_minutes,
+            },
+            close_reason=close_reason,
+            user_name="Test",
+            user_streak=5,
+            user_level="A2",
+        )
+
+    def test_good_progress_mentions_achievements(self):
+        prompt = self._build(exercise_count=3, exercise_scores=[7, 8, 6],
+                             exercise_topics=["verbs", "cooking"])
+        assert "achievements" in prompt.lower() or "honestly" in prompt.lower()
+        assert "barely" not in prompt
+
+    def test_minimal_progress_idle_timeout_is_honest(self):
+        prompt = self._build(exercise_count=1, close_reason="idle_timeout",
+                             exercise_scores=[7])
+        assert "barely" in prompt.lower() or "little" in prompt.lower()
+
+    def test_minimal_progress_short_duration_is_honest(self):
+        prompt = self._build(exercise_count=1, duration_minutes=2,
+                             exercise_scores=[7])
+        assert "barely" in prompt.lower() or "little" in prompt.lower()
+
+    def test_no_progress_suggests_activity(self):
+        prompt = self._build(exercise_count=0)
+        assert "didn't" in prompt.lower() or "no" in prompt.lower()
+
+    def test_idle_timeout_hint_includes_honest_assessment(self):
+        prompt = self._build(exercise_count=1, close_reason="idle_timeout")
+        assert "honest" in prompt.lower() or "pretend" in prompt.lower()
+
+    def test_rules_allow_constructive_feedback(self):
+        prompt = self._build()
+        assert "honest and constructive" in prompt.lower()
+        assert "NEVER guilt-trip or criticize" not in prompt

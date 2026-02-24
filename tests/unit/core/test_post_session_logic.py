@@ -216,8 +216,14 @@ class TestSessionStatus:
             status = "incomplete" if reason in _FORCED_CLOSE_REASONS else "completed"
             assert status == "incomplete", f"{reason} should be incomplete"
 
+    def test_idle_timeout_marks_incomplete(self):
+        """Idle timeout sessions are incomplete — the user dropped off mid-task."""
+        assert CloseReason.IDLE_TIMEOUT in _FORCED_CLOSE_REASONS
+        status = "incomplete" if CloseReason.IDLE_TIMEOUT in _FORCED_CLOSE_REASONS else "completed"
+        assert status == "incomplete"
+
     def test_voluntary_reasons_mark_completed(self):
-        voluntary = [CloseReason.IDLE_TIMEOUT, CloseReason.EXPLICIT_CLOSE, CloseReason.UNKNOWN]
+        voluntary = [CloseReason.EXPLICIT_CLOSE, CloseReason.UNKNOWN]
         for reason in voluntary:
             status = "incomplete" if reason in _FORCED_CLOSE_REASONS else "completed"
             assert status == "completed", f"{reason} should be completed"

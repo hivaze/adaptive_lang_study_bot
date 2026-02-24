@@ -17,9 +17,9 @@ class TestForcedCloseReasons:
     def test_shutdown_is_forced(self):
         assert CloseReason.SHUTDOWN in _FORCED_CLOSE_REASONS
 
-    def test_idle_timeout_not_forced(self):
-        """Idle timeout means user stopped responding — session is considered completed."""
-        assert CloseReason.IDLE_TIMEOUT not in _FORCED_CLOSE_REASONS
+    def test_idle_timeout_is_forced(self):
+        """Idle timeout means user dropped off mid-task — session is incomplete."""
+        assert CloseReason.IDLE_TIMEOUT in _FORCED_CLOSE_REASONS
 
     def test_error_is_forced(self):
         """Error close marks session as incomplete for smooth recovery."""

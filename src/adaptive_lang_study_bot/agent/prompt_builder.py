@@ -697,25 +697,37 @@ def build_system_prompt(
             # Only suggest continuation if the gap is recent (< 24 h).
             # After a day the context is too stale to offer a meaningful
             # "pick up where you left off" experience (Issue #27).
+            prev_close = last_activity.get("close_reason", "")
             topic_info = f" on '{last_activity['topic']}'" if last_activity.get("topic") else ""
-            continuation_parts = [
-                f"NOTE: The student's last session ended mid-conversation{topic_info}.",
-            ]
-            if last_activity.get("last_exercise"):
+            prev_exercises = last_activity.get("exercise_count", 0)
+
+            if prev_close == "idle_timeout":
+                continuation_parts = [
+                    f"NOTE: The student's last session was abandoned{topic_info}.",
+                    "They stopped responding and the session timed out.",
+                ]
+                if prev_exercises <= 1:
+                    continuation_parts.append(
+                        "Very little was accomplished in that session."
+                    )
+                pending = last_activity.get("pending_context")
+                if pending:
+                    continuation_parts.append(
+                        f"The tutor was {pending} when the student stopped responding."
+                    )
                 continuation_parts.append(
-                    f"They were doing a '{last_activity['last_exercise']}' exercise."
+                    "Ask if they want to continue where they left off or start "
+                    "something new. Use light, playful teasing about them "
+                    "disappearing mid-task — funny and warm, not passive-aggressive. "
+                    "If they choose to drop it, move on without insisting. "
+                    "Either way, start with something immediately engaging."
                 )
-            if last_activity.get("score") is not None:
-                continuation_parts.append(
-                    f"Their last score was {last_activity['score']}/10."
-                )
-            if last_activity.get("words_practiced"):
-                words = ", ".join(_sanitize(w, 50) for w in last_activity["words_practiced"][:5])
-                continuation_parts.append(f"Words they were working on: {words}.")
-            continuation_parts.append(
-                "Offer to continue from where they stopped, "
-                "referencing the specific topic and exercise."
-            )
+            else:
+                continuation_parts = [
+                    f"NOTE: The student's last session ended mid-conversation{topic_info}.",
+                    "Ask if they want to continue where they left off or start "
+                    "something new. If they choose to drop it, move on without insisting.",
+                ]
             # Include struggling topics so the agent knows what to revisit
             struggling = last_activity.get("struggling_topics")
             if struggling:
@@ -757,7 +769,15 @@ def build_system_prompt(
             if entry.get("score") is not None:
                 parts.append(f"score: {entry['score']}/10")
             if entry.get("status") == "incomplete":
-                parts.append("(incomplete)")
+                entry_reason = entry.get("close_reason", "")
+                if entry_reason == "idle_timeout":
+                    parts.append("(idle timeout)")
+                elif entry_reason == "turn_limit":
+                    parts.append("(turn limit)")
+                elif entry_reason == "cost_limit":
+                    parts.append("(cost limit)")
+                else:
+                    parts.append("(incomplete)")
             ctx_lines.append(f"  - {' | '.join(parts)}")
 
     # 7-day topic performance snapshot
@@ -977,8 +997,11 @@ def build_proactive_prompt(
 
 _SUMMARY_CLOSE_REASON_HINTS: dict[str, str] = {
     "idle_timeout": (
-        "The session timed out due to inactivity. "
-        "Do NOT mention the timeout directly. Be warm and natural."
+        "The session ended because the student stopped responding. "
+        "Be honest about what was accomplished. If very little was done, "
+        "note that short sessions limit progress and encourage longer "
+        "engagement next time. Do NOT pretend a minimal-effort session "
+        "was a great achievement."
     ),
     "explicit_close": (
         "The student chose to end the session. "
@@ -1034,7 +1057,9 @@ def build_summary_prompt(
         "3. Format using Telegram HTML only: <b>bold</b>, <i>italic</i>, "
         "<code>code</code>. NEVER use Markdown.\n"
         "4. Keep the summary concise: 2-4 sentences maximum.\n"
-        "5. Be warm and encouraging. NEVER guilt-trip or criticize.\n"
+        "5. Be honest and constructive. Acknowledge what was accomplished. "
+        "If little was done, say so directly and provide specific recommendations. "
+        "Never guilt-trip, but do not pretend minimal effort was a great achievement.\n"
         "6. Do NOT repeat obvious facts like 'your session has ended'.\n"
         "7. Write the summary as a direct message to the student — start IMMEDIATELY "
         "with the content. NEVER begin with ANY header, title, label, or introductory "
@@ -1088,26 +1113,45 @@ def build_summary_prompt(
 
     # --- 4. Task ---
     has_progress = bool(exercise_count or vocab_count or review_count)
+    is_minimal_progress = (
+        has_progress
+        and exercise_count <= 1
+        and vocab_count <= 1
+        and review_count <= 1
+        and (close_reason == "idle_timeout" or duration_minutes <= 3)
+    )
 
     no_header_reminder = (
         "Remember: do NOT start with any header or introductory phrase — "
         "jump straight into the message content."
     )
 
-    if has_progress:
+    if has_progress and not is_minimal_progress:
         task = (
             "Summarize the student's session achievements in 2-4 sentences. "
             "Mention specific topics they practiced and words they learned. "
-            "If scores are available, comment on their performance positively. "
-            "End with brief encouragement about what they could focus on next time. "
+            "If scores are available, comment on their performance honestly — "
+            "praise good results, note areas for improvement on weaker scores. "
+            "End with a specific recommendation for what to focus on next time. "
+            + no_header_reminder
+        )
+    elif is_minimal_progress:
+        task = (
+            "The student barely engaged in this session — they completed very "
+            "little work before the session ended. Be honest: acknowledge what "
+            "they did (if anything), but note that such a short session limits "
+            "real progress. Provide a specific, actionable recommendation — "
+            "suggest a concrete exercise type or topic for next time. "
+            "Encourage them to aim for at least 3-4 exercises per session "
+            "to build momentum. Keep it constructive (2-3 sentences). "
             + no_header_reminder
         )
     else:
         task = (
             "The student chatted but didn't complete any exercises or vocabulary work. "
-            "Write a brief, encouraging message (2-3 sentences). "
-            "Suggest they try an exercise, vocabulary review (/words), or a focused "
-            "study topic next time. Make it feel like a natural suggestion, not a lecture. "
+            "Be direct: note that they didn't practice and suggest a specific activity "
+            "to try next time (an exercise type, vocabulary review via /words, or a "
+            "focused study topic). Keep it brief and actionable (2-3 sentences). "
             + no_header_reminder
         )
 

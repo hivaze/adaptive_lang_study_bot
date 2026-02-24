@@ -158,6 +158,8 @@ class TestJSONBUpdates:
         activity = {
             "type": "session",
             "status": "completed",
+            "close_reason": "explicit_close",
+            "exercise_count": 3,
             "session_summary": "Completed exercises. Topics: food, colors",
             "tools_used": ["record_exercise_result", "add_vocabulary"],
             "last_exercise": "translation",
@@ -184,7 +186,12 @@ class TestJSONBUpdates:
 
         # Build a history with 15 entries
         history = [
-            {"date": f"2026-02-{i + 1:02d} 10:00", "summary": f"Session {i}", "status": "completed"}
+            {
+                "date": f"2026-02-{i + 1:02d} 10:00",
+                "summary": f"Session {i}",
+                "status": "completed",
+                "close_reason": "explicit_close",
+            }
             for i in range(15)
         ]
         await UserRepo.update_fields(
