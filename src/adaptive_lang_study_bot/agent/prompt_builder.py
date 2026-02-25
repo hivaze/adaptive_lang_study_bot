@@ -734,10 +734,12 @@ def build_system_prompt(
                 topic_info = f" on '{last_activity['topic']}'" if last_activity.get("topic") else ""
                 prev_exercises = last_activity.get("exercise_count", 0)
 
-                if prev_close == "idle_timeout" and prev_exercises >= 2:
-                    # Productive session that expired naturally — the agent
-                    # likely wrapped up and said goodbye, then the session
-                    # timed out while idle.  Do NOT treat as "abandoned."
+                if prev_close == "idle_timeout" and (
+                    prev_exercises >= 2
+                    or last_activity.get("agent_stopped")
+                ):
+                    # Productive session OR agent wrapped up naturally —
+                    # session expired after finishing.  Do NOT treat as "abandoned."
                     continuation_parts = [
                         f"NOTE: The student had a productive session{topic_info} "
                         "that ended normally.",
@@ -746,29 +748,30 @@ def build_system_prompt(
                         "Ask if they want to continue with similar topics or start "
                         "something new. Keep it brief and warm.",
                     ]
-                elif prev_close == "idle_timeout":
-                    # Low/no progress — true abandonment (user disappeared
-                    # before meaningful work was done).
+                elif prev_close == "idle_timeout" and last_activity.get("pending_context"):
+                    # Agent was actively preparing something when user vanished —
+                    # true abandonment mid-task.
+                    pending = last_activity["pending_context"]
                     continuation_parts = [
                         f"NOTE: The student's last session was abandoned{topic_info}.",
                         "They stopped responding and the session timed out.",
-                    ]
-                    if prev_exercises <= 1:
-                        continuation_parts.append(
-                            "Very little was accomplished in that session."
-                        )
-                    pending = last_activity.get("pending_context")
-                    if pending:
-                        continuation_parts.append(
-                            f"The tutor was {pending} when the student stopped responding."
-                        )
-                    continuation_parts.append(
+                        f"The tutor was {pending} when the student stopped responding.",
                         "Ask if they want to continue where they left off or start "
                         "something new. Use light, playful teasing about them "
                         "disappearing mid-task — funny and warm, not passive-aggressive. "
                         "If they choose to drop it, move on without insisting. "
-                        "Either way, start with something immediately engaging."
-                    )
+                        "Either way, start with something immediately engaging.",
+                    ]
+                elif prev_close == "idle_timeout":
+                    # Low engagement, no pending work — trivially short or
+                    # chat-only session.  No task was interrupted.
+                    continuation_parts = [
+                        f"NOTE: The student's last session{topic_info} ended "
+                        "without much progress.",
+                        "Welcome them back warmly. Do NOT imply they quit or "
+                        "left mid-task — there was nothing to leave.",
+                        "Suggest a concrete activity to start with.",
+                    ]
                 elif prev_close in ("turn_limit", "cost_limit"):
                     # System ended the session — the student did NOT leave.
                     continuation_parts = [

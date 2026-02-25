@@ -1071,11 +1071,13 @@ class TestActiveSchedules:
 class TestIdleTimeoutContinuation:
     """Test that idle_timeout close_reason produces engagement-aware continuation."""
 
-    def test_idle_timeout_uses_abandoned_wording(self):
+    def test_idle_timeout_with_pending_context_uses_abandoned_wording(self):
+        """Teasing only happens when pending_context exists (true abandonment)."""
         user = _make_user(last_activity={
             "status": "incomplete",
             "close_reason": "idle_timeout",
             "topic": "verbs",
+            "pending_context": "preparing an exercise",
             "session_summary": "Started verb practice",
         })
         ctx = compute_session_context(user)
@@ -1083,17 +1085,21 @@ class TestIdleTimeoutContinuation:
         assert "abandoned" in prompt
         assert "stopped responding" in prompt
 
-    def test_idle_timeout_minimal_exercises_noted(self):
+    def test_idle_timeout_no_pending_context_no_teasing(self):
+        """Without pending_context, idle_timeout should NOT tease."""
         user = _make_user(last_activity={
             "status": "incomplete",
             "close_reason": "idle_timeout",
-            "exercise_count": 1,
+            "exercise_count": 0,
             "topic": "verbs",
             "session_summary": "Started verb practice",
         })
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
-        assert "Very little was accomplished" in prompt
+        assert "abandoned" not in prompt
+        assert "teasing" not in prompt.lower()
+        assert "disappearing" not in prompt.lower()
+        assert "without much progress" in prompt
 
     def test_idle_timeout_productive_session_not_abandoned(self):
         """If user did 2+ exercises, treat idle_timeout as natural completion, not abandonment."""
@@ -1175,8 +1181,8 @@ class TestIdleTimeoutContinuation:
         assert "preparing an exercise" in prompt
         assert "stopped responding" in prompt
 
-    def test_no_pending_context_when_absent(self):
-        """No pending_context field means no mention of what was being prepared."""
+    def test_no_pending_context_uses_neutral_wording(self):
+        """No pending_context → neutral branch, no teasing."""
         user = _make_user(last_activity={
             "status": "incomplete",
             "close_reason": "idle_timeout",
@@ -1186,29 +1192,38 @@ class TestIdleTimeoutContinuation:
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
         assert "tutor was" not in prompt
+        assert "without much progress" in prompt
+        assert "abandoned" not in prompt
 
     def test_all_continuations_offer_choice(self):
-        """Both idle_timeout and non-idle_timeout continuations offer a choice."""
-        for close_reason in ["idle_timeout", "turn_limit", ""]:
-            user = _make_user(last_activity={
+        """Continuations with active work offer a choice to continue or start new."""
+        for close_reason, extra in [
+            ("idle_timeout", {"pending_context": "preparing an exercise"}),
+            ("turn_limit", {}),
+            ("", {}),
+        ]:
+            activity = {
                 "status": "incomplete",
                 "close_reason": close_reason,
                 "topic": "verbs",
                 "session_summary": "Verb practice",
-            })
+                **extra,
+            }
+            user = _make_user(last_activity=activity)
             ctx = compute_session_context(user)
             prompt = build_system_prompt(user, ctx)
             assert "continue where they left off" in prompt, (
                 f"close_reason={close_reason!r} should offer choice"
             )
-            assert "start something new" in prompt
+            assert "start something new" in prompt or "start with" in prompt
 
-    def test_idle_timeout_playful_teasing(self):
-        """idle_timeout continuation should instruct playful teasing about disappearing."""
+    def test_idle_timeout_playful_teasing_with_pending_context(self):
+        """idle_timeout with pending_context should instruct playful teasing."""
         user = _make_user(last_activity={
             "status": "incomplete",
             "close_reason": "idle_timeout",
             "topic": "verbs",
+            "pending_context": "preparing an exercise",
             "session_summary": "Verb practice",
         })
         ctx = compute_session_context(user)
@@ -1216,6 +1231,22 @@ class TestIdleTimeoutContinuation:
         assert "playful" in prompt.lower()
         assert "teasing" in prompt.lower()
         assert "disappearing" in prompt.lower()
+
+    def test_idle_timeout_agent_stopped_not_abandoned(self):
+        """When agent_stopped is True, treat as natural completion even with 0 exercises."""
+        user = _make_user(last_activity={
+            "status": "incomplete",
+            "close_reason": "idle_timeout",
+            "exercise_count": 0,
+            "agent_stopped": True,
+            "topic": "verbs",
+            "session_summary": "Quick chat",
+        })
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "productive session" in prompt
+        assert "abandoned" not in prompt
+        assert "teasing" not in prompt.lower()
 
     def test_non_idle_timeout_no_teasing(self):
         """Non-idle-timeout continuations should NOT include teasing instructions."""
@@ -1279,11 +1310,12 @@ class TestCloseReasonInSessionHistory:
 class TestEngagementHint:
     """Engagement instruction is now part of the idle_timeout continuation block."""
 
-    def test_engaging_start_after_idle_timeout(self):
-        """idle_timeout continuation should include 'immediately engaging' instruction."""
+    def test_engaging_start_after_idle_timeout_with_pending(self):
+        """idle_timeout with pending_context includes 'immediately engaging' instruction."""
         user = _make_user(last_activity={
             "status": "incomplete",
             "close_reason": "idle_timeout",
+            "pending_context": "preparing an exercise",
             "session_summary": "Short session",
         })
         ctx = compute_session_context(user)

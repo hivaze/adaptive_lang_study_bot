@@ -16,7 +16,7 @@ from sqlalchemy import select as sa_select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from adaptive_lang_study_bot.db.models import User, Vocabulary as VocabModel
-from adaptive_lang_study_bot.db.repositories import VocabularyRepo, VocabularyReviewLogRepo
+from adaptive_lang_study_bot.db.repositories import UserRepo, VocabularyRepo, VocabularyReviewLogRepo
 from adaptive_lang_study_bot.fsrs_engine.scheduler import review_card
 from adaptive_lang_study_bot.i18n import DEFAULT_LANGUAGE, t
 
@@ -258,6 +258,13 @@ async def on_fsrs_rate(
 
     if not remaining:
         _end_review(user.telegram_id)
+        # Clear stale notification context (e.g. "14 cards due for review")
+        # so the next session doesn't reference already-completed reviews.
+        if user.last_notification_text:
+            await UserRepo.update_fields(
+                db_session, user.telegram_id,
+                last_notification_text=None, last_notification_at=None,
+            )
         # Check if more cards became due beyond the current batch
         total_due = await VocabularyRepo.count_due(db_session, user.telegram_id)
         done_text = t("review.rated_done", lang,

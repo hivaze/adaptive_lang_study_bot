@@ -873,8 +873,22 @@ class SessionManager:
                 active_schedules = await ScheduleRepo.get_for_user(db, user_id)
 
                 # Clear consumed celebrations so they aren't shown again
+                needs_commit = False
                 if session_ctx.get("celebrations"):
                     await UserRepo.clear_pending_celebrations(db, user_id)
+                    needs_commit = True
+
+                # Clear consumed notification context so it isn't shown
+                # in future sessions (the prompt already captured it above).
+                if session_ctx.get("notification_text"):
+                    await UserRepo.update_fields(
+                        db, user_id,
+                        last_notification_text=None,
+                        last_notification_at=None,
+                    )
+                    needs_commit = True
+
+                if needs_commit:
                     await db.commit()
 
             system_prompt = build_system_prompt(
@@ -1179,6 +1193,8 @@ class SessionManager:
                             tools_called=managed.tools_called,
                             close_reason=reason,
                             bot=celebration_bot,
+                            agent_stopped=bool(managed.hook_state and managed.hook_state.stop_data),
+                            turn_count=managed.turn_count,
                         ),
                         timeout=tuning.post_session_timeout_seconds,
                     )

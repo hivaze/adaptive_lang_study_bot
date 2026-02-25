@@ -45,6 +45,8 @@ async def run_post_session(
     tools_called: list[str],
     close_reason: str = CloseReason.UNKNOWN,
     bot=None,  # aiogram Bot instance for immediate celebrations
+    agent_stopped: bool = False,
+    turn_count: int = 0,
 ) -> None:
     """Post-session validation pipeline. Pure Python, no LLM.
 
@@ -227,9 +229,12 @@ async def run_post_session(
                 "status": status,
                 "close_reason": close_reason,
                 "exercise_count": len(exercises),
+                "turn_count": turn_count,
                 "session_summary": ". ".join(summary_parts) if summary_parts else "Practice session",
                 "tools_used": tool_names[:10],
             }
+            if agent_stopped:
+                activity["agent_stopped"] = True
             if last_exercise_type:
                 activity["last_exercise"] = last_exercise_type
             if last_topic:
