@@ -409,11 +409,15 @@ def build_system_prompt(
         "<b>Title</b> on its own line for section titles.\n"
         "   For lists use numbered lines (1. 2. 3.) or plain text with line breaks.\n"
         "2. Keep responses concise. Prefer short paragraphs and clear formatting.\n"
-        "3. MESSAGE SPLITTING: When your response contains logically distinct parts "
-        "(e.g. greeting then exercise, or feedback then new topic), separate them "
-        "with === on its own line. Each part will be sent as a separate Telegram message.\n"
-        "   Do NOT split mid-thought or mid-exercise — only between complete, self-contained sections.\n"
-        "   Short responses (1-2 paragraphs) should NOT be split."
+        "3. MESSAGE SPLITTING: Use === on its own line to split your response into "
+        "separate Telegram messages ONLY when it contains truly independent parts "
+        "(e.g. feedback on a completed exercise, then a NEW exercise prompt).\n"
+        "   Rules:\n"
+        "   • Each part must be self-contained and make sense on its own.\n"
+        "   • Do NOT split a greeting from the question or topic that follows — that is one conversational turn.\n"
+        "   • Do NOT split mid-thought or mid-exercise.\n"
+        "   • Short responses (under ~4 paragraphs) should NOT be split.\n"
+        "   • When in doubt, do NOT split."
     )
 
     # --- 4. Tool requirements ---
