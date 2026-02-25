@@ -8,7 +8,7 @@ from loguru import logger
 from redis.exceptions import RedisError
 
 from adaptive_lang_study_bot.cache.client import get_redis
-from adaptive_lang_study_bot.cache.keys import NOTIF_DEDUP_KEY, NOTIF_LLM_KEY
+from adaptive_lang_study_bot.cache.keys import NOTIF_COOLDOWN_KEY, NOTIF_COOLDOWN_TTL, NOTIF_DEDUP_KEY, NOTIF_LLM_KEY
 from adaptive_lang_study_bot.config import TIER_LIMITS
 from adaptive_lang_study_bot.metrics import NOTIFICATION_LLM_COST, NOTIFICATIONS_SENT, NOTIFICATIONS_SKIPPED
 from adaptive_lang_study_bot.agent.session_manager import run_proactive_llm_session
@@ -179,6 +179,15 @@ async def should_send(user: User, notification_type: str) -> tuple[bool, str]:
     # check_and_increment_notification() in dispatch_notification() handles
     # this correctly. Having a redundant read here doubled DB load and could
     # race with the atomic check anyway.
+
+    # Per-user cooldown — prevents back-to-back notifications regardless of type
+    try:
+        redis = await get_redis()
+        cooldown_key = NOTIF_COOLDOWN_KEY.format(user_id=user.telegram_id)
+        if await redis.exists(cooldown_key):
+            return False, NotificationStatus.SKIPPED_COOLDOWN
+    except RedisError:
+        logger.warning("Redis unavailable during cooldown check for user {}", user.telegram_id)
 
     # Dedup via Redis — read-only early exit (authoritative claim is in dispatch)
     try:
@@ -406,6 +415,15 @@ async def dispatch_notification(
             )
 
         await db.commit()
+
+    # Set per-user cooldown after successful send to prevent back-to-back messages
+    if status == NotificationStatus.SENT:
+        try:
+            redis = await get_redis()
+            cooldown_key = NOTIF_COOLDOWN_KEY.format(user_id=user.telegram_id)
+            await redis.set(cooldown_key, "1", ex=NOTIF_COOLDOWN_TTL)
+        except RedisError:
+            logger.warning("Redis unavailable during cooldown set for user {}", user.telegram_id)
 
     # Release the LLM reservation if the notification was not successfully sent as LLM
     if llm_reserved and (status != NotificationStatus.SENT or tier != NotificationTier.LLM):

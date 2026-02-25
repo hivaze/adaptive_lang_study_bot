@@ -221,6 +221,7 @@
   "review.rated_next": "Calificado <b>{word}</b>: {rating} (siguiente en {days}d)\n\n",
   "review.rating_callback": "{rating} — siguiente en {days} días",
   "review.complete": "¡Revisión completada!",
+  "review.text_during_review": "Estás revisando tarjetas ahora mismo — usa los botones de arriba para calificar cada tarjeta. Envía /words para reiniciar o simplemente continúa.",
   "review.card_not_found": "Tarjeta no encontrada.",
   "review.already_reviewed": "Ya revisada.",
   "review.more_due": "Aún tienes <b>{count}</b> tarjetas más pendientes de revisión.",
@@ -323,7 +324,7 @@
     "<b>¡Racha de {streak} días!</b> ¡Estás construyendo un hábito increíble, {name}!"
   ],
   "notif.daily_review": [
-    "¡Buenos días, {name}! Tienes <b>{due_count}</b> tarjetas de vocabulario listas para revisar.",
+    "¡Hola, {name}! Tienes <b>{due_count}</b> tarjetas de vocabulario listas para revisar.",
     "{name}, ¡hora de tu revisión diaria! <b>{due_count}</b> tarjetas te esperan.",
     "¡Hora de la revisión diaria! Mantené tu <b>racha de {streak} días</b>, {name}."
   ],

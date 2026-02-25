@@ -734,7 +734,21 @@ def build_system_prompt(
                 topic_info = f" on '{last_activity['topic']}'" if last_activity.get("topic") else ""
                 prev_exercises = last_activity.get("exercise_count", 0)
 
-                if prev_close == "idle_timeout":
+                if prev_close == "idle_timeout" and prev_exercises >= 2:
+                    # Productive session that expired naturally — the agent
+                    # likely wrapped up and said goodbye, then the session
+                    # timed out while idle.  Do NOT treat as "abandoned."
+                    continuation_parts = [
+                        f"NOTE: The student had a productive session{topic_info} "
+                        "that ended normally.",
+                        "The session expired after wrapping up — the student did NOT leave "
+                        "unexpectedly. Do NOT tease them about leaving or imply they quit.",
+                        "Ask if they want to continue with similar topics or start "
+                        "something new. Keep it brief and warm.",
+                    ]
+                elif prev_close == "idle_timeout":
+                    # Low/no progress — true abandonment (user disappeared
+                    # before meaningful work was done).
                     continuation_parts = [
                         f"NOTE: The student's last session was abandoned{topic_info}.",
                         "They stopped responding and the session timed out.",
@@ -755,6 +769,22 @@ def build_system_prompt(
                         "If they choose to drop it, move on without insisting. "
                         "Either way, start with something immediately engaging."
                     )
+                elif prev_close in ("turn_limit", "cost_limit"):
+                    # System ended the session — the student did NOT leave.
+                    continuation_parts = [
+                        f"NOTE: The student's last session was cut short by a system limit{topic_info}.",
+                        "The bot ended the session automatically — the student did NOT leave voluntarily.",
+                        "Do NOT tease them about leaving or disappearing.",
+                        "Ask if they want to continue where they left off or start "
+                        "something new. If they choose to drop it, move on without insisting.",
+                    ]
+                elif prev_close in ("shutdown", "error"):
+                    continuation_parts = [
+                        f"NOTE: The student's last session ended due to a technical issue{topic_info}.",
+                        "Do NOT blame the student — it was a system problem.",
+                        "Ask if they want to continue where they left off or start "
+                        "something new. If they choose to drop it, move on without insisting.",
+                    ]
                 else:
                     continuation_parts = [
                         f"NOTE: The student's last session ended mid-conversation{topic_info}.",
@@ -1108,8 +1138,10 @@ def build_summary_prompt(
         f"1. Write ENTIRELY in {native_lang} (the student's native language).\n"
         f"2. You may include {target_lang} words only when referencing specific "
         "vocabulary the student practiced.\n"
-        "3. Format using Telegram HTML only: <b>bold</b>, <i>italic</i>, "
-        "<code>code</code>. NEVER use Markdown.\n"
+        "3. Format using Telegram HTML tags ONLY: <b>bold</b>, <i>italic</i>, "
+        "<code>code</code>. NEVER use Markdown syntax — no asterisks (*bold*), "
+        "no underscores (_italic_), no backticks (`code`), no bullet dashes (- item). "
+        "Use plain text or HTML tags exclusively.\n"
         "4. Keep the summary concise: 2-4 sentences maximum.\n"
         "5. Be honest and constructive. Acknowledge what was accomplished. "
         "If little was done, say so directly and provide specific recommendations. "
@@ -1129,7 +1161,11 @@ def build_summary_prompt(
         "If an exercise was posed but never answered, you may note it was "
         "left unanswered — do NOT report its score.\n"
         "10. NEVER include numeric scores or averages (like '8.2/10' or 'средний балл: 8') "
-        "in the summary. Use qualitative language instead."
+        "in the summary. Use qualitative language instead.\n"
+        "11. NEVER ask for more information or clarification. You have ALL the data "
+        "you need in the SESSION DATA section below. Generate the best summary you can "
+        "from the available data. If some details are missing, work with what you have — "
+        "do NOT request additional input."
     )
     if close_hint:
         rules += f"\n- Tone: {close_hint}"

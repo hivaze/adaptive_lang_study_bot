@@ -18,6 +18,7 @@ from adaptive_lang_study_bot.agent.session_manager import (
 )
 from adaptive_lang_study_bot.bot.helpers import split_agent_sections
 from adaptive_lang_study_bot.bot.routers.debug import format_debug_info, is_debug_enabled
+from adaptive_lang_study_bot.bot.routers.review import is_in_review
 from adaptive_lang_study_bot.db.models import User
 from adaptive_lang_study_bot.enums import CloseReason
 from adaptive_lang_study_bot.i18n import DEFAULT_LANGUAGE, t
@@ -67,6 +68,12 @@ async def handle_text(message: Message, user: User, db_session: AsyncSession) ->
         return
 
     if not message.text:
+        return
+
+    # If user is in flashcard review mode, remind them to use buttons
+    # instead of creating a new agent session.
+    if is_in_review(user.telegram_id):
+        await message.answer(t("review.text_during_review", lang))
         return
 
     # Release the middleware DB connection back to the pool before the long

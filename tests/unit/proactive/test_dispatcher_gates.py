@@ -214,7 +214,10 @@ class TestShouldSendDedup:
         """When Redis dedup key exists, should return skipped_dedup."""
         user = _make_user()
         mock_redis_client = AsyncMock()
-        mock_redis_client.exists = AsyncMock(return_value=1)  # Key exists
+        # Cooldown key → miss; dedup key → hit
+        mock_redis_client.exists = AsyncMock(
+            side_effect=lambda k: 0 if k.startswith("notif:cooldown:") else 1,
+        )
 
         with patch(
             "adaptive_lang_study_bot.proactive.dispatcher.user_local_now",
@@ -235,9 +238,10 @@ class TestShouldSendSkipReasonValues:
     def test_all_reasons_are_distinct(self):
         reasons = {
             NotificationStatus.SKIPPED_PAUSED, NotificationStatus.SKIPPED_QUIET,
-            NotificationStatus.SKIPPED_LIMIT, NotificationStatus.SKIPPED_DEDUP, "",
+            NotificationStatus.SKIPPED_LIMIT, NotificationStatus.SKIPPED_DEDUP,
+            NotificationStatus.SKIPPED_COOLDOWN, "",
         }
-        assert len(reasons) == 5
+        assert len(reasons) == 6
 
 
 # ---------------------------------------------------------------------------

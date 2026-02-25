@@ -221,6 +221,7 @@
   "review.rated_next": "Rated <b>{word}</b>: {rating} (next in {days}d)\n\n",
   "review.rating_callback": "{rating} — next in {days} days",
   "review.complete": "Review complete!",
+  "review.text_during_review": "You're reviewing flashcards right now — use the buttons above to rate each card. Send /words to restart or just keep going!",
   "review.card_not_found": "Card not found.",
   "review.already_reviewed": "Already reviewed.",
   "review.more_due": "You still have <b>{count}</b> more cards due for review.",
@@ -323,7 +324,7 @@
     "<b>{streak}-day streak!</b> You're building an incredible habit, {name}!"
   ],
   "notif.daily_review": [
-    "Good morning, {name}! You have <b>{due_count}</b> vocabulary cards ready for review.",
+    "Hey {name}! You have <b>{due_count}</b> vocabulary cards ready for review.",
     "{name}, time for your daily review! <b>{due_count}</b> cards are waiting.",
     "Daily review time! Keep your <b>{streak}-day streak</b> going, {name}."
   ],

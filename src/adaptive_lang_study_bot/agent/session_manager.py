@@ -352,7 +352,11 @@ async def run_summary_llm_session(
         async with asyncio.timeout(tuning.summary_session_timeout_seconds):
             await client.__aenter__()
             sdk_started = True
-            await client.query("Generate the session summary now.")
+            await client.query(
+                "Generate the session summary now using ONLY the session data "
+                "provided above. Use Telegram HTML formatting (not Markdown). "
+                "Do NOT ask for additional information."
+            )
             async for msg in client.receive_response():
                 if isinstance(msg, AssistantMessage):
                     for block in msg.content:
@@ -1155,6 +1159,16 @@ class SessionManager:
         # Fire post-session pipeline as background task with 1 retry.
         # On first failure, wait 2s then retry once. Exceptions are logged
         # via done callback so silent data loss is visible.
+        #
+        # For automated closes (idle/turn/cost/shutdown), suppress immediate
+        # celebration messages — they arrive as separate Telegram messages that
+        # interleave with the session summary and create confusing UX.
+        # Celebrations stay in pending_celebrations for next session start.
+        # Only explicit close (/end) sends celebrations immediately.
+        celebration_bot = (
+            self._bot if reason == CloseReason.EXPLICIT_CLOSE else None
+        )
+
         async def _post_session_with_retry() -> None:
             for attempt in range(2):
                 try:
@@ -1164,7 +1178,7 @@ class SessionManager:
                             session_id=managed.db_session_id,
                             tools_called=managed.tools_called,
                             close_reason=reason,
-                            bot=self._bot,
+                            bot=celebration_bot,
                         ),
                         timeout=tuning.post_session_timeout_seconds,
                     )

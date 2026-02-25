@@ -150,6 +150,11 @@ async def _phase_schedules(bot: Bot) -> None:
     async def _process_one(schedule, user) -> None:
         async with sem:
             try:
+                # Skip users with active interactive sessions — sending a
+                # schedule notification mid-session is confusing UX.
+                if session_manager.has_active_session(user.telegram_id):
+                    return
+
                 due_count = due_counts.get(user.telegram_id, 0)
                 sessions_week = session_counts.get(user.telegram_id, 0)
 

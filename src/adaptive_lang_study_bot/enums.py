@@ -37,6 +37,7 @@ class NotificationStatus(StrEnum):
     SKIPPED_PREFERENCE = "skipped_preference"
     SKIPPED_LIMIT = "skipped_limit"
     SKIPPED_DEDUP = "skipped_dedup"
+    SKIPPED_COOLDOWN = "skipped_cooldown"
     FAILED = "failed"
 
 

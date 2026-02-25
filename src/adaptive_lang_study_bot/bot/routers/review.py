@@ -1,3 +1,4 @@
+import time
 from datetime import timezone
 from html import escape as esc
 
@@ -22,6 +23,36 @@ from adaptive_lang_study_bot.i18n import DEFAULT_LANGUAGE, t
 router = Router()
 
 _REVIEW_FETCH_LIMIT = 20
+_REVIEW_TTL = 600  # 10 minutes — reviews auto-expire
+
+# Track users currently in flashcard review (telegram_id → monotonic timestamp).
+# In-memory only — single-process bot, no persistence needed.
+_active_reviews: dict[int, float] = {}
+
+
+def is_in_review(user_id: int) -> bool:
+    """Check if user is currently in flashcard review mode."""
+    started = _active_reviews.get(user_id)
+    if started is None:
+        return False
+    if time.monotonic() - started > _REVIEW_TTL:
+        _active_reviews.pop(user_id, None)
+        return False
+    return True
+
+
+def _start_review(user_id: int) -> None:
+    _active_reviews[user_id] = time.monotonic()
+
+
+def _touch_review(user_id: int) -> None:
+    """Refresh review timestamp on each interaction."""
+    if user_id in _active_reviews:
+        _active_reviews[user_id] = time.monotonic()
+
+
+def _end_review(user_id: int) -> None:
+    _active_reviews.pop(user_id, None)
 _RATING_KEYS = {1: "review.btn_again", 2: "review.btn_hard", 3: "review.btn_good", 4: "review.btn_easy"}
 
 
@@ -107,6 +138,7 @@ async def cmd_review(message: Message, user: User, db_session: AsyncSession) -> 
             await message.answer(t("review.no_cards_due", lang, total=total_vocab))
         return
 
+    _start_review(user.telegram_id)
     total = len(due_cards)
     text, keyboard = _format_card_front(due_cards[0], 1, total, lang)
     await message.answer(text, reply_markup=keyboard)
@@ -117,6 +149,7 @@ async def on_fsrs_show(
     callback: CallbackQuery, user: User, db_session: AsyncSession,
 ) -> None:
     """Reveal the answer side of a flashcard."""
+    _touch_review(user.telegram_id)
     lang = user.native_language or DEFAULT_LANGUAGE
     parts = callback.data.split(":")
     if len(parts) != 5:
@@ -149,6 +182,7 @@ async def on_fsrs_show(
 async def on_fsrs_rate(
     callback: CallbackQuery, user: User, db_session: AsyncSession,
 ) -> None:
+    _touch_review(user.telegram_id)
     lang = user.native_language or DEFAULT_LANGUAGE
     parts = callback.data.split(":")
     if len(parts) != 6:
@@ -223,6 +257,7 @@ async def on_fsrs_rate(
     remaining = await VocabularyRepo.get_due(db_session, user.telegram_id, limit=20)
 
     if not remaining:
+        _end_review(user.telegram_id)
         # Check if more cards became due beyond the current batch
         total_due = await VocabularyRepo.count_due(db_session, user.telegram_id)
         done_text = t("review.rated_done", lang,

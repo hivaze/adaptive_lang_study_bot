@@ -1095,8 +1095,8 @@ class TestIdleTimeoutContinuation:
         prompt = build_system_prompt(user, ctx)
         assert "Very little was accomplished" in prompt
 
-    def test_idle_timeout_good_exercises_not_flagged(self):
-        """If user did 3 exercises before timing out, don't say 'very little'."""
+    def test_idle_timeout_productive_session_not_abandoned(self):
+        """If user did 2+ exercises, treat idle_timeout as natural completion, not abandonment."""
         user = _make_user(last_activity={
             "status": "incomplete",
             "close_reason": "idle_timeout",
@@ -1106,9 +1106,13 @@ class TestIdleTimeoutContinuation:
         })
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
+        assert "productive session" in prompt
+        assert "abandoned" not in prompt
+        assert "disappeared" not in prompt
+        assert "teasing" not in prompt.lower()
         assert "Very little was accomplished" not in prompt
 
-    def test_turn_limit_uses_mid_conversation_wording(self):
+    def test_turn_limit_uses_system_limit_wording(self):
         user = _make_user(last_activity={
             "status": "incomplete",
             "close_reason": "turn_limit",
@@ -1117,7 +1121,33 @@ class TestIdleTimeoutContinuation:
         })
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
-        assert "ended mid-conversation" in prompt
+        assert "cut short by a system limit" in prompt
+        assert "did NOT leave voluntarily" in prompt
+        assert "abandoned" not in prompt
+        assert "disappeared" not in prompt
+
+    def test_cost_limit_uses_system_limit_wording(self):
+        user = _make_user(last_activity={
+            "status": "incomplete",
+            "close_reason": "cost_limit",
+            "topic": "vocabulary",
+            "session_summary": "Vocabulary session",
+        })
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "cut short by a system limit" in prompt
+        assert "did NOT leave voluntarily" in prompt
+
+    def test_shutdown_uses_technical_issue_wording(self):
+        user = _make_user(last_activity={
+            "status": "incomplete",
+            "close_reason": "shutdown",
+            "topic": "grammar",
+            "session_summary": "Grammar session",
+        })
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "technical issue" in prompt
         assert "abandoned" not in prompt
 
     def test_no_close_reason_uses_default_wording(self):

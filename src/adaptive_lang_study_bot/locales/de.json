@@ -221,6 +221,7 @@
   "review.rated_next": "<b>{word}</b> bewertet: {rating} (nächste in {days}T)\n\n",
   "review.rating_callback": "{rating} — nächste in {days} Tagen",
   "review.complete": "Wiederholung abgeschlossen!",
+  "review.text_during_review": "Du wiederholst gerade Karteikarten — nutze die Buttons oben, um jede Karte zu bewerten. Sende /words um neu zu starten oder mach einfach weiter!",
   "review.card_not_found": "Karte nicht gefunden.",
   "review.already_reviewed": "Bereits wiederholt.",
   "review.more_due": "Du hast noch <b>{count}</b> weitere Karten zur Wiederholung.",
@@ -323,7 +324,7 @@
     "<b>{streak}-Tage-Serie!</b> Du baust dir eine unglaubliche Gewohnheit auf, {name}!"
   ],
   "notif.daily_review": [
-    "Guten Morgen, {name}! Du hast <b>{due_count}</b> Vokabelkarten zur Wiederholung bereit.",
+    "Hey {name}! Du hast <b>{due_count}</b> Vokabelkarten zur Wiederholung bereit.",
     "{name}, Zeit für deine tägliche Wiederholung! <b>{due_count}</b> Karten warten.",
     "Zeit für die tägliche Wiederholung! Halte deine <b>{streak}-Tage-Serie</b> am Laufen, {name}."
   ],

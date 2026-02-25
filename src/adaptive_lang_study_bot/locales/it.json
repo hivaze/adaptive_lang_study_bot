@@ -221,6 +221,7 @@
   "review.rated_next": "Valutazione <b>{word}</b>: {rating} (prossimo tra {days}g)\n\n",
   "review.rating_callback": "{rating} — prossimo tra {days} giorni",
   "review.complete": "Ripasso completato!",
+  "review.text_during_review": "Stai ripassando le carte adesso — usa i pulsanti sopra per valutare ogni carta. Invia /words per ricominciare o continua!",
   "review.card_not_found": "Carta non trovata.",
   "review.already_reviewed": "Già ripassata.",
   "review.more_due": "Hai ancora <b>{count}</b> carte da ripassare.",
@@ -323,7 +324,7 @@
     "<b>Serie di {streak} giorni!</b> Stai costruendo un'abitudine incredibile, {name}!"
   ],
   "notif.daily_review": [
-    "Buongiorno, {name}! Hai <b>{due_count}</b> carte di vocabolario pronte per il ripasso.",
+    "Ciao {name}! Hai <b>{due_count}</b> carte di vocabolario pronte per il ripasso.",
     "{name}, è ora del ripasso giornaliero! <b>{due_count}</b> carte ti aspettano.",
     "È ora del ripasso giornaliero! Mantieni la tua <b>serie di {streak} giorni</b>, {name}."
   ],
