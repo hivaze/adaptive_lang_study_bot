@@ -525,9 +525,6 @@ def _build_template_summary(managed: "ManagedSession", session_data: dict | None
         if session_data["exercise_topics"]:
             unique_topics = list(dict.fromkeys(session_data["exercise_topics"]))[:5]
             parts.append(t("session.summary_topics", lang, topics=", ".join(unique_topics)))
-        if session_data["exercise_scores"]:
-            avg = sum(session_data["exercise_scores"]) / len(session_data["exercise_scores"])
-            parts.append(t("session.summary_avg_score", lang, score=f"{avg:.1f}"))
     if vocab_count:
         parts.append(t("session.summary_vocab", lang, count=vocab_count))
         if session_data["words_added"]:
@@ -849,6 +846,16 @@ class SessionManager:
 
         exit_stack = AsyncExitStack()
         try:
+            # Reload user from DB to get fresh state. The `user` object from
+            # the middleware may be stale when a session is closed and recreated
+            # within the same handle_message call (turn/cost limit), because
+            # the post-session pipeline updates sessions_completed and
+            # last_session_at concurrently.
+            async with async_session_factory() as db:
+                fresh_user = await UserRepo.get(db, user_id)
+            if fresh_user is not None:
+                user = fresh_user
+
             session_type = SessionType.ONBOARDING if not user.onboarding_completed else SessionType.INTERACTIVE
 
             # Compute session context and system prompt
@@ -960,8 +967,9 @@ class SessionManager:
                 exit_stack=exit_stack,
             )
 
-            # Inform hooks about turn limits for wrap-up injection
+            # Inform hooks about limits for wrap-up injection
             hook_state.max_turns = limits.max_turns_per_session
+            hook_state.max_cost_usd = limits.max_cost_per_session_usd
 
             async with self._lock:
                 self._sessions[user_id] = managed
@@ -1003,6 +1011,11 @@ class SessionManager:
             # doesn't consider this session idle while we're waiting
             # for the model response (which can take seconds).
             managed.last_activity_at = time.time()
+
+            # Sync cost to hook state so UserPromptSubmit can inject
+            # budget warnings before the agent starts its next turn.
+            if managed.hook_state is not None:
+                managed.hook_state.accumulated_cost = managed.accumulated_cost
 
             await managed.client.query(text)
 

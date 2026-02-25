@@ -68,8 +68,8 @@ class TestToolOutputParsing:
             None,
         )
         hint = result["hookSpecificOutput"]["additionalContext"]
-        assert "scored low" in hint
-        assert "3/10" in hint
+        assert "struggled" in hint
+        assert "this exercise" in hint
 
     @pytest.mark.asyncio
     async def test_struggling_trend_hint(self, _hook_handler):
@@ -104,7 +104,7 @@ class TestToolOutputParsing:
             None,
         )
         hint1 = result1["hookSpecificOutput"]["additionalContext"]
-        assert "scored high" in hint1
+        assert "very well" in hint1
         assert "current level" in hint1
 
         # Second high score — now trend triggers
@@ -135,7 +135,7 @@ class TestToolOutputParsing:
         )
         hint = result["hookSpecificOutput"]["additionalContext"]
         assert "current level" in hint
-        assert "6/10" in hint
+        assert "Moderate" in hint
 
     @pytest.mark.asyncio
     async def test_no_hint_for_non_exercise_tools(self, _hook_handler):

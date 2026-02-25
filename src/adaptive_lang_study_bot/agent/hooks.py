@@ -59,6 +59,10 @@ class SessionHookState:
         self.max_turns: int = 0
         self.wrap_up_injected: bool = False
         self.exercise_scores: list[int] = []  # Scores from this session for trend
+        # Cost budget tracking — synced from ManagedSession before each query()
+        self.accumulated_cost: float = 0.0
+        self.max_cost_usd: float = 0.0
+        self.cost_wrap_up_injected: bool = False
         # Summary enrichment fields
         self.exercise_topics: list[str] = []
         self.exercise_types: list[str] = []
@@ -143,31 +147,31 @@ def build_session_hooks(user_id: int) -> tuple[dict[str, list[HookMatcher]], Ses
 
                 if avg <= tuning.hook_struggling_threshold and count >= 2:
                     hint = (
-                        "ADAPTIVE_HINT: Student is struggling (last {} scores avg {:.1f}/10). "
+                        "ADAPTIVE_HINT: Student is struggling on recent exercises. "
                         "Simplify the next exercise, offer encouragement, "
                         "and consider reviewing the basics of this topic."
-                    ).format(count, avg)
+                    )
                 elif avg >= tuning.hook_excelling_threshold and count >= 2:
                     hint = (
-                        "ADAPTIVE_HINT: Student is excelling (last {} scores avg {:.1f}/10). "
+                        "ADAPTIVE_HINT: Student is excelling on recent exercises. "
                         "Consider increasing difficulty or introducing a new topic."
-                    ).format(count, avg)
+                    )
                 elif score <= 4:
                     hint = (
-                        "ADAPTIVE_HINT: Student scored low on this exercise ({}/10) "
-                        "but session average is {:.1f}. Offer help on this specific topic "
+                        "ADAPTIVE_HINT: Student struggled with this exercise "
+                        "but is doing fine overall. Offer help on this specific topic "
                         "without changing overall difficulty."
-                    ).format(score, avg)
+                    )
                 elif score >= 9:
                     hint = (
-                        "ADAPTIVE_HINT: Student scored high ({}/10). "
+                        "ADAPTIVE_HINT: Student did very well on this exercise. "
                         "Good progress. Continue at the current level."
-                    ).format(score)
+                    )
                 else:
                     hint = (
-                        "ADAPTIVE_HINT: Score {}/10 (session avg {:.1f}). "
+                        "ADAPTIVE_HINT: Moderate result. "
                         "Continue at the current level."
-                    ).format(score, avg)
+                    )
 
                 return {
                     "continue_": True,
@@ -222,6 +226,25 @@ def build_session_hooks(user_id: int) -> tuple[dict[str, list[HookMatcher]], Ses
                         f"SESSION_LIMIT: Only {remaining} turns remain in this session. "
                         "Start wrapping up the current exercise or topic. "
                         "Summarize what was covered. Do NOT start new exercises or topics."
+                    ),
+                },
+            }
+
+        # Inject wrap-up hint when approaching cost limit (80% of budget)
+        if (
+            state.max_cost_usd > 0
+            and not state.cost_wrap_up_injected
+            and state.accumulated_cost >= state.max_cost_usd * (1 - TURN_LIMIT_WARN_FRACTION)
+        ):
+            state.cost_wrap_up_injected = True
+            return {
+                "continue_": True,
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": (
+                        "SESSION_LIMIT: This session is running low on resources. "
+                        "Finish the current exercise, give brief feedback, and "
+                        "wrap up. Do NOT start new exercises or topics."
                     ),
                 },
             }
