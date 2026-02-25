@@ -78,6 +78,11 @@ class BotTuning:
     summary_session_timeout_seconds: float = 15.0
     summary_max_turns: int = 3
 
+    # -- Effort levels --
+    interactive_effort: str = "low"
+    proactive_effort: str = "low"
+    summary_effort: str = "low"
+
     # -- Proactive tick --
     proactive_dispatch_concurrency: int = 20  # max parallel dispatches per tick phase
     proactive_user_page_size: int = 500  # users loaded per page in event trigger phase

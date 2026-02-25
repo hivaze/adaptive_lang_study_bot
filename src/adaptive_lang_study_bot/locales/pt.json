@@ -6,12 +6,11 @@
   "lang.de": "Alemão",
   "lang.pt": "Português",
   "lang.it": "Italiano",
-
   "start.welcome_new": "Bem-vindo(a), <b>{name}</b>! Eu sou seu tutor pessoal de idiomas.\n\nPrimeiro, qual é o seu idioma nativo?",
   "start.native_detected": "Bem-vindo(a), <b>{name}</b>! Eu sou seu tutor pessoal de idiomas.\n\nDetectei <b>{language}</b> como seu idioma nativo pelas configurações do Telegram.\nToque para confirmar ou selecione outro:",
   "start.welcome_back": "Bem-vindo(a) de volta, <b>{name}</b>! Me mande uma mensagem para começar a aprender.\n\n<b>Comandos</b>\n/words — Iniciar uma revisão de vocabulário\n/stats — Ver seu progresso\n/settings — Gerenciar preferências\n/end — Encerrar a sessão atual\n/help — Obter ajuda",
   "start.resume_timezone": "Bem-vindo(a) de volta, <b>{name}</b>! Vamos continuar de onde paramos.\n\nQual é o seu fuso horário?\nIsso me ajuda a enviar lembretes no horário certo.",
-  "start.ask_target_welcome": "Ol\u00e1, <b>{name}</b>! Sou seu tutor pessoal de idiomas com IA.\n\nVeja o que me torna diferente:\n\u2022 \u00c9 s\u00f3 conversar comigo \u2014 eu crio exerc\u00edcios a partir da nossa conversa\n\u2022 Me adapto ao seu n\u00edvel (A1\u2192C2) e ajusto a dificuldade automaticamente\n\u2022 Aprendo seus interesses e os integro em cada exerc\u00edcio\n\u2022 Cart\u00f5es de vocabul\u00e1rio com lembretes de revis\u00e3o perfeitamente programados\n\u2022 Sequ\u00eancias, conquistas e relat\u00f3rios semanais de progresso\n\nVamos configurar tudo \u2014 qual idioma voc\u00ea gostaria de aprender ou refor\u00e7ar?",
+  "start.ask_target_welcome": "Olá, <b>{name}</b>! Sou seu tutor pessoal de idiomas com IA.\n\nVeja o que me torna diferente:\n• É só conversar comigo — eu crio exercícios a partir da nossa conversa\n• Me adapto ao seu nível (A1→C2) e ajusto a dificuldade automaticamente\n• Aprendo seus interesses e os integro em cada exercício\n• Cartões de vocabulário com lembretes de revisão perfeitamente programados\n• Sequências, conquistas e relatórios semanais de progresso\n\nVamos configurar tudo — qual idioma você gostaria de aprender ou reforçar?",
   "start.resume_target": "Bem-vindo(a) de volta, <b>{name}</b>! Vamos continuar de onde paramos.\n\nQual idioma você gostaria de aprender ou reforçar?",
   "start.native_selected": "Idioma nativo: {label}",
   "start.ask_target": "Ótimo! Agora, qual idioma você gostaria de aprender ou reforçar?",
@@ -25,7 +24,7 @@
   "start.cta_review": "Iniciando revisão de vocabulário! Use /words para começar.",
   "start.cta_session": "Pronto para praticar! Me mande uma mensagem para iniciar uma sessão.",
   "start.cta_session_prompt": "Digite qualquer coisa para começar — por exemplo, <i>\"Vamos praticar\"</i> ou <i>\"Me ensine algo novo\"</i>",
-  "start.cta_session_continuing": "Iniciando sess\u00e3o...",
+  "start.cta_session_continuing": "Iniciando sessão...",
   "start.cta_continue_prompt": "Vamos continuar de onde paramos",
   "start.target_strengthen": "{label} (reforçar)",
   "start.btn_back": "<< Voltar",
@@ -41,13 +40,19 @@
   "start.level_set": "Nível definido!",
   "start.resume_level": "Bem-vindo de volta, <b>{name}</b>! Vamos continuar — qual é o seu nível do idioma?",
   "start.ask_goal": "Quase pronto! Por que você está aprendendo {target_language}? Toque para selecionar e depois pressione Concluído.",
+  "start.goal_conversation": "Conversação do dia a dia",
+  "start.goal_professional": "Trabalho e carreira",
+  "start.goal_writing": "Escrita e gramática",
+  "start.goal_exams": "Exames / Certificação",
+  "start.goal_text_conversation": "Conversação cotidiana — vida diária, bate-papo, situações sociais",
+  "start.goal_text_professional": "Comunicação profissional — e-mails, reuniões, apresentações",
+  "start.goal_text_writing": "Escrita e gramática — redações, cartas, expressão escrita",
+  "start.goal_text_exams": "{target_language} — exames e certificações",
   "start.goal_travel": "Viagens",
   "start.goal_work": "Trabalho / Negócios",
-  "start.goal_exams": "Exames / Certificação",
   "start.goal_hobby": "Hobby / Cultura",
   "start.goal_text_travel": "{target_language} para viajar e conversar",
-  "start.goal_text_work": "{target_language} para trabalho e neg\u00f3cios",
-  "start.goal_text_exams": "{target_language} \u2014 exames e certifica\u00e7\u00f5es",
+  "start.goal_text_work": "{target_language} para trabalho e negócios",
   "start.goal_text_hobby": "{target_language} como hobby e descoberta cultural",
   "start.goal_set": "Objetivo salvo!",
   "start.btn_skip": "Pular >>",
@@ -85,19 +90,16 @@
   "start.resume_goal": "Bem-vindo de volta, <b>{name}</b>! Vamos continuar — qual é o seu objetivo de aprendizado?",
   "start.resume_interests": "Bem-vindo de volta, <b>{name}</b>! Vamos continuar — quais temas te interessam?",
   "start.resume_schedule": "Bem-vindo de volta, <b>{name}</b>! Quase pronto — quando quer receber lembretes?",
-
   "help.full": "Eu sou seu tutor pessoal de idiomas. Veja o que posso fazer:\n\nBasta me mandar uma mensagem para iniciar uma sessão de aprendizado.\n\n<b>Comandos</b>\n/start — Reiniciar a configuração inicial\n/words — Revisão de flashcards de vocabulário\n/stats — Ver seu progresso\n/settings — Gerenciar preferências e lembretes\n/end — Encerrar a sessão atual\n/deleteme — Apagar todos os seus dados\n/help — Mostrar esta mensagem de ajuda\n\n<b>Como funciona</b>\n• Me mande uma mensagem para iniciar uma conversa — vou dar exercícios, ensinar palavras novas e acompanhar seu progresso.\n• Eu adapto os exercícios ao seu nível e interesses automaticamente.\n• Seu nível se ajusta automaticamente conforme você melhora — é só continuar praticando!\n• As sessões têm um limite de mensagens — vou avisar quando estiver chegando perto.\n• Use /end para encerrar uma sessão, ou ela fecha automaticamente após alguns minutos de inatividade.\n• Me diga seus objetivos de aprendizado (ex: <i>\"Quero me preparar para uma viagem\"</i>) e vou adaptar os exercícios para você.\n\n<b>Dicas</b>\n• Use /words regularmente para reforçar sua memória com revisão de flashcards.\n• Confira /settings para personalizar a dificuldade, o estilo de sessão e as notificações.",
-  "help.new_user": "Bem-vindo! Sou seu tutor pessoal de idiomas com IA.\n\nPara come\u00e7ar, complete a configura\u00e7\u00e3o com /start \u2014 leva s\u00f3 um minuto!\n\nVeja o que posso fazer:\n\u2022 Conversar naturalmente com voc\u00ea e criar exerc\u00edcios a partir da nossa conversa\n\u2022 Me adaptar ao seu n\u00edvel, interesses e objetivos automaticamente\n\u2022 Acompanhar seu vocabul\u00e1rio com revis\u00f5es inteligentes de cart\u00f5es\n\u2022 Ajustar a dificuldade com base no seu desempenho\n\nDepois da configura\u00e7\u00e3o, me envie qualquer mensagem para come\u00e7ar!",
-  "help.getting_started": "Tudo pronto! Veja como come\u00e7ar:\n\n\u2022 <b>Me envie qualquer mensagem</b> para sua primeira li\u00e7\u00e3o\n\u2022 Eu me adapto ao seu n\u00edvel e interesses\n\u2022 Tente dizer algo como <i>\"Vamos praticar\"</i> ou <i>\"Me ensine o b\u00e1sico\"</i>\n\n<b>Comandos \u00fateis</b>\n/words \u2014 Revisar cart\u00f5es de vocabul\u00e1rio\n/stats \u2014 Ver seu progresso\n/settings \u2014 Configura\u00e7\u00f5es\n/help \u2014 Esta ajuda",
-  "help.returning": "Bem-vindo de volta! Um lembrete r\u00e1pido:\n\n\u2022 <b>Me envie qualquer mensagem</b> para iniciar uma sess\u00e3o\n\u2022 Vou te ajudar a aquecer e revisar o que aprendeu\n\u2022 Use /words para revisar seus cart\u00f5es\n\n<b>Comandos</b>\n/words \u2014 Revis\u00e3o de vocabul\u00e1rio\n/stats \u2014 Seu progresso\n/settings \u2014 Configura\u00e7\u00f5es e lembretes\n/end \u2014 Encerrar a sess\u00e3o\n/help \u2014 Esta ajuda",
-
+  "help.new_user": "Bem-vindo! Sou seu tutor pessoal de idiomas com IA.\n\nPara começar, complete a configuração com /start — leva só um minuto!\n\nVeja o que posso fazer:\n• Conversar naturalmente com você e criar exercícios a partir da nossa conversa\n• Me adaptar ao seu nível, interesses e objetivos automaticamente\n• Acompanhar seu vocabulário com revisões inteligentes de cartões\n• Ajustar a dificuldade com base no seu desempenho\n\nDepois da configuração, me envie qualquer mensagem para começar!",
+  "help.getting_started": "Tudo pronto! Veja como começar:\n\n• <b>Me envie qualquer mensagem</b> para sua primeira lição\n• Eu me adapto ao seu nível e interesses\n• Tente dizer algo como <i>\"Vamos praticar\"</i> ou <i>\"Me ensine o básico\"</i>\n\n<b>Comandos úteis</b>\n/words — Revisar cartões de vocabulário\n/stats — Ver seu progresso\n/settings — Configurações\n/help — Esta ajuda",
+  "help.returning": "Bem-vindo de volta! Um lembrete rápido:\n\n• <b>Me envie qualquer mensagem</b> para iniciar uma sessão\n• Vou te ajudar a aquecer e revisar o que aprendeu\n• Use /words para revisar seus cartões\n\n<b>Comandos</b>\n/words — Revisão de vocabulário\n/stats — Seu progresso\n/settings — Configurações e lembretes\n/end — Encerrar a sessão\n/help — Esta ajuda",
   "chat.no_session": "Nenhuma sessão ativa. Use /start para começar a configuração.",
   "chat.no_active_session": "Você não tem uma sessão ativa no momento.",
   "chat.session_ended": "Sessão encerrada. Seu progresso foi salvo.\nMe mande uma mensagem a qualquer momento para iniciar uma nova sessão!",
   "chat.setup_first": "Por favor, complete a configuração primeiro! Use /start para começar.",
   "chat.error": "Algo deu errado do nosso lado. Por favor, tente novamente em instantes.",
   "chat.text_only": "Por enquanto só consigo trabalhar com mensagens de texto. Por favor, digite sua resposta.",
-
   "settings.title": "<b>Configurações</b>\n",
   "settings.language_label": "<b>Idioma:</b> {lang_display}",
   "settings.strengthening": " (reforçando)",
@@ -118,12 +120,12 @@
   "settings.btn_notif_on": "Notificações: ATIVAS",
   "settings.btn_notif_paused": "Notificações: PAUSADAS",
   "settings.btn_quiet_hours": "Horário de silêncio",
-  "settings.btn_max_notif": "M\u00e1x. notifica\u00e7\u00f5es/dia: {count}",
-  "settings.btn_notif_types": "Tipos de notifica\u00e7\u00e3o",
-  "settings.notif_types_title": "<b>Tipos de notifica\u00e7\u00e3o</b>\nToque para ativar ou desativar:",
-  "settings.notifpref_streak": "Lembretes de sequ\u00eancia",
-  "settings.notifpref_vocab": "Revis\u00f5es de vocabul\u00e1rio",
-  "settings.notifpref_progress": "Relat\u00f3rios de progresso",
+  "settings.btn_max_notif": "Máx. notificações/dia: {count}",
+  "settings.btn_notif_types": "Tipos de notificação",
+  "settings.notif_types_title": "<b>Tipos de notificação</b>\nToque para ativar ou desativar:",
+  "settings.notifpref_streak": "Lembretes de sequência",
+  "settings.notifpref_vocab": "Revisões de vocabulário",
+  "settings.notifpref_progress": "Relatórios de progresso",
   "settings.notifpref_reengagement": "Lembretes de retorno",
   "settings.notifpref_nudges": "Dicas de estudo",
   "settings.btn_schedules": "Ver agendamentos",
@@ -151,10 +153,10 @@
   "settings.quiet_hours_current": "Horário de silêncio atual: <b>{value}</b>\n\nDurante o horário de silêncio, nenhuma notificação será enviada.\nSelecione uma opção predefinida:",
   "settings.quiet_preset_night": "22:00 – 07:00 (noite)",
   "settings.quiet_preset_late_night": "23:00 – 08:00 (madrugada)",
-  "settings.quiet_preset_evening": "21:00 \u2013 09:00 (noite at\u00e9 manh\u00e3)",
-  "settings.quiet_preset_early_night": "20:00 \u2013 06:00",
-  "settings.quiet_preset_midnight": "00:00 \u2013 08:00",
-  "settings.quiet_preset_short_night": "22:00 \u2013 06:00",
+  "settings.quiet_preset_evening": "21:00 – 09:00 (noite até manhã)",
+  "settings.quiet_preset_early_night": "20:00 – 06:00",
+  "settings.quiet_preset_midnight": "00:00 – 08:00",
+  "settings.quiet_preset_short_night": "22:00 – 06:00",
   "settings.quiet_preset_half_hour": "23:30 – 07:30",
   "settings.quiet_preset_long_evening": "19:00 – 06:00 (noite longa)",
   "settings.btn_disable_quiet": "Desativar horário de silêncio",
@@ -197,13 +199,11 @@
   "settings.debug_log_enabled": "Registro de depuração <b>ativado</b>. Nível de registro: DEBUG.",
   "settings.debug_log_disabled": "Registro de depuração <b>desativado</b>. Nível de registro: INFO.",
   "settings.msg_outdated": "Esta mensagem está desatualizada. Por favor, use /settings novamente.",
-
   "deleteme.confirm": "<b>Tem certeza de que deseja excluir sua conta?</b>\n\nIsso vai remover permanentemente:\n  • Seu perfil e preferências\n  • Todo o vocabulário e histórico de revisões\n  • Todos os resultados de exercícios\n  • Todos os agendamentos e notificações\n  • Todo o histórico de sessões\n\n<b>Essa ação não pode ser desfeita.</b>",
   "deleteme.btn_confirm": "Sim, excluir tudo",
   "deleteme.btn_cancel": "Cancelar",
   "deleteme.done": "Todos os seus dados foram excluídos.\nEnvie /start se quiser voltar algum dia!",
   "deleteme.error": "Algo deu errado. Por favor, tente novamente.",
-
   "review.setup_first": "Por favor, complete a configuração primeiro! Use /start.",
   "review.no_cards_empty": "Você ainda não tem nenhum cartão de vocabulário.\nMe mande uma mensagem para iniciar uma sessão de aprendizado — palavras novas serão adicionadas ao seu baralho de revisão automaticamente!",
   "review.no_cards_due": "Nenhum cartão de vocabulário está pendente para revisão agora.\nVocê tem {total} palavras no seu baralho. Os cartões vão aparecer aqui quando for hora de revisá-los.",
@@ -228,7 +228,6 @@
   "review.invalid_data": "Dados inválidos.",
   "review.invalid_rating_data": "Dados de avaliação inválidos.",
   "review.invalid_rating": "Avaliação inválida.",
-
   "stats.setup_first": "Por favor, complete a configuração primeiro! Use /start.",
   "stats.title": "<b>Seu Progresso</b> ({target_language})\n",
   "stats.level": "<b>Nível:</b> {level}",
@@ -253,10 +252,8 @@
   "stats.sessions_per_day": "  Sessões/dia: {count}",
   "stats.sessions_unlimited": "  Sessões/dia: ilimitadas",
   "stats.messages_per_session": "  Mensagens/sessão: {count}",
-
   "rate_limit.callback": "Por favor, vá mais devagar.",
   "rate_limit.message": "Você está enviando mensagens rápido demais. Por favor, aguarde cerca de um minuto antes de tentar novamente.",
-
   "session.daily_limit": "Você atingiu seu limite diário de {max_sessions} sessões (plano {tier}). O limite é resetado à meia-noite no seu horário. Enquanto isso, você pode usar /words para praticar seu vocabulário!",
   "session.cost_limit": "Você atingiu o limite de sessões de hoje. O limite é resetado à meia-noite no seu horário. Você ainda pode usar /words para praticar vocabulário!",
   "session.verify_error": "Não foi possível verificar seu limite de sessões. Por favor, tente novamente em instantes.",
@@ -276,23 +273,20 @@
   "session.summary_reviews": "  - Revisou {count} cartão(ões) de vocabulário",
   "session.summary_no_progress": "  - Sem exercícios desta vez — tente /words para revisar vocabulário ou envie uma mensagem para começar a aprender!",
   "session.summary_footer": "\nEnvie uma mensagem para iniciar uma nova sessão!",
-
   "cta.start_review": "Iniciar revisão",
-  "cta.start_session": "Iniciar uma sess\u00e3o",
+  "cta.start_session": "Iniciar uma sessão",
   "cta.continue": "Continuar de onde parei",
   "cta.resume_learning": "Retomar os estudos",
-  "cta.quick_session": "Sess\u00e3o r\u00e1pida",
-
+  "cta.quick_session": "Sessão rápida",
   "pipeline.milestone_streak": "Sequência de {streak} dias!",
   "pipeline.milestone_vocab": "{count} palavras aprendidas!",
   "pipeline.milestone_sessions": "Já são {count} sessões! Continue assim!",
   "pipeline.difficulty_adjusted": "Sua dificuldade foi ajustada de {old} para {new} com base nas suas pontuações recentes!",
   "pipeline.level_changed": "O estudante alterou manualmente seu nível de {old_level} para {new_level} nas Configurações. Reconheça isso e adapte os exercícios ao novo nível.",
-
   "notif.streak_risk": [
     "Você está numa <b>sequência de {streak} dias</b>! Uma revisão rápida de 2 minutos vai mantê-la viva.",
     "{name}, <b>{streak} dias</b> de progresso — mantenha o ritmo com uma revisão rápida!",
-    "E aí {name}, uma revisão rápida de <b>{due_count}</b> palavras é perfeita para fechar o dia."
+    "E aí {name}, até 5 minutinhos mantêm sua <b>sequência de {streak} dias</b>!"
   ],
   "notif.cards_due": [
     "Você tem <b>{due_count}</b> cartões de vocabulário prontos para revisão. Uma sessão rápida vai mantê-los frescos!",
@@ -317,7 +311,7 @@
     "Não se preocupe com as pontuações recentes — uma sessão rápida de revisão vai ajudar!"
   ],
   "notif.incomplete_exercise": [
-    "Voc\u00ea n\u00e3o terminou seu exerc\u00edcio de <b>{topic}</b>. Quer continuar de onde parou?",
+    "Você não terminou seu exercício de <b>{topic}</b>. Quer continuar de onde parou?",
     "Pronto(a) para terminar seu exercício de <b>{topic}</b>? Você estava indo muito bem!"
   ],
   "notif.milestone_vocab": [
@@ -338,10 +332,6 @@
   ],
   "notif.weekly_summary_template": [
     "<b>Resumo Semanal</b>\n\n<b>Nível:</b> {level}\n<b>Sequência:</b> {streak} dias\n<b>Palavras aprendidas:</b> {vocab_count}\n<b>Sessões esta semana:</b> {sessions_week}\n\nContinue assim, {name}!"
-  ],
-  "notif.retention_decay": [
-    "{name}, parte do seu vocabulário pode precisar de uma revisão. <b>{decay_count}</b> palavras correm o risco de serem esquecidas.",
-    "Hora de uma revisão! <b>{decay_count}</b> palavras precisam de um reforço."
   ],
   "notif.weak_area_drill": [
     "{name}, faz um tempo que você não pratica <b>{topic}</b>. Pronto(a) para um exercício focado?",
@@ -372,13 +362,13 @@
     "E aí {name}, mesmo uma sessão curta mantém o ritmo. Pronto(a) para voltar?"
   ],
   "notif.lapsed_compelling": [
-    "{name}, você já aprendeu <b>{vocabulary_count}</b> palavras e chegou ao nível <b>{level}</b>! Não deixe esse progresso se perder.",
+    "{name}, você já aprendeu <b>{vocabulary_count}</b> palavras e chegou ao nível <b>{level}</b>! Sua base continua sólida — uma sessão rápida vai refrescá-la.",
     "Suas habilidades em {target_language} sentem sua falta, {name}! Você construiu uma base sólida com <b>{sessions_completed}</b> sessões — vamos continuar evoluindo.",
-    "{name}, você já avançou muito no seu {target_language}! Uma sessão rápida vai trazer tudo de volta."
+    "{name}, você já avançou muito no seu {target_language}! Um breve aquecimento vai te colocar de volta nos trilhos."
   ],
   "notif.lapsed_miss_you": [
     "{name}, sua jornada com {target_language} não precisa acabar aqui. Volte e vamos começar com uma revisão leve.",
-    "Guardamos seu progresso, {name}! <b>{vocabulary_count}</b> palavras estão esperando por você. Pronto(a) para um novo começo?"
+    "Suas anotações e vocabulário estão salvos, {name}! <b>{vocabulary_count}</b> palavras na sua coleção. Pronto(a) para refrescá-las?"
   ],
   "notif.post_onboarding_14d": [
     "{name}, não esquecemos de você! Sua jornada de aprendizado de {target_language} ainda está esperando. É só mandar uma mensagem para começar.",

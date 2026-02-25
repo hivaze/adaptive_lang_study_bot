@@ -20,10 +20,11 @@ from adaptive_lang_study_bot.db.repositories import (
     UserRepo,
     VocabularyRepo,
 )
-from adaptive_lang_study_bot.enums import ScheduleStatus
+from adaptive_lang_study_bot.enums import ScheduleStatus, ScheduleType
 from adaptive_lang_study_bot.i18n import DEFAULT_LANGUAGE, t
 from adaptive_lang_study_bot.proactive.dispatcher import dispatch_notification
 from adaptive_lang_study_bot.utils import compute_next_trigger, safe_zoneinfo
+from adaptive_lang_study_bot.agent.session_manager import session_manager
 from adaptive_lang_study_bot.proactive.triggers import ALL_TRIGGERS
 
 _MAX_BACKOFF_MINUTES = 1440  # 24 hours
@@ -151,6 +152,28 @@ async def _phase_schedules(bot: Bot) -> None:
             try:
                 due_count = due_counts.get(user.telegram_id, 0)
                 sessions_week = session_counts.get(user.telegram_id, 0)
+
+                # Skip review-type schedules when no cards are due.
+                # Sending "0 cards waiting" is confusing UX. Advance silently.
+                if due_count == 0 and schedule.schedule_type == ScheduleType.DAILY_REVIEW:
+                    user_tz = safe_zoneinfo(user.timezone)
+                    try:
+                        next_trigger = compute_next_trigger(schedule.rrule, user_tz)
+                    except (ValueError, TypeError):
+                        next_trigger = None
+                    async with async_session_factory() as db:
+                        if next_trigger is None:
+                            await ScheduleRepo.update_fields(
+                                db, schedule.id, status=ScheduleStatus.EXPIRED,
+                            )
+                        else:
+                            await ScheduleRepo.update_after_trigger(
+                                db, schedule.id,
+                                next_trigger_at=next_trigger,
+                                success=True,
+                            )
+                        await db.commit()
+                    return
 
                 trigger = {
                     "type": schedule.schedule_type,
@@ -285,6 +308,10 @@ async def _phase_event_triggers(bot: Bot) -> None:
         # Evaluate triggers (pure Python, no I/O)
         work: list[tuple] = []
         for user in users:
+            # Skip users with active interactive sessions — sending a
+            # proactive notification mid-session is confusing UX.
+            if session_manager.has_active_session(user.telegram_id):
+                continue
             due_count = due_counts.get(user.telegram_id, 0)
             for trigger_fn in ALL_TRIGGERS:
                 trigger = trigger_fn(user, due_count=due_count)

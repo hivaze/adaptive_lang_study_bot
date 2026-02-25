@@ -48,7 +48,6 @@ _TRIGGER_TO_SESSION_TYPE: dict[str, str] = {
     "score_trend_declining": SessionType.PROACTIVE_NUDGE,
     "score_trend_improving": SessionType.PROACTIVE_SUMMARY,
     "incomplete_exercise": SessionType.PROACTIVE_NUDGE,
-    "retention_decay": SessionType.PROACTIVE_REVIEW,
     "weak_area_drill_due": SessionType.PROACTIVE_REVIEW,
     # Re-engagement triggers
     "post_onboarding_24h": SessionType.PROACTIVE_NUDGE,
@@ -66,7 +65,6 @@ _TRIGGER_TO_NOTIF_CATEGORY: dict[str, str] = {
     "streak_risk": "streak_reminders",
     "cards_due": "vocab_reviews",
     "daily_review": "vocab_reviews",
-    "retention_decay": "vocab_reviews",
     "score_trend_declining": "progress_reports",
     "score_trend_improving": "progress_reports",
     "progress_report": "progress_reports",
@@ -95,7 +93,7 @@ _DEFAULT_NOTIF_PREFS: dict[str, bool] = {
 
 def _build_cta_keyboard(notification_type: str, lang: str) -> InlineKeyboardMarkup | None:
     """Build a call-to-action inline keyboard differentiated by trigger type."""
-    if notification_type in ("cards_due", "daily_review", "retention_decay"):
+    if notification_type in ("cards_due", "daily_review"):
         return InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=t("cta.start_review", lang), callback_data="cta:words")],
         ])
@@ -236,6 +234,25 @@ async def dispatch_notification(
     today_local = user_local_now(user).date()
     today_str = today_local.isoformat()
 
+    # Atomic dedup claim via SET NX — done early (before the expensive LLM
+    # session) to avoid wasting cost if a concurrent dispatch already claimed
+    # this slot.  On send failure the slot is released so the next tick retries.
+    dedup_key = NOTIF_DEDUP_KEY.format(user_id=user.telegram_id, type=notification_type, date=today_str)
+    dedup_ttl = data.get("dedup_ttl") or _seconds_until_local_midnight(user)
+    dedup_claimed = False
+    try:
+        redis = await get_redis()
+        dedup_claimed = bool(await redis.set(dedup_key, "1", nx=True, ex=dedup_ttl))
+        if not dedup_claimed:
+            logger.debug(
+                "Notification dedup hit: user={} type={} date={}",
+                user.telegram_id, notification_type, today_str,
+            )
+            return None
+    except RedisError:
+        logger.warning("Redis unavailable during notification dedup pre-claim for user {}", user.telegram_id)
+        # Fail open — proceed without dedup protection
+
     # Check LLM notification limit for free tier — atomic reservation via INCR.
     # We increment upfront so concurrent dispatches cannot both slip through.
     # If the notification ultimately fails or is downgraded, we DECR to release.
@@ -303,35 +320,6 @@ async def dispatch_notification(
 
     # Build call-to-action keyboard based on notification type
     cta_keyboard = _build_cta_keyboard(notification_type, user.native_language)
-
-    # Atomic dedup pre-claim via SET NX BEFORE sending.  This prevents
-    # concurrent dispatches (e.g. overlapping ticks or future parallelism)
-    # from both passing the gate.  On send failure the slot is released so
-    # the next tick can retry.
-    dedup_key = NOTIF_DEDUP_KEY.format(user_id=user.telegram_id, type=notification_type, date=today_str)
-    dedup_ttl = data.get("dedup_ttl") or _seconds_until_local_midnight(user)
-    dedup_claimed = False
-    try:
-        redis = await get_redis()
-        dedup_claimed = bool(await redis.set(dedup_key, "1", nx=True, ex=dedup_ttl))
-        if not dedup_claimed:
-            # Another dispatch already claimed this slot — dedup skip.
-            # No DB write needed: the Redis dedup key proves the attempt.
-            logger.debug(
-                "Notification dedup hit: user={} type={} date={}",
-                user.telegram_id, notification_type, today_str,
-            )
-            # Release LLM reservation if any
-            if llm_reserved:
-                try:
-                    redis = await get_redis()
-                    await redis.decr(llm_key)
-                except RedisError:
-                    pass
-            return None
-    except RedisError:
-        logger.warning("Redis unavailable during notification dedup pre-claim for user {}", user.telegram_id)
-        # Fail open — proceed without dedup protection (same as before)
 
     # Atomically claim a daily notification slot BEFORE sending.
     # This prevents races where two concurrent dispatches both pass

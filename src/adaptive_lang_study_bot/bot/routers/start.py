@@ -89,7 +89,7 @@ _POPULAR_TZ_IDS = {
 _LEVEL_OPTIONS = ["A1", "A2", "B1", "B2", "C1", "C2"]
 
 # Onboarding step 5: Learning goals
-_GOAL_OPTIONS = ["travel", "work", "exams", "hobby"]
+_GOAL_OPTIONS = ["conversation", "professional", "writing", "exams"]
 
 # Onboarding step 6: Interests
 _INTEREST_OPTIONS = [

@@ -55,7 +55,8 @@ class TestToolOutputParsing:
         assert "ADAPTIVE_HINT" in result["hookSpecificOutput"]["additionalContext"]
 
     @pytest.mark.asyncio
-    async def test_low_score_hint(self, _hook_handler):
+    async def test_low_score_hint_single(self, _hook_handler):
+        """Single low score gives per-exercise hint, not struggling trend."""
         handler, _ = _hook_handler
         result = await handler(
             {
@@ -66,6 +67,24 @@ class TestToolOutputParsing:
             "test-id",
             None,
         )
+        hint = result["hookSpecificOutput"]["additionalContext"]
+        assert "scored low" in hint
+        assert "3/10" in hint
+
+    @pytest.mark.asyncio
+    async def test_struggling_trend_hint(self, _hook_handler):
+        """Struggling hint requires 2+ low scores (not just one)."""
+        handler, _ = _hook_handler
+        for i in range(2):
+            result = await handler(
+                {
+                    "tool_name": "mcp__langbot__record_exercise_result",
+                    "tool_input": {},
+                    "tool_response": _make_exercise_tool_output(3),
+                },
+                f"test-id-{i}",
+                None,
+            )
         hint = result["hookSpecificOutput"]["additionalContext"]
         assert "Simplify" in hint
         assert "struggling" in hint

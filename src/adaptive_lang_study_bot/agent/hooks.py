@@ -99,9 +99,21 @@ def build_session_hooks(user_id: int) -> tuple[dict[str, list[HookMatcher]], Ses
         stripped_name = strip_mcp_prefix(tool_name)
 
         if stripped_name == "add_vocabulary":
-            word = tool_input.get("word", "")
-            if isinstance(word, str) and word.strip():
-                state.words_added.append(word.strip()[:100])
+            # Only track successful adds (not duplicates or errors)
+            is_error = isinstance(tool_output, dict) and tool_output.get("is_error")
+            is_dup = False
+            if isinstance(tool_output, dict):
+                content = tool_output.get("content", [])
+                if content and isinstance(content[0], dict):
+                    try:
+                        parsed = json.loads(content[0].get("text", "{}"))
+                        is_dup = parsed.get("status") == "duplicate"
+                    except (ValueError, TypeError):
+                        pass
+            if not is_error and not is_dup:
+                word = tool_input.get("word", "")
+                if isinstance(word, str) and word.strip():
+                    state.words_added.append(word.strip()[:100])
 
         elif stripped_name == "record_vocabulary_review":
             state.words_reviewed += 1
@@ -129,7 +141,7 @@ def build_session_hooks(user_id: int) -> tuple[dict[str, list[HookMatcher]], Ses
                 avg = sum(recent) / len(recent)
                 count = len(recent)
 
-                if avg <= tuning.hook_struggling_threshold:
+                if avg <= tuning.hook_struggling_threshold and count >= 2:
                     hint = (
                         "ADAPTIVE_HINT: Student is struggling (last {} scores avg {:.1f}/10). "
                         "Simplify the next exercise, offer encouragement, "

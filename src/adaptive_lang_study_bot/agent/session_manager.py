@@ -69,7 +69,7 @@ from adaptive_lang_study_bot.metrics import (
     SESSIONS_CREATED,
 )
 from adaptive_lang_study_bot.pipeline.post_session import run_post_session
-from adaptive_lang_study_bot.utils import strip_mcp_prefix, summarize_tool_usage
+from adaptive_lang_study_bot.utils import strip_mcp_prefix
 
 # Remove CLAUDECODE env var once at import time so nested SDK subprocesses
 # can start (instead of popping it on every session creation).
@@ -209,7 +209,7 @@ async def run_proactive_llm_session(
             model=tuning.proactive_model,
             max_turns=tuning.proactive_max_turns,
             thinking={"type": "disabled"},
-            effort="medium",
+            effort=tuning.proactive_effort,
             mcp_servers={"langbot": server},
             allowed_tools=allowed_tool_names,
             permission_mode="bypassPermissions",
@@ -245,20 +245,7 @@ async def run_proactive_llm_session(
     finally:
         # Close SDK client
         if client is not None and sdk_started:
-            try:
-                await asyncio.wait_for(
-                    client.__aexit__(None, None, None),
-                    timeout=tuning.sdk_close_timeout_seconds,
-                )
-            except asyncio.TimeoutError:
-                logger.warning("Proactive SDK close timed out for user {}", user_id)
-                try:
-                    if hasattr(client, "_process") and client._process:
-                        client._process.kill()
-                except Exception:
-                    pass
-            except Exception:
-                logger.warning("Error closing proactive SDK client for user {}", user_id)
+            await _close_standalone_sdk_client(client, f"Proactive (user {user_id})")
 
         # Release Redis session lock
         try:
@@ -292,13 +279,12 @@ async def run_proactive_llm_session(
         except Exception:
             logger.warning("Failed to update proactive session record for user {}", user_id)
 
-    SESSIONS_CREATED.labels(tier=UserTier.FREE.value, session_type=session_type).inc()
+    tier = UserTier(user.tier)
+    SESSIONS_CREATED.labels(tier=tier.value, session_type=session_type).inc()
     if accumulated_cost > 0:
-        SESSION_COST_USD.labels(tier=UserTier.FREE.value, session_type=session_type).observe(accumulated_cost)
+        SESSION_COST_USD.labels(tier=tier.value, session_type=session_type).observe(accumulated_cost)
 
-    message_text = notification_sink[0].strip() if notification_sink else None
-    if not message_text:
-        message_text = None
+    message_text = (notification_sink[0].strip() or None) if notification_sink else None
     if message_text is None:
         logger.warning(
             "Proactive LLM session for user {} (type={}) never called send_notification "
@@ -321,6 +307,7 @@ async def run_summary_llm_session(
     user_name: str,
     user_streak: int,
     user_level: str,
+    user_timezone: str = "UTC",
 ) -> tuple[str | None, float]:
     """Run a short-lived LLM session to generate an AI session summary.
 
@@ -348,13 +335,14 @@ async def run_summary_llm_session(
             user_name=user_name,
             user_streak=user_streak,
             user_level=user_level,
+            user_timezone=user_timezone,
         )
 
         options = ClaudeAgentOptions(
             model=tuning.proactive_model,
             max_turns=tuning.summary_max_turns,
-            thinking={"type": "disabled"},
-            effort="medium",
+            thinking={"type": "adaptive"},
+            effort=tuning.summary_effort,
             permission_mode="bypassPermissions",
             system_prompt=system_prompt,
         )
@@ -389,20 +377,7 @@ async def run_summary_llm_session(
         return None, accumulated_cost
     finally:
         if client is not None and sdk_started:
-            try:
-                await asyncio.wait_for(
-                    client.__aexit__(None, None, None),
-                    timeout=tuning.sdk_close_timeout_seconds,
-                )
-            except asyncio.TimeoutError:
-                logger.warning("Summary SDK close timed out")
-                try:
-                    if hasattr(client, "_process") and client._process:
-                        client._process.kill()
-                except Exception:
-                    pass
-            except Exception:
-                logger.warning("Error closing summary SDK client")
+            await _close_standalone_sdk_client(client, "Summary")
 
         try:
             await session_pool.release_proactive()
@@ -491,11 +466,12 @@ async def _generate_and_send_summary(
                 user_name=user_name,
                 user_streak=user_streak,
                 user_level=user_level,
+                user_timezone=managed.user_timezone,
             )
 
         # Fallback to enriched template
         if summary_text is None:
-            summary_text = _build_template_summary(managed)
+            summary_text = _build_template_summary(managed, session_data)
 
         # If the user has already started a new session, drop the stale summary.
         if skip_if_active_fn is not None and skip_if_active_fn():
@@ -528,37 +504,34 @@ async def _generate_and_send_summary(
         logger.warning("Summary generation failed for user {}", user_id, exc_info=True)
 
 
-def _build_template_summary(managed: "ManagedSession") -> str:
-    """Build an enriched template summary — used as fallback when AI summary fails."""
+def _build_template_summary(managed: "ManagedSession", session_data: dict | None = None) -> str:
+    """Build an enriched template summary — used as fallback when AI summary fails.
+
+    Accepts pre-computed *session_data* to avoid recomputing what
+    ``_collect_session_data`` already produced.
+    """
     lang = managed.native_language
-    hook = managed.hook_state
-    tool_names = [strip_mcp_prefix(tc) for tc in managed.tools_called]
+    if session_data is None:
+        session_data = _collect_session_data(managed)
+
     parts = [t("session.summary_header", lang)]
 
-    # Prefer hook_state exercise count (tracks actual recorded scores) over
-    # raw tool call count (which includes invocations even if the tool fails).
-    if hook and hook.exercise_scores:
-        exercise_count = len(hook.exercise_scores)
-    else:
-        exercise_count = tool_names.count("record_exercise_result")
-    vocab_count = tool_names.count("add_vocabulary")
-    review_count = tool_names.count("record_vocabulary_review")
+    exercise_count = session_data["exercise_count"]
+    vocab_count = session_data["vocab_count"]
+    review_count = session_data["review_count"]
 
     if exercise_count:
         parts.append(t("session.summary_exercises", lang, count=exercise_count))
-        # Add topics if available
-        if hook and hook.exercise_topics:
-            unique_topics = list(dict.fromkeys(hook.exercise_topics))[:5]
+        if session_data["exercise_topics"]:
+            unique_topics = list(dict.fromkeys(session_data["exercise_topics"]))[:5]
             parts.append(t("session.summary_topics", lang, topics=", ".join(unique_topics)))
-        # Add average score
-        if hook and hook.exercise_scores:
-            avg = sum(hook.exercise_scores) / len(hook.exercise_scores)
+        if session_data["exercise_scores"]:
+            avg = sum(session_data["exercise_scores"]) / len(session_data["exercise_scores"])
             parts.append(t("session.summary_avg_score", lang, score=f"{avg:.1f}"))
     if vocab_count:
         parts.append(t("session.summary_vocab", lang, count=vocab_count))
-        # Show sample words
-        if hook and hook.words_added:
-            sample = hook.words_added[:5]
+        if session_data["words_added"]:
+            sample = session_data["words_added"][:5]
             parts.append(t("session.summary_words_sample", lang, words=", ".join(sample)))
     if review_count:
         parts.append(t("session.summary_reviews", lang, count=review_count))
@@ -582,7 +555,6 @@ class ManagedSession:
 
     client: ClaudeSDKClient
     user_id: int
-    session_uuid: uuid.UUID
     db_session_id: uuid.UUID  # Row in sessions table
     tier: UserTier = UserTier.FREE
     hook_state: SessionHookState | None = None
@@ -594,6 +566,7 @@ class ManagedSession:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     native_language: str = "en"  # For localized user-facing messages
     target_language: str = ""  # For summary prompt context
+    user_timezone: str = "UTC"  # For user-local timestamps in summaries
     first_name: str = ""  # For personalized summaries
     user_level: str = "A1"  # For summary prompt context
     user_streak: int = 0  # For summary prompt context
@@ -658,6 +631,25 @@ def _kill_sdk_subprocess(client: ClaudeSDKClient) -> None:
                 proc.kill()
     except Exception:
         pass
+
+
+async def _close_standalone_sdk_client(client: ClaudeSDKClient, label: str = "") -> None:
+    """Close an SDK client that was started via ``__aenter__`` in the same task.
+
+    Used by proactive and summary sessions.  Interactive sessions close from
+    a different asyncio task and must use ``_force_close_sdk_client`` instead.
+    """
+    try:
+        await asyncio.wait_for(
+            client.__aexit__(None, None, None),
+            timeout=tuning.sdk_close_timeout_seconds,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("{} SDK close timed out", label)
+        _kill_sdk_subprocess(client)
+    except Exception:
+        logger.warning("Error closing {} SDK client", label)
+        _kill_sdk_subprocess(client)
 
 
 class SessionManager:
@@ -863,7 +855,10 @@ class SessionManager:
             session_ctx = compute_session_context(user)
             async with async_session_factory() as db:
                 due_count = await VocabularyRepo.count_due(db, user_id)
-                stale_topics, topic_performance = await _compute_stale_topics(db, user_id)
+                if user.sessions_completed > 0:
+                    stale_topics, topic_performance = await _compute_stale_topics(db, user_id)
+                else:
+                    stale_topics, topic_performance = [], {}
                 active_schedules = await ScheduleRepo.get_for_user(db, user_id)
 
                 # Clear consumed celebrations so they aren't shown again
@@ -932,13 +927,12 @@ class SessionManager:
             else:
                 thinking = {"type": "adaptive"}
 
-
             # Create SDK client
             options = ClaudeAgentOptions(
                 model=limits.model,
                 max_turns=limits.max_turns_per_session,
                 thinking=thinking,
-                effort="medium",
+                effort=tuning.interactive_effort,
                 mcp_servers={"langbot": server},
                 allowed_tools=allowed_tool_names,
                 permission_mode="bypassPermissions",
@@ -952,12 +946,12 @@ class SessionManager:
             managed = ManagedSession(
                 client=client,
                 user_id=user_id,
-                session_uuid=uuid.uuid4(),
                 db_session_id=db_session_id,
                 tier=tier,
                 hook_state=hook_state,
                 native_language=user.native_language or DEFAULT_LANGUAGE,
                 target_language=user.target_language or "",
+                user_timezone=user.timezone or "UTC",
                 first_name=user.first_name or "",
                 user_level=user.level or "A1",
                 user_streak=user.streak_days or 0,
@@ -1129,7 +1123,6 @@ class SessionManager:
 
         # Update session record in DB
         try:
-            now = datetime.now(timezone.utc)
             async with async_session_factory() as db:
                 await SessionRepo.update_end(
                     db,
@@ -1142,27 +1135,6 @@ class SessionManager:
                     ]} if managed.tools_called else None,
                     duration_ms=int((time.time() - managed.started_at) * 1000),
                 )
-                # Update user fields. Set last_activity with session data so
-                # the post-session pipeline always gets complete exercise data
-                # and any immediately-recreated session knows context.
-                tool_names = [
-                    strip_mcp_prefix(tc) for tc in managed.tools_called[:10]
-                ]
-                summary_parts = summarize_tool_usage(tool_names)
-                update_kwargs: dict[str, object] = {
-                    "last_session_at": now,
-                    "last_activity": {
-                        "type": "session",
-                        "status": "incomplete",
-                        "close_reason": reason,
-                        "session_summary": (
-                            ". ".join(summary_parts) if summary_parts
-                            else "Practice session"
-                        ),
-                        "tools_used": tool_names,
-                    },
-                }
-                await UserRepo.update_fields(db, user_id, **update_kwargs)
                 await db.commit()
         except SQLAlchemyError:
             logger.exception("Error updating session record for user {}", user_id)

@@ -357,6 +357,7 @@ class UserRepo:
     _ALLOWED_MILESTONE_KEYS = frozenset({
         "pending_celebrations", "achieved", "streak", "vocab", "sessions",
         "onboarding_step", "vocabulary_count", "days_streak",
+        "fired_streaks", "fired_vocab", "fired_sessions",
     })
 
     @staticmethod
@@ -527,6 +528,18 @@ class VocabularyRepo:
             select(func.count())
             .select_from(Vocabulary)
             .where(Vocabulary.user_id == user_id),
+        )
+        return result.scalar_one()
+
+    @staticmethod
+    async def count_added_since(
+        session: AsyncSession, user_id: int, since: datetime,
+    ) -> int:
+        """Count vocabulary cards added for a user since a given timestamp."""
+        result = await session.execute(
+            select(func.count())
+            .select_from(Vocabulary)
+            .where(Vocabulary.user_id == user_id, Vocabulary.created_at >= since),
         )
         return result.scalar_one()
 

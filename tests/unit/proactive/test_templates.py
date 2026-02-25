@@ -11,7 +11,7 @@ _EXPECTED_TEMPLATE_TYPES = [
     "weak_area_persistent", "score_trend_improving",
     "score_trend_declining", "incomplete_exercise",
     "milestone_vocab", "milestone_streak",
-    "weekly_summary_template", "retention_decay",
+    "weekly_summary_template",
     "weak_area_drill", "difficulty_changed",
     # Re-engagement
     "post_onboarding_24h", "post_onboarding_3d", "post_onboarding_7d",

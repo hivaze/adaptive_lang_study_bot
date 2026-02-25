@@ -5,7 +5,7 @@ from adaptive_lang_study_bot.config import tuning
 from adaptive_lang_study_bot.db.models import User
 from adaptive_lang_study_bot.enums import Difficulty, SessionStyle
 from adaptive_lang_study_bot.i18n import render_goal, render_interest
-from adaptive_lang_study_bot.utils import get_language_name as _get_language_name, user_local_now
+from adaptive_lang_study_bot.utils import get_language_name as _get_language_name, safe_zoneinfo, user_local_now
 
 # How recently a notification must be to include it in session context
 # (Now driven by tuning.notification_lookback_hours; kept as module-level alias for tests.)
@@ -20,9 +20,11 @@ class SessionContext(TypedDict):
     greeting_note: str
     celebrations: list[str]
     notification_text: str | None
+    notification_hours_ago: float | None
     time_of_day: str
     day_of_week: str
     date_str: str
+    local_time: str
     is_first_session: bool
 
 
@@ -104,6 +106,7 @@ def compute_session_context(user: User) -> SessionContext:
 
     # Proactive notification context
     notification_text = None
+    notif_gap = 0.0
     if user.last_notification_text and user.last_notification_at:
         notif_gap = (now - user.last_notification_at).total_seconds() / 3600
         if notif_gap < tuning.notification_lookback_hours:
@@ -118,6 +121,7 @@ def compute_session_context(user: User) -> SessionContext:
         "greeting_note": greeting_note,
         "celebrations": celebrations,
         "notification_text": notification_text,
+        "notification_hours_ago": round(notif_gap, 1) if notification_text else None,
         "time_of_day": (
             "morning" if local_hour < 12
             else "afternoon" if local_hour < 17
@@ -125,6 +129,7 @@ def compute_session_context(user: User) -> SessionContext:
         ),
         "day_of_week": local_now.strftime("%A"),
         "date_str": local_now.strftime("%Y-%m-%d"),
+        "local_time": local_now.strftime("%H:%M"),
         "is_first_session": is_first_session,
     }
 
@@ -180,23 +185,22 @@ def _build_comeback_section(
 
     priority = 1
 
-    # Priority: Overdue vocabulary review
-    if due_count >= 3:
+    # Priority: Overdue vocabulary review (mutually exclusive with backlog)
+    if due_count > tuning.comeback_vocab_overload_threshold:
+        lines.append(
+            f"{priority}. VOCABULARY BACKLOG: The student has {due_count} overdue "
+            "vocabulary cards \u2014 this is a large backlog. Do NOT try to review all "
+            "of them. Focus on ONLY the 10 most overdue cards this session using "
+            "get_due_vocabulary. Use simple recall exercises (show target word, ask "
+            "for translation). Reassure the student that catching up is gradual."
+        )
+        priority += 1
+    elif due_count >= 3:
         lines.append(
             f"{priority}. VOCABULARY REVIEW: The student has {due_count} overdue vocabulary "
             "cards. Start the session with a quick review of 5-10 of the most overdue "
             "words using get_due_vocabulary. Use simple recall exercises (show target "
             "word, ask for translation). This rebuilds familiarity before new content."
-        )
-        priority += 1
-
-    # Vocabulary pile-up warning (Issue #11)
-    if due_count > tuning.comeback_vocab_overload_threshold:
-        lines.append(
-            f"{priority}. VOCABULARY BACKLOG: The student has {due_count} overdue "
-            "vocabulary cards \u2014 this is a large backlog. Do NOT try to review all "
-            "of them. Focus on ONLY the 10 most overdue cards this session. "
-            "Reassure the student that catching up is gradual."
         )
         priority += 1
 
@@ -509,13 +513,17 @@ def build_system_prompt(
         "- If no learning goals are set, gently encourage setting one early in the session.",
         "- When choosing exercise topics, prefer topics the student hasn't practiced recently, "
         "especially those where they scored low previously.",
+        "- NEVER repeat content you already presented in this session. If you taught words, "
+        "do not re-introduce them. If you gave an exercise, do not re-ask it.",
+        "- Be a leader: teach proactively instead of asking permission for every action. "
+        "Present exercises and vocabulary directly rather than offering menus of choices.",
     ]
     # Hint for early sessions: nudge the agent to fill remaining knowledge gaps
-    if not is_first_session and user.sessions_completed <= 3:
+    if not is_first_session and user.sessions_completed <= 5:
         gaps: list[str] = []
         if user.preferred_difficulty == Difficulty.NORMAL and not user.recent_scores:
             gaps.append("preferred difficulty (easy/normal/hard)")
-        if user.session_style == SessionStyle.CASUAL and user.sessions_completed <= 1:
+        if user.session_style == SessionStyle.CASUAL and user.sessions_completed <= 2:
             gaps.append("session style (casual/structured/intensive)")
         if not user.topics_to_avoid:
             gaps.append("topics to avoid")
@@ -639,7 +647,9 @@ def build_system_prompt(
         "- Error correction (find and fix mistakes)\n"
         "- Listening comprehension cues (describe pronunciation, stress patterns)\n"
         "- Free writing (short paragraph on a topic)\n\n"
-        "Vary exercise types within a session. Don't repeat the same format more than twice in a row."
+        "Vary exercise types within a session. Don't repeat the same format more than twice in a row.\n\n"
+        "After teaching new vocabulary, IMMEDIATELY create a practice exercise using "
+        "those words — do not ask 'want to practice?' first."
     )
 
     # --- 9. Vocabulary strategy (skip for first session — no cards exist yet) ---
@@ -652,12 +662,11 @@ def build_system_prompt(
             "with rating 1-4 (1=Again, 2=Hard, 3=Good, 4=Easy).",
             "- Aim for roughly 70% review / 30% new content when due cards exist.",
             "- If no cards are due, focus on new vocabulary relevant to the session topic.",
-            "- PROPOSE NEW WORDS: Periodically suggest learning a small batch of new words "
-            "(3-5 at a time). Tie them to the current exercise topic, the student's "
-            "interests, or their learning goals. For example: after finishing an exercise, "
-            "say something like 'Want to learn a few useful words related to [topic]?' "
-            "Use search_vocabulary first to avoid re-teaching known words, then teach "
-            "with example sentences and call add_vocabulary for each new word accepted.",
+            "- TEACH NEW WORDS DIRECTLY: When introducing new vocabulary (3-5 words at a time), "
+            "teach them immediately — present the words with example sentences and call "
+            "add_vocabulary for each one. Do NOT ask permission first ('Want to learn some words?'). "
+            "Just teach. Use search_vocabulary before teaching to avoid re-teaching known words. "
+            "After adding vocabulary, immediately create a practice exercise using those words.",
         ]
         # Nudge harder when vocabulary is thin for the student's level
         _level_vocab_floor = {"A1": 20, "A2": 60, "B1": 120, "B2": 200, "C1": 300, "C2": 400}
@@ -673,7 +682,7 @@ def build_system_prompt(
     # --- 10. Session context ---
     ctx_lines = [
         f"Date: {session_ctx['date_str']}",
-        f"Time: {session_ctx['time_of_day']} ({session_ctx['day_of_week']})",
+        f"Time: {session_ctx['time_of_day']} ({session_ctx['day_of_week']}), {session_ctx['local_time']}",
     ]
 
     # Greeting note
@@ -682,79 +691,94 @@ def build_system_prompt(
 
     # Last activity
     if last_activity:
-        ctx_lines.append(f"\nLast session summary: {last_activity.get('session_summary', 'N/A')}")
-        if last_activity.get("topic"):
-            ctx_lines.append(f"Last topic: {last_activity['topic']}")
-        if last_activity.get("last_exercise"):
-            ctx_lines.append(f"Last exercise: {last_activity['last_exercise']}")
-        if last_activity.get("score") is not None:
-            ctx_lines.append(f"Last score: {last_activity['score']}/10")
-        if last_activity.get("topics_covered"):
+        gap_h = session_ctx["gap_hours"]
+        if gap_h >= tuning.comeback_threshold_hours:
+            # Stale context: show only the summary. The COMEBACK ADAPTATION
+            # section provides structured priorities for returning users;
+            # detailed stale data would send contradictory signals.
             ctx_lines.append(
-                f"Topics covered last time: {', '.join(last_activity['topics_covered'][:10])}"
+                f"\nLast session ({round(gap_h / 24, 1)} days ago — context is stale):"
             )
-        if last_activity.get("status") == "incomplete" and session_ctx["gap_hours"] < 24:
-            # Only suggest continuation if the gap is recent (< 24 h).
-            # After a day the context is too stale to offer a meaningful
-            # "pick up where you left off" experience (Issue #27).
-            prev_close = last_activity.get("close_reason", "")
-            topic_info = f" on '{last_activity['topic']}'" if last_activity.get("topic") else ""
-            prev_exercises = last_activity.get("exercise_count", 0)
+            ctx_lines.append(f"  Summary: {last_activity.get('session_summary', 'N/A')}")
+            if last_activity.get("status") == "incomplete":
+                ctx_lines.append(
+                    f"  Status: incomplete ({last_activity.get('close_reason', 'unknown')})"
+                )
+        else:
+            # Recent context: show full details
+            ctx_lines.append(f"\nLast session summary: {last_activity.get('session_summary', 'N/A')}")
+            if last_activity.get("topic"):
+                ctx_lines.append(f"Last topic: {last_activity['topic']}")
+            if last_activity.get("last_exercise"):
+                ctx_lines.append(f"Last exercise: {last_activity['last_exercise']}")
+            if last_activity.get("score") is not None:
+                ctx_lines.append(f"Last score: {last_activity['score']}/10")
+            if last_activity.get("topics_covered"):
+                ctx_lines.append(
+                    f"Topics covered last time: {', '.join(last_activity['topics_covered'][:10])}"
+                )
+            if last_activity.get("status") == "incomplete" and gap_h < 24:
+                # Only suggest continuation if the gap is recent (< 24 h).
+                # After a day the context is too stale to offer a meaningful
+                # "pick up where you left off" experience (Issue #27).
+                prev_close = last_activity.get("close_reason", "")
+                topic_info = f" on '{last_activity['topic']}'" if last_activity.get("topic") else ""
+                prev_exercises = last_activity.get("exercise_count", 0)
 
-            if prev_close == "idle_timeout":
-                continuation_parts = [
-                    f"NOTE: The student's last session was abandoned{topic_info}.",
-                    "They stopped responding and the session timed out.",
-                ]
-                if prev_exercises <= 1:
+                if prev_close == "idle_timeout":
+                    continuation_parts = [
+                        f"NOTE: The student's last session was abandoned{topic_info}.",
+                        "They stopped responding and the session timed out.",
+                    ]
+                    if prev_exercises <= 1:
+                        continuation_parts.append(
+                            "Very little was accomplished in that session."
+                        )
+                    pending = last_activity.get("pending_context")
+                    if pending:
+                        continuation_parts.append(
+                            f"The tutor was {pending} when the student stopped responding."
+                        )
                     continuation_parts.append(
-                        "Very little was accomplished in that session."
+                        "Ask if they want to continue where they left off or start "
+                        "something new. Use light, playful teasing about them "
+                        "disappearing mid-task — funny and warm, not passive-aggressive. "
+                        "If they choose to drop it, move on without insisting. "
+                        "Either way, start with something immediately engaging."
                     )
-                pending = last_activity.get("pending_context")
-                if pending:
+                else:
+                    continuation_parts = [
+                        f"NOTE: The student's last session ended mid-conversation{topic_info}.",
+                        "Ask if they want to continue where they left off or start "
+                        "something new. If they choose to drop it, move on without insisting.",
+                    ]
+                # Include struggling topics so the agent knows what to revisit
+                struggling = last_activity.get("struggling_topics")
+                if struggling:
+                    topics_str = ", ".join(
+                        f"{s['topic']} (avg {s['avg_score']}/10)" for s in struggling[:3]
+                    )
                     continuation_parts.append(
-                        f"The tutor was {pending} when the student stopped responding."
+                        f"They struggled with: {topics_str}. "
+                        "Revisit these with simpler exercises before moving on."
                     )
-                continuation_parts.append(
-                    "Ask if they want to continue where they left off or start "
-                    "something new. Use light, playful teasing about them "
-                    "disappearing mid-task — funny and warm, not passive-aggressive. "
-                    "If they choose to drop it, move on without insisting. "
-                    "Either way, start with something immediately engaging."
+                ctx_lines.append(" ".join(continuation_parts))
+            if last_activity.get("words_practiced"):
+                ctx_lines.append(
+                    f"Words practiced last time: {', '.join(_sanitize(w, 50) for w in last_activity['words_practiced'][:10])}"
                 )
-            else:
-                continuation_parts = [
-                    f"NOTE: The student's last session ended mid-conversation{topic_info}.",
-                    "Ask if they want to continue where they left off or start "
-                    "something new. If they choose to drop it, move on without insisting.",
-                ]
-            # Include struggling topics so the agent knows what to revisit
-            struggling = last_activity.get("struggling_topics")
-            if struggling:
+            if last_activity.get("exercise_type_scores"):
+                scores_str = ", ".join(
+                    f"{t}: {s}/10" for t, s in last_activity["exercise_type_scores"].items()
+                )
+                ctx_lines.append(f"Exercise performance last time: {scores_str}")
+            if last_activity.get("struggling_topics") and last_activity.get("status") != "incomplete":
+                # For completed sessions, still note struggling topics for follow-up
+                struggling = last_activity["struggling_topics"]
                 topics_str = ", ".join(
-                    f"{s['topic']} (avg {s['avg_score']}/10)" for s in struggling[:3]
+                    f"{s['topic']} ({s['avg_score']}/10)" for s in struggling[:3]
                 )
-                continuation_parts.append(
-                    f"They struggled with: {topics_str}. "
-                    "Revisit these with simpler exercises before moving on."
-                )
-            ctx_lines.append(" ".join(continuation_parts))
-        if last_activity.get("words_practiced"):
-            ctx_lines.append(
-                f"Words practiced last time: {', '.join(_sanitize(w, 50) for w in last_activity['words_practiced'][:10])}"
-            )
-        if last_activity.get("exercise_type_scores"):
-            scores_str = ", ".join(
-                f"{t}: {s}/10" for t, s in last_activity["exercise_type_scores"].items()
-            )
-            ctx_lines.append(f"Exercise performance last time: {scores_str}")
-        if last_activity.get("struggling_topics") and last_activity.get("status") != "incomplete":
-            # For completed sessions, still note struggling topics for follow-up
-            struggling = last_activity["struggling_topics"]
-            topics_str = ", ".join(
-                f"{s['topic']} ({s['avg_score']}/10)" for s in struggling[:3]
-            )
-            ctx_lines.append(f"Topics that need extra practice: {topics_str}")
+                ctx_lines.append(f"Topics that need extra practice: {topics_str}")
 
     # Session history (previous sessions beyond last_activity)
     session_history = user.session_history or []
@@ -783,9 +807,10 @@ def build_system_prompt(
     # 7-day topic performance snapshot
     if topic_performance:
         ctx_lines.append("\nTopic performance (last 7 days):")
-        # Sort by exercise count descending so the most-practiced topics appear first
+        # Sort by avg score ascending (struggling topics first), then by count descending
         sorted_topics = sorted(
-            topic_performance.items(), key=lambda kv: kv[1]["count"], reverse=True,
+            topic_performance.items(),
+            key=lambda kv: (kv[1]["avg_score"], -kv[1]["count"]),
         )
         for topic, stats in sorted_topics[:10]:
             ctx_lines.append(
@@ -801,16 +826,19 @@ def build_system_prompt(
                 f"avg score: {st['avg_score']:.1f})"
             )
 
-    # Active schedules
+    # Active schedules (capped to avoid prompt bloat)
     if active_schedules:
         active = [s for s in active_schedules if s.get("status") == "active"]
         paused = [s for s in active_schedules if s.get("status") == "paused"]
         if active or paused:
             ctx_lines.append("\nActive schedules:")
-            for s in active:
+            for s in active[:10]:
                 ctx_lines.append(f"  - {s['description']} ({s['type']})")
-            for s in paused:
+            for s in paused[:5]:
                 ctx_lines.append(f"  - {s['description']} ({s['type']}) [paused]")
+            overflow = len(active) + len(paused) - 15
+            if overflow > 0:
+                ctx_lines.append(f"  ... and {overflow} more")
             ctx_lines.append(
                 "Check existing schedules before creating new ones to avoid duplicates."
             )
@@ -823,9 +851,11 @@ def build_system_prompt(
 
     # Proactive notification context
     if session_ctx.get("notification_text"):
+        hours_ago = session_ctx.get("notification_hours_ago")
+        time_note = f" ({hours_ago:.0f}h ago)" if hours_ago else ""
         ctx_lines.append(
             "\n## CONTEXT: USER IS RESPONDING TO A NOTIFICATION\n"
-            f'You recently sent: "{session_ctx["notification_text"]}"\n'
+            f'You recently sent{time_note}: "{session_ctx["notification_text"]}"\n'
             "The user's response below is likely a reply to this. "
             "Continue naturally — don't repeat the notification."
         )
@@ -969,6 +999,21 @@ def build_proactive_prompt(
     ]
     sections.append("## STUDENT PROFILE\n" + "\n".join(profile_lines))
 
+    # --- 2b. Time context ---
+    local_now = user_local_now(user)
+    local_hour = local_now.hour
+    time_of_day = (
+        "morning" if local_hour < 12
+        else "afternoon" if local_hour < 17
+        else "evening"
+    )
+    sections.append(
+        "## TIME CONTEXT\n"
+        f"Date: {local_now.strftime('%Y-%m-%d')}\n"
+        f"Time: {time_of_day} ({local_now.strftime('%A')}), {local_now.strftime('%H:%M')}\n"
+        f"Timezone: {user.timezone or 'UTC'}"
+    )
+
     # --- 3. Task instructions ---
     task_template = _PROACTIVE_TASK_INSTRUCTIONS.get(
         session_type,
@@ -999,9 +1044,8 @@ _SUMMARY_CLOSE_REASON_HINTS: dict[str, str] = {
     "idle_timeout": (
         "The session ended because the student stopped responding. "
         "Be honest about what was accomplished. If very little was done, "
-        "note that short sessions limit progress and encourage longer "
-        "engagement next time. Do NOT pretend a minimal-effort session "
-        "was a great achievement."
+        "encourage them to continue next time. Do NOT pretend a minimal-effort "
+        "session was a great achievement. Do NOT comment on session duration."
     ),
     "explicit_close": (
         "The student chose to end the session. "
@@ -1027,6 +1071,7 @@ def build_summary_prompt(
     user_name: str,
     user_streak: int,
     user_level: str,
+    user_timezone: str = "UTC",
 ) -> str:
     """Build a focused system prompt for AI session summary generation.
 
@@ -1069,7 +1114,11 @@ def build_summary_prompt(
         "language. The very first word must be part of the actual message to the student "
         "(e.g. start with praise, a greeting, or a comment about their work).\n"
         "8. If your summary has distinct parts (achievements vs encouragement), "
-        "you may separate them with === on its own line to send as separate messages."
+        "you may separate them with === on its own line to send as separate messages.\n"
+        "9. Do NOT comment on session duration or how long the student spent. "
+        "Only mention exercises the student actually completed and scored. "
+        "If an exercise was posed but never answered, you may note it was "
+        "left unanswered — do NOT report its score."
     )
     if close_hint:
         rules += f"\n- Tone: {close_hint}"
@@ -1085,11 +1134,19 @@ def build_summary_prompt(
     words_added = session_data.get("words_added", [])
     words_reviewed = session_data.get("words_reviewed", 0)
     turn_count = session_data.get("turn_count", 0)
-    duration_minutes = session_data.get("duration_minutes", 0)
+
+    local_now = datetime.now(timezone.utc).astimezone(safe_zoneinfo(user_timezone))
+    local_hour = local_now.hour
+    time_of_day = (
+        "morning" if local_hour < 12
+        else "afternoon" if local_hour < 17
+        else "evening"
+    )
 
     data_lines = [
         f"Student: {_sanitize(user_name, 50)} (level {user_level}, streak {user_streak} days)",
-        f"Session duration: {duration_minutes} min, {turn_count} messages",
+        f"Current time: {local_now.strftime('%Y-%m-%d %H:%M')} ({time_of_day}, {local_now.strftime('%A')})",
+        f"Messages exchanged: {turn_count}",
     ]
     if exercise_count:
         avg_score = sum(exercise_scores) / len(exercise_scores) if exercise_scores else 0
@@ -1118,7 +1175,7 @@ def build_summary_prompt(
         and exercise_count <= 1
         and vocab_count <= 1
         and review_count <= 1
-        and (close_reason == "idle_timeout" or duration_minutes <= 3)
+        and close_reason == "idle_timeout"
     )
 
     no_header_reminder = (
@@ -1139,8 +1196,7 @@ def build_summary_prompt(
         task = (
             "The student barely engaged in this session — they completed very "
             "little work before the session ended. Be honest: acknowledge what "
-            "they did (if anything), but note that such a short session limits "
-            "real progress. Provide a specific, actionable recommendation — "
+            "they did (if anything) and provide a specific, actionable recommendation — "
             "suggest a concrete exercise type or topic for next time. "
             "Encourage them to aim for at least 3-4 exercises per session "
             "to build momentum. Keep it constructive (2-3 sentences). "

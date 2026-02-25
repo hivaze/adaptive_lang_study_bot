@@ -85,7 +85,8 @@ _SESSION_TYPE_TOOLS: dict[SessionType, set[str]] = {
         "get_progress_summary",
     },
     SessionType.ONBOARDING: {
-        "get_user_profile", "update_preference", "manage_schedule",
+        "get_user_profile", "update_preference", "record_exercise_result",
+        "add_vocabulary", "search_vocabulary", "manage_schedule",
     },
     SessionType.PROACTIVE_REVIEW: {
         "get_user_profile", "get_due_vocabulary", "record_vocabulary_review",
@@ -180,6 +181,14 @@ def create_session_tools(
                 pass
         return None
 
+    _user_tz = safe_zoneinfo(user_timezone)
+
+    def _to_local_iso(dt):
+        """Convert a timezone-aware datetime to user-local ISO string."""
+        if dt is None:
+            return None
+        return dt.astimezone(_user_tz).isoformat()
+
     # --- Tool definitions (each captures session_factory, user_id via closure) ---
 
     @tool(
@@ -214,6 +223,7 @@ def create_session_tools(
                 "last_activity": user.last_activity,
                 "session_history": user.session_history or [],
                 "pending_reviews": due_count,
+                "due_fraction": round(due_count / max(user.vocabulary_count, 1), 2),
                 "tier": user.tier,
                 "notifications_paused": user.notifications_paused,
             }
@@ -473,6 +483,8 @@ def create_session_tools(
                     "topic": c.topic,
                     "review_count": c.review_count,
                     "last_rating": c.last_rating,
+                    "due_since": _to_local_iso(c.fsrs_due),
+                    "last_reviewed": _to_local_iso(c.fsrs_last_review),
                 }
                 for c in cards
             ]
@@ -553,7 +565,7 @@ def create_session_tools(
                         "type": s.schedule_type,
                         "description": s.description,
                         "status": s.status,
-                        "next_trigger": s.next_trigger_at.isoformat() if s.next_trigger_at else None,
+                        "next_trigger": _to_local_iso(s.next_trigger_at),
                         "rrule": s.rrule,
                     }
                     for s in schedules
@@ -594,19 +606,31 @@ def create_session_tools(
                         f"Delete one or use a different schedule type."
                     )
 
-                # LLM/hybrid schedule cap — tied to tier's daily LLM notification limit
+                # LLM/hybrid schedule cap — estimate daily LLM notifications from
+                # existing schedules' recurrence + the new one. Prevents creating
+                # hourly LLM schedules that would blow the daily budget.
                 if notification_tier in (NotificationTier.LLM, NotificationTier.HYBRID):
                     tier_limits = TIER_LIMITS.get(UserTier(user_tier))
                     if tier_limits:
-                        llm_count = sum(
-                            1 for s in existing
-                            if s.notification_tier in (NotificationTier.LLM, NotificationTier.HYBRID)
-                        )
-                        if llm_count >= tier_limits.max_llm_notifications_per_day:
+                        daily_llm_estimate = 0
+                        for s in existing:
+                            if s.notification_tier in (NotificationTier.LLM, NotificationTier.HYBRID):
+                                try:
+                                    s_interval = _rrule_interval_minutes(s.rrule)
+                                    daily_llm_estimate += max(1, 1440 / s_interval)
+                                except (ValueError, TypeError):
+                                    daily_llm_estimate += 1
+                        # Add estimate for the new schedule
+                        try:
+                            new_interval = _rrule_interval_minutes(rrule_str)
+                            daily_llm_estimate += max(1, 1440 / new_interval)
+                        except (ValueError, TypeError):
+                            daily_llm_estimate += 1
+                        if daily_llm_estimate > tier_limits.max_llm_notifications_per_day:
                             return _err(
-                                f"LLM schedule limit reached ({tier_limits.max_llm_notifications_per_day}). "
-                                f"Excess would be downgraded to template at dispatch. "
-                                f"Use notification_tier='template' or delete an existing LLM schedule."
+                                f"Too many LLM notifications/day (~{int(daily_llm_estimate)}). "
+                                f"Limit is {tier_limits.max_llm_notifications_per_day}/day. "
+                                f"Use notification_tier='template' or reduce schedule frequency."
                             )
 
                 # Minimum recurrence interval
@@ -652,7 +676,7 @@ def create_session_tools(
                 return _ok({
                     "status": "created",
                     "schedule_id": str(schedule.id),
-                    "next_trigger": next_trigger.isoformat(),
+                    "next_trigger": _to_local_iso(next_trigger),
                 })
 
             if action == "update":
@@ -780,8 +804,10 @@ def create_session_tools(
         if notification_sink is None:
             return _err("send_notification is not available in this session type")
         if notification_sink:
+            preview = notification_sink[0][:80]
             return _err(
-                "Notification already queued. You must call send_notification exactly once."
+                f"Notification already queued: '{preview}...'. "
+                "You must call send_notification exactly once per session."
             )
         notification_sink.append(message)
         return _ok({"status": "queued", "message": message, "user_id": user_id})
@@ -834,7 +860,7 @@ def create_session_tools(
                     "max_score": r.max_score,
                     "words_involved": r.words_involved,
                     "notes": r.agent_notes,
-                    "date": r.created_at.isoformat(),
+                    "date": _to_local_iso(r.created_at),
                 }
                 for r in results
             ]
@@ -885,6 +911,7 @@ def create_session_tools(
                 "vocabulary": {
                     "total": total_vocab,
                     "due_for_review": due_count,
+                    # FSRS states: 0=New, 1=Learning, 2=Review, 3=Relearning
                     "new": vocab_states.get(0, 0),
                     "learning": vocab_states.get(1, 0),
                     "review": vocab_states.get(2, 0),

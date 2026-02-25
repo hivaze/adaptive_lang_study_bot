@@ -360,10 +360,10 @@ class TestLapsedUser:
         assert result["tier"] == "llm"
         assert result["data"]["gap_days"] == 10
 
-    def test_past_15d_no_trigger(self):
+    def test_past_21d_no_trigger(self):
         user = _make_user(
             sessions_completed=10, streak_days=0,
-            last_session_at=datetime.now(timezone.utc) - timedelta(days=20),
+            last_session_at=datetime.now(timezone.utc) - timedelta(days=22),
         )
         assert check_lapsed_user(user) is None
 

@@ -6,12 +6,11 @@
   "lang.de": "Deutsch",
   "lang.pt": "Portugiesisch",
   "lang.it": "Italienisch",
-
   "start.welcome_new": "Willkommen, <b>{name}</b>! Ich bin dein persönlicher Sprachtutor.\n\nZuerst: Was ist deine Muttersprache?",
   "start.native_detected": "Willkommen, <b>{name}</b>! Ich bin dein persönlicher Sprachtutor.\n\nIch habe <b>{language}</b> als deine Muttersprache aus den Telegram-Einstellungen erkannt.\nTippe zum Bestätigen oder wähle eine andere:",
   "start.welcome_back": "Willkommen zurück, <b>{name}</b>! Schick mir einfach eine Nachricht, um loszulegen.\n\n<b>Befehle</b>\n/words — Vokabelwiederholung starten\n/stats — Deinen Fortschritt ansehen\n/settings — Einstellungen verwalten\n/end — Aktuelle Sitzung beenden\n/help — Hilfe anzeigen",
   "start.resume_timezone": "Willkommen zurück, <b>{name}</b>! Lass uns da weitermachen, wo wir aufgehört haben.\n\nWas ist deine Zeitzone?\nDas hilft mir, Erinnerungen zur richtigen Zeit zu senden.",
-  "start.ask_target_welcome": "Hallo, <b>{name}</b>! Ich bin dein pers\u00f6nlicher KI-Sprachtutor.\n\nDas macht mich besonders:\n\u2022 Schreib mir einfach \u2014 ich erstelle \u00dcbungen aus unserem Gespr\u00e4ch\n\u2022 Ich passe mich deinem Niveau (A1\u2192C2) an und \u00e4ndere die Schwierigkeit automatisch\n\u2022 Ich lerne deine Interessen und baue sie in jede \u00dcbung ein\n\u2022 Vokabelkarten mit perfekt getimten Wiederholungserinnerungen\n\u2022 Serien, Meilensteine und w\u00f6chentliche Fortschrittsberichte\n\nLass uns loslegen \u2014 welche Sprache m\u00f6chtest du lernen oder vertiefen?",
+  "start.ask_target_welcome": "Hallo, <b>{name}</b>! Ich bin dein persönlicher KI-Sprachtutor.\n\nDas macht mich besonders:\n• Schreib mir einfach — ich erstelle Übungen aus unserem Gespräch\n• Ich passe mich deinem Niveau (A1→C2) an und ändere die Schwierigkeit automatisch\n• Ich lerne deine Interessen und baue sie in jede Übung ein\n• Vokabelkarten mit perfekt getimten Wiederholungserinnerungen\n• Serien, Meilensteine und wöchentliche Fortschrittsberichte\n\nLass uns loslegen — welche Sprache möchtest du lernen oder vertiefen?",
   "start.resume_target": "Willkommen zurück, <b>{name}</b>! Lass uns da weitermachen, wo wir aufgehört haben.\n\nWelche Sprache möchtest du lernen oder vertiefen?",
   "start.native_selected": "Muttersprache: {label}",
   "start.ask_target": "Super! Welche Sprache möchtest du lernen oder vertiefen?",
@@ -26,7 +25,7 @@
   "start.cta_session": "Bereit zum Üben! Schick mir eine Nachricht, um eine Sitzung zu starten.",
   "start.cta_session_prompt": "Schreib einfach etwas, um loszulegen — zum Beispiel <i>\"Lass uns üben\"</i> oder <i>\"Bring mir etwas Neues bei\"</i>",
   "start.cta_session_continuing": "Sitzung wird gestartet...",
-  "start.cta_continue_prompt": "Lass uns dort weitermachen, wo wir aufgeh\u00f6rt haben",
+  "start.cta_continue_prompt": "Lass uns dort weitermachen, wo wir aufgehört haben",
   "start.target_strengthen": "{label} (vertiefen)",
   "start.btn_back": "<< Zurück",
   "start.btn_more_languages": "Mehr Sprachen...",
@@ -41,13 +40,19 @@
   "start.level_set": "Level gesetzt!",
   "start.resume_level": "Willkommen zurück, <b>{name}</b>! Machen wir weiter — was ist dein Sprachniveau?",
   "start.ask_goal": "Fast geschafft! Warum lernst du {target_language}? Wähle aus und drücke Fertig.",
+  "start.goal_conversation": "Alltagsgespräche",
+  "start.goal_professional": "Beruf und Karriere",
+  "start.goal_writing": "Schreiben und Grammatik",
+  "start.goal_exams": "Prüfungen / Zertifikate",
+  "start.goal_text_conversation": "Alltagsgespräche — tägliches Leben, Smalltalk, soziale Situationen",
+  "start.goal_text_professional": "Berufliche Kommunikation — E-Mails, Meetings, Präsentationen",
+  "start.goal_text_writing": "Schreiben und Grammatik — Aufsätze, Briefe, schriftlicher Ausdruck",
+  "start.goal_text_exams": "{target_language} — Prüfungen und Zertifikate",
   "start.goal_travel": "Reisen",
   "start.goal_work": "Arbeit / Business",
-  "start.goal_exams": "Pr\u00fcfungen / Zertifikate",
   "start.goal_hobby": "Hobby / Kultur",
-  "start.goal_text_travel": "{target_language} f\u00fcr Reisen und Konversation",
-  "start.goal_text_work": "{target_language} f\u00fcr Arbeit und Gesch\u00e4ftskommunikation",
-  "start.goal_text_exams": "{target_language} \u2014 Pr\u00fcfungen und Zertifikate",
+  "start.goal_text_travel": "{target_language} für Reisen und Konversation",
+  "start.goal_text_work": "{target_language} für Arbeit und Geschäftskommunikation",
   "start.goal_text_hobby": "{target_language} als Hobby und Kulturentdeckung",
   "start.goal_set": "Ziel gespeichert!",
   "start.btn_skip": "Überspringen >>",
@@ -85,19 +90,16 @@
   "start.resume_goal": "Willkommen zurück, <b>{name}</b>! Machen wir weiter — was ist dein Lernziel?",
   "start.resume_interests": "Willkommen zurück, <b>{name}</b>! Machen wir weiter — welche Themen interessieren dich?",
   "start.resume_schedule": "Willkommen zurück, <b>{name}</b>! Fast fertig — wann möchtest du Erinnerungen erhalten?",
-
   "help.full": "Ich bin dein persönlicher Sprachtutor. Hier ist, was ich kann:\n\nSchick mir einfach eine Nachricht, um eine Lernsitzung zu starten.\n\n<b>Befehle</b>\n/start — Einrichtung neu starten\n/words — Vokabel-Karteikarten-Wiederholung\n/stats — Deinen Fortschritt ansehen\n/settings — Einstellungen & Erinnerungen verwalten\n/end — Aktuelle Sitzung beenden\n/deleteme — Alle deine Daten löschen\n/help — Diese Hilfenachricht anzeigen\n\n<b>So funktioniert es</b>\n• Schick mir eine Nachricht, um ein Gespräch zu starten — ich gebe dir Übungen, bringe dir neue Wörter bei und verfolge deinen Fortschritt.\n• Ich passe Übungen automatisch an dein Niveau und deine Interessen an.\n• Dein Niveau passt sich automatisch an, wenn du dich verbesserst — übe einfach weiter!\n• Sitzungen haben ein Nachrichtenlimit — ich warne dich, wenn es bald erreicht ist.\n• Nutze /end, um eine Sitzung zu beenden, oder sie schließt sich automatisch nach ein paar Minuten Inaktivität.\n• Sag mir deine Lernziele (z.B. <i>\"Ich möchte mich auf eine Reise vorbereiten\"</i>) und ich stelle die Übungen passend zusammen.\n\n<b>Tipps</b>\n• Nutze /words regelmäßig, um dein Gedächtnis mit Karteikarten-Wiederholung zu stärken.\n• Schau in /settings, um Schwierigkeit, Sitzungsstil und Benachrichtigungen anzupassen.",
-  "help.new_user": "Willkommen! Ich bin dein pers\u00f6nlicher KI-Sprachtutor.\n\nSchlie\u00dfe zuerst die Einrichtung mit /start ab \u2014 dauert nur eine Minute!\n\nDas kann ich f\u00fcr dich tun:\n\u2022 Nat\u00fcrlich mit dir plaudern und \u00dcbungen aus unserem Gespr\u00e4ch erstellen\n\u2022 Mich automatisch an dein Niveau, deine Interessen und Ziele anpassen\n\u2022 Deinen Wortschatz mit intelligenten Karteikarten-Wiederholungen verfolgen\n\u2022 Die Schwierigkeit anhand deiner Leistung anpassen\n\nNach der Einrichtung schick mir einfach eine Nachricht, um loszulegen!",
-  "help.getting_started": "Alles eingerichtet! So f\u00e4ngst du an:\n\n\u2022 <b>Schick mir eine Nachricht</b> f\u00fcr deine erste Lektion\n\u2022 Ich passe mich an dein Niveau und deine Interessen an\n\u2022 Versuch etwas wie <i>\"Lass uns \u00fcben\"</i> oder <i>\"Zeig mir die Grundlagen\"</i>\n\n<b>N\u00fctzliche Befehle</b>\n/words \u2014 Vokabel-Karteikarten \u00fcben\n/stats \u2014 Deinen Fortschritt ansehen\n/settings \u2014 Einstellungen\n/help \u2014 Diese Hilfe",
-  "help.returning": "Willkommen zur\u00fcck! Eine kurze Auffrischung:\n\n\u2022 <b>Schick mir eine Nachricht</b> um eine Sitzung zu starten\n\u2022 Ich helfe dir beim Aufw\u00e4rmen und Wiederholen\n\u2022 Nutze /words um Karteikarten nachzuholen\n\n<b>Befehle</b>\n/words \u2014 Vokabel-Wiederholung\n/stats \u2014 Dein Fortschritt\n/settings \u2014 Einstellungen & Erinnerungen\n/end \u2014 Sitzung beenden\n/help \u2014 Diese Hilfe",
-
+  "help.new_user": "Willkommen! Ich bin dein persönlicher KI-Sprachtutor.\n\nSchließe zuerst die Einrichtung mit /start ab — dauert nur eine Minute!\n\nDas kann ich für dich tun:\n• Natürlich mit dir plaudern und Übungen aus unserem Gespräch erstellen\n• Mich automatisch an dein Niveau, deine Interessen und Ziele anpassen\n• Deinen Wortschatz mit intelligenten Karteikarten-Wiederholungen verfolgen\n• Die Schwierigkeit anhand deiner Leistung anpassen\n\nNach der Einrichtung schick mir einfach eine Nachricht, um loszulegen!",
+  "help.getting_started": "Alles eingerichtet! So fängst du an:\n\n• <b>Schick mir eine Nachricht</b> für deine erste Lektion\n• Ich passe mich an dein Niveau und deine Interessen an\n• Versuch etwas wie <i>\"Lass uns üben\"</i> oder <i>\"Zeig mir die Grundlagen\"</i>\n\n<b>Nützliche Befehle</b>\n/words — Vokabel-Karteikarten üben\n/stats — Deinen Fortschritt ansehen\n/settings — Einstellungen\n/help — Diese Hilfe",
+  "help.returning": "Willkommen zurück! Eine kurze Auffrischung:\n\n• <b>Schick mir eine Nachricht</b> um eine Sitzung zu starten\n• Ich helfe dir beim Aufwärmen und Wiederholen\n• Nutze /words um Karteikarten nachzuholen\n\n<b>Befehle</b>\n/words — Vokabel-Wiederholung\n/stats — Dein Fortschritt\n/settings — Einstellungen & Erinnerungen\n/end — Sitzung beenden\n/help — Diese Hilfe",
   "chat.no_session": "Keine aktive Sitzung. Nutze /start, um die Einrichtung zu beginnen.",
   "chat.no_active_session": "Du hast gerade keine aktive Sitzung.",
   "chat.session_ended": "Sitzung beendet. Dein Fortschritt wurde gespeichert.\nSchick mir jederzeit eine Nachricht, um eine neue Sitzung zu starten!",
   "chat.setup_first": "Bitte schließe zuerst die Einrichtung ab! Nutze /start, um zu beginnen.",
   "chat.error": "Bei uns ist etwas schiefgelaufen. Bitte versuche es gleich noch einmal.",
   "chat.text_only": "Ich kann derzeit nur mit Textnachrichten arbeiten. Bitte tippe deine Antwort ein.",
-
   "settings.title": "<b>Einstellungen</b>\n",
   "settings.language_label": "<b>Sprache:</b> {lang_display}",
   "settings.strengthening": " (vertiefen)",
@@ -124,7 +126,7 @@
   "settings.notifpref_streak": "Serien-Erinnerungen",
   "settings.notifpref_vocab": "Vokabel-Wiederholungen",
   "settings.notifpref_progress": "Fortschrittsberichte",
-  "settings.notifpref_reengagement": "R\u00fcckkehr-Erinnerungen",
+  "settings.notifpref_reengagement": "Rückkehr-Erinnerungen",
   "settings.notifpref_nudges": "Lerntipps",
   "settings.btn_schedules": "Zeitpläne ansehen",
   "settings.btn_timezone": "Zeitzone ändern",
@@ -152,9 +154,9 @@
   "settings.quiet_preset_night": "22:00 – 07:00 (Nacht)",
   "settings.quiet_preset_late_night": "23:00 – 08:00 (Spätnacht)",
   "settings.quiet_preset_evening": "21:00 – 09:00 (Abend bis Morgen)",
-  "settings.quiet_preset_early_night": "20:00 \u2013 06:00",
-  "settings.quiet_preset_midnight": "00:00 \u2013 08:00",
-  "settings.quiet_preset_short_night": "22:00 \u2013 06:00",
+  "settings.quiet_preset_early_night": "20:00 – 06:00",
+  "settings.quiet_preset_midnight": "00:00 – 08:00",
+  "settings.quiet_preset_short_night": "22:00 – 06:00",
   "settings.quiet_preset_half_hour": "23:30 – 07:30",
   "settings.quiet_preset_long_evening": "19:00 – 06:00 (langer Abend)",
   "settings.btn_disable_quiet": "Ruhezeiten deaktivieren",
@@ -197,13 +199,11 @@
   "settings.debug_log_enabled": "Debug-Logging <b>aktiviert</b>. Log-Level: DEBUG.",
   "settings.debug_log_disabled": "Debug-Logging <b>deaktiviert</b>. Log-Level: INFO.",
   "settings.msg_outdated": "Diese Nachricht ist veraltet. Bitte nutze /settings erneut.",
-
   "deleteme.confirm": "<b>Bist du sicher, dass du dein Konto löschen möchtest?</b>\n\nDadurch wird dauerhaft entfernt:\n  • Dein Profil und deine Einstellungen\n  • Alle Vokabeln und Wiederholungsverläufe\n  • Alle Übungsergebnisse\n  • Alle Zeitpläne und Benachrichtigungen\n  • Alle Sitzungsverläufe\n\n<b>Diese Aktion kann nicht rückgängig gemacht werden.</b>",
   "deleteme.btn_confirm": "Ja, alles löschen",
   "deleteme.btn_cancel": "Abbrechen",
   "deleteme.done": "Alle deine Daten wurden gelöscht.\nSchick /start, wenn du jemals zurückkommen möchtest!",
   "deleteme.error": "Etwas ist schiefgelaufen. Bitte versuche es erneut.",
-
   "review.setup_first": "Bitte schließe zuerst die Einrichtung ab! Nutze /start.",
   "review.no_cards_empty": "Du hast noch keine Vokabelkarten.\nSchick mir eine Nachricht, um eine Lernsitzung zu starten — neue Wörter werden automatisch zu deinem Wiederholungsstapel hinzugefügt!",
   "review.no_cards_due": "Derzeit sind keine Vokabelkarten zur Wiederholung fällig.\nDu hast {total} Wörter in deinem Stapel. Karten erscheinen hier, wenn es Zeit ist, sie zu wiederholen.",
@@ -228,7 +228,6 @@
   "review.invalid_data": "Ungültige Daten.",
   "review.invalid_rating_data": "Ungültige Bewertungsdaten.",
   "review.invalid_rating": "Ungültige Bewertung.",
-
   "stats.setup_first": "Bitte schließe zuerst die Einrichtung ab! Nutze /start.",
   "stats.title": "<b>Dein Fortschritt</b> ({target_language})\n",
   "stats.level": "<b>Niveau:</b> {level}",
@@ -253,10 +252,8 @@
   "stats.sessions_per_day": "  Sitzungen/Tag: {count}",
   "stats.sessions_unlimited": "  Sitzungen/Tag: unbegrenzt",
   "stats.messages_per_session": "  Nachrichten/Sitzung: {count}",
-
   "rate_limit.callback": "Bitte etwas langsamer.",
   "rate_limit.message": "Du sendest Nachrichten zu schnell. Bitte warte etwa eine Minute, bevor du es erneut versuchst.",
-
   "session.daily_limit": "Du hast dein Tageslimit von {max_sessions} Sitzungen (Tarif {tier}) erreicht. Das Limit wird um Mitternacht deiner Zeit zurückgesetzt. In der Zwischenzeit kannst du /words nutzen, um deine Vokabeln zu üben!",
   "session.cost_limit": "Du hast das heutige Sitzungslimit erreicht. Das Limit wird um Mitternacht deiner Zeit zurückgesetzt. Du kannst weiterhin /words nutzen, um Vokabeln zu üben!",
   "session.verify_error": "Dein Sitzungslimit konnte nicht überprüft werden. Bitte versuche es gleich noch einmal.",
@@ -276,23 +273,20 @@
   "session.summary_reviews": "  - {count} Vokabelkarte(n) wiederholt",
   "session.summary_no_progress": "  - Diesmal ohne Übungen — probiere /words zum Vokabeltraining oder schick eine Nachricht, um loszulegen!",
   "session.summary_footer": "\nSchick mir eine Nachricht, um eine neue Sitzung zu starten!",
-
   "cta.start_review": "Wiederholung starten",
   "cta.start_session": "Sitzung starten",
   "cta.continue": "Dort weitermachen",
   "cta.resume_learning": "Weiterlernen",
   "cta.quick_session": "Kurze Lerneinheit",
-
   "pipeline.milestone_streak": "{streak}-Tage-Serie!",
   "pipeline.milestone_vocab": "{count} Wörter gelernt!",
   "pipeline.milestone_sessions": "Schon {count} Sitzungen! Weiter so!",
   "pipeline.difficulty_adjusted": "Deine Schwierigkeit wurde aufgrund deiner letzten Ergebnisse von {old} auf {new} angepasst!",
   "pipeline.level_changed": "Der Schüler hat sein Niveau manuell von {old_level} auf {new_level} in den Einstellungen geändert. Bestätige dies und passe die Übungen an das neue Niveau an.",
-
   "notif.streak_risk": [
     "Du bist auf einer <b>{streak}-Tage-Serie</b>! Eine kurze 2-Minuten-Wiederholung hält sie am Laufen.",
     "{name}, <b>{streak} Tage</b> Fortschritt — halte den Schwung mit einer kurzen Wiederholung!",
-    "Hey {name}, eine kurze Wiederholung von <b>{due_count}</b> Wörtern rundet deinen Tag perfekt ab."
+    "Hey {name}, schon 5 Minuten reichen, um deine <b>{streak}-Tage-Serie</b> am Laufen zu halten!"
   ],
   "notif.cards_due": [
     "Du hast <b>{due_count}</b> Vokabelkarten zur Wiederholung bereit. Eine kurze Sitzung hält sie frisch!",
@@ -317,7 +311,7 @@
     "Mach dir keine Sorgen wegen der letzten Ergebnisse — eine kurze Wiederholungssitzung hilft!"
   ],
   "notif.incomplete_exercise": [
-    "Du hast deine <b>{topic}</b>-\u00dcbung nicht beendet. Dort weitermachen, wo du aufgeh\u00f6rt hast?",
+    "Du hast deine <b>{topic}</b>-Übung nicht beendet. Dort weitermachen, wo du aufgehört hast?",
     "Bereit, deine <b>{topic}</b>-Übung abzuschließen? Du warst richtig gut dabei!"
   ],
   "notif.milestone_vocab": [
@@ -338,10 +332,6 @@
   ],
   "notif.weekly_summary_template": [
     "<b>Wochenbericht</b>\n\n<b>Niveau:</b> {level}\n<b>Serie:</b> {streak} Tage\n<b>Gelernte Wörter:</b> {vocab_count}\n<b>Sitzungen diese Woche:</b> {sessions_week}\n\nWeiter so, {name}!"
-  ],
-  "notif.retention_decay": [
-    "{name}, einige deiner Vokabeln könnten eine Auffrischung gebrauchen. <b>{decay_count}</b> Wörter drohen vergessen zu werden.",
-    "Zeit für eine Wiederholung! <b>{decay_count}</b> Wörter könnten etwas Verstärkung gebrauchen."
   ],
   "notif.weak_area_drill": [
     "{name}, es ist eine Weile her, seit du <b>{topic}</b> geübt hast. Bereit für ein gezieltes Training?",
@@ -372,13 +362,13 @@
     "Hey {name}, auch eine kurze Sitzung hält den Schwung aufrecht. Bereit, wieder einzusteigen?"
   ],
   "notif.lapsed_compelling": [
-    "{name}, du hast schon <b>{vocabulary_count}</b> Wörter gelernt und Niveau <b>{level}</b> erreicht! Lass diesen Fortschritt nicht verblassen.",
+    "{name}, du hast schon <b>{vocabulary_count}</b> Wörter gelernt und Niveau <b>{level}</b> erreicht! Dein Fundament ist noch stark — eine kurze Sitzung wird es auffrischen.",
     "Deine {target_language}-Kenntnisse vermissen dich, {name}! Du hast mit <b>{sessions_completed}</b> Sitzungen ein solides Fundament aufgebaut — lass uns weiter daran bauen.",
-    "{name}, du bist schon so weit mit deinem {target_language} gekommen! Eine kurze Sitzung bringt alles wieder zurück."
+    "{name}, du bist schon so weit mit deinem {target_language} gekommen! Ein kurzes Aufwärmen bringt dich schnell wieder rein."
   ],
   "notif.lapsed_miss_you": [
     "{name}, deine {target_language}-Reise muss hier nicht enden. Komm zurück und wir starten mit einer sanften Wiederholung.",
-    "Wir haben deinen Fortschritt gespeichert, {name}! <b>{vocabulary_count}</b> Wörter warten auf dich. Bereit für einen Neustart?"
+    "Deine Notizen und dein Vokabular sind gespeichert, {name}! <b>{vocabulary_count}</b> Wörter in deiner Sammlung. Bereit, sie aufzufrischen?"
   ],
   "notif.post_onboarding_14d": [
     "{name}, wir haben dich nicht vergessen! Deine {target_language}-Lernreise wartet noch auf dich. Schick einfach eine Nachricht, um loszulegen.",

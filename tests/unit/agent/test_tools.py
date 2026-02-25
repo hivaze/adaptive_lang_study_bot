@@ -49,10 +49,11 @@ class TestToolConstants:
     def test_interactive_cannot_send_notification(self):
         assert "send_notification" not in _SESSION_TYPE_TOOLS[SessionType.INTERACTIVE]
 
-    def test_onboarding_limited_tools(self):
+    def test_onboarding_has_core_tools(self):
         onboarding = _SESSION_TYPE_TOOLS[SessionType.ONBOARDING]
-        assert "record_exercise_result" not in onboarding
-        assert "add_vocabulary" not in onboarding
+        assert "record_exercise_result" in onboarding
+        assert "add_vocabulary" in onboarding
+        assert "search_vocabulary" in onboarding
         assert "update_preference" in onboarding
 
     def test_mutable_fields_are_safe(self):
@@ -102,10 +103,11 @@ class TestCanUseTool:
         can_use = _make_can_use_tool(SessionType.INTERACTIVE)
         assert can_use("mcp__langbot__add_vocabulary") is True
 
-    def test_onboarding_blocks_exercise_tools(self, _make_can_use_tool):
+    def test_onboarding_allows_exercise_tools(self, _make_can_use_tool):
         can_use = _make_can_use_tool(SessionType.ONBOARDING)
-        assert can_use("record_exercise_result") is False
-        assert can_use("add_vocabulary") is False
+        assert can_use("record_exercise_result") is True
+        assert can_use("add_vocabulary") is True
+        assert can_use("search_vocabulary") is True
         assert can_use("get_due_vocabulary") is False
 
     def test_onboarding_allows_preference_update(self, _make_can_use_tool):

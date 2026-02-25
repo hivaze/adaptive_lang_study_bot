@@ -22,7 +22,7 @@ POST_ONBOARDING_7D_MAX_HOURS = 168
 LAPSED_GENTLE_MIN_DAYS = 2
 LAPSED_GENTLE_MAX_DAYS = 4
 LAPSED_COMPELLING_MAX_DAYS = 8
-LAPSED_MISS_YOU_MAX_DAYS = 15
+LAPSED_MISS_YOU_MAX_DAYS = 21
 
 
 def _hours_since(dt: datetime, now: datetime) -> float:
@@ -279,23 +279,32 @@ def check_post_onboarding_nudge(user: User, *, due_count: int = 0) -> Trigger | 
 
 
 def check_dormant_user(user: User, *, due_count: int = 0) -> Trigger | None:
-    """Re-engagement: periodic nudge for dormant users (15-45 days inactive).
+    """Re-engagement: periodic nudge for dormant users (21-45 days inactive).
 
     Fires approximately weekly for users who have gone silent beyond the
-    lapsed_miss_you window (15 days) but haven't been gone so long that
+    lapsed_miss_you window (21 days) but haven't been gone so long that
     we stop entirely (45 days).  Uses modular arithmetic on gap_days to
     approximate a weekly cadence within the tick interval.
 
     Dedup key: dormant_weekly with TTL of (interval - 1) days.
     """
-    if user.sessions_completed < 1:
+    # Allow onboarded-but-never-engaged users (completed setup, 0 sessions)
+    # to receive dormant nudges after post_onboarding_max_hours expires.
+    # Without this, they're permanently abandoned after the post-onboarding
+    # nudge sequence ends.
+    if user.sessions_completed < 1 and not user.onboarding_completed:
         return None
 
-    if user.last_session_at is None:
+    # Use last_session_at for users with sessions, created_at for
+    # onboarded-but-never-engaged users.
+    reference_dt = user.last_session_at or (
+        user.created_at if user.onboarding_completed else None
+    )
+    if reference_dt is None:
         return None
 
     now = datetime.now(timezone.utc)
-    gap_days = (now - user.last_session_at).total_seconds() / 86400
+    gap_days = (now - reference_dt).total_seconds() / 86400
 
     if gap_days <= LAPSED_MISS_YOU_MAX_DAYS:
         return None
@@ -304,9 +313,9 @@ def check_dormant_user(user: User, *, due_count: int = 0) -> Trigger | None:
         return None
 
     # Fire approximately every `dormant_periodic_interval_days` days.
-    # Use int(gap_days) to avoid floating-point modulo imprecision
-    # (e.g. 21.00001 % 7 ≈ 0.00001 vs 20.99999 % 7 ≈ 6.99999).
-    if int(gap_days) % tuning.dormant_periodic_interval_days != 0:
+    # Use round(gap_days) to avoid both floating-point modulo imprecision
+    # and int() truncation (e.g. 20.9 truncates to 20, 20 % 7 == 6 → missed).
+    if round(gap_days) % tuning.dormant_periodic_interval_days != 0:
         return None
 
     return make_trigger(

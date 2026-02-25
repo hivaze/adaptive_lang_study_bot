@@ -174,7 +174,7 @@ class TestPhaseSchedules:
 
         with patch(f"{TICK_MODULE}.async_session_factory", factory), \
              patch(f"{TICK_MODULE}.ScheduleRepo.get_due", new_callable=AsyncMock, return_value=[s1, s2]), \
-             patch(f"{TICK_MODULE}.VocabularyRepo.count_due_batch", new_callable=AsyncMock, return_value={}), \
+             patch(f"{TICK_MODULE}.VocabularyRepo.count_due_batch", new_callable=AsyncMock, return_value={100: 5, 101: 5}), \
              patch(f"{TICK_MODULE}.ScheduleRepo.get_statuses_batch", new_callable=AsyncMock, return_value={
                  s1.id: (ScheduleStatus.ACTIVE, None),
                  s2.id: (ScheduleStatus.ACTIVE, None),
@@ -237,7 +237,7 @@ class TestPhaseSchedules:
 
         with patch(f"{TICK_MODULE}.async_session_factory", factory), \
              patch(f"{TICK_MODULE}.ScheduleRepo.get_due", new_callable=AsyncMock, return_value=[s]), \
-             patch(f"{TICK_MODULE}.VocabularyRepo.count_due_batch", new_callable=AsyncMock, return_value={}), \
+             patch(f"{TICK_MODULE}.VocabularyRepo.count_due_batch", new_callable=AsyncMock, return_value={s.user_id: 5}), \
              patch(f"{TICK_MODULE}.ScheduleRepo.get_statuses_batch", new_callable=AsyncMock, return_value={
                  s.id: (ScheduleStatus.ACTIVE, None),
              }), \
@@ -269,10 +269,11 @@ class TestPhaseSchedules:
 
         factory, _ = _mock_session_factory()
         statuses = {s.id: (ScheduleStatus.ACTIVE, None) for s in schedules}
+        due_counts = {i: 5 for i in range(3)}
 
         with patch(f"{TICK_MODULE}.async_session_factory", factory), \
              patch(f"{TICK_MODULE}.ScheduleRepo.get_due", new_callable=AsyncMock, return_value=schedules), \
-             patch(f"{TICK_MODULE}.VocabularyRepo.count_due_batch", new_callable=AsyncMock, return_value={}), \
+             patch(f"{TICK_MODULE}.VocabularyRepo.count_due_batch", new_callable=AsyncMock, return_value=due_counts), \
              patch(f"{TICK_MODULE}.ScheduleRepo.get_statuses_batch", new_callable=AsyncMock, return_value=statuses), \
              patch(f"{TICK_MODULE}.SessionRepo.count_since_batch", new_callable=AsyncMock, return_value={}), \
              patch(f"{TICK_MODULE}.dispatch_notification", side_effect=slow_dispatch), \

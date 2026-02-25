@@ -20,6 +20,14 @@ from adaptive_lang_study_bot.utils import compute_new_streak, strip_mcp_prefix, 
 
 _LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]
 
+# Prep tools that hint at what the agent was doing when the user dropped off.
+_PREP_TOOL_HINTS = {
+    "get_exercise_history": "preparing an exercise",
+    "get_due_vocabulary": "setting up vocabulary review",
+    "search_vocabulary": "looking up vocabulary",
+    "get_progress_summary": "reviewing progress",
+}
+
 # Close reasons that mean the session ended without the user explicitly finishing.
 # idle_timeout is included: the user stopped responding mid-task, which means
 # unfinished work should be surfaced in the next session's continuation context.
@@ -35,7 +43,7 @@ async def run_post_session(
     user_id: int,
     session_id: uuid.UUID,
     tools_called: list[str],
-    close_reason: str = "unknown",
+    close_reason: str = CloseReason.UNKNOWN,
     bot=None,  # aiogram Bot instance for immediate celebrations
 ) -> None:
     """Post-session validation pipeline. Pure Python, no LLM.
@@ -101,14 +109,16 @@ async def run_post_session(
                 issues.append("Strong areas capped at 10")
 
             tool_names = [
-                strip_mcp_prefix(t) for t in tools_called
+                strip_mcp_prefix(tc) for tc in tools_called
             ]
 
             # --- Step 2: Update streak ---
             local_now = user_local_now(user)
             today = local_now.date()
             streak = compute_new_streak(user.streak_days, user.streak_updated_at, today)
-            if user.streak_updated_at != today:
+            # Only advance the streak date when the session involved meaningful work
+            # (at least one tool call). Chat-only sessions should not count.
+            if user.streak_updated_at != today and tool_names:
                 updates["streak_days"] = streak
                 updates["streak_updated_at"] = today
 
@@ -136,7 +146,7 @@ async def run_post_session(
 
             if difficulty != user.preferred_difficulty:
                 # Re-read user in a SEPARATE session to bypass SQLAlchemy's
-                # identity map, which would return the cached object from line 49.
+                # identity map, which would return the cached object above.
                 async with async_session_factory() as fresh_db:
                     fresh_user = await UserRepo.get(fresh_db, user_id)
                 if fresh_user is None:
@@ -242,6 +252,12 @@ async def run_post_session(
                 struggling.sort(key=lambda x: x["avg_score"])
                 activity["struggling_topics"] = struggling[:5]
 
+            # Weak/strong areas are updated exclusively by the record_exercise_result
+            # tool during the session (tools.py:345-377), which has better data:
+            # it queries the last 5 topic-specific scores across sessions and uses
+            # tuning.weak_area_min_occurrences. The pipeline only validates/caps
+            # array lengths (Step 1 above).
+
             # Per-exercise-type average scores for continuity
             if type_scores:
                 activity["exercise_type_scores"] = {
@@ -254,15 +270,9 @@ async def run_post_session(
             # This helps the next session know what was "in progress" when the
             # user dropped off.
             if not exercises and close_reason == CloseReason.IDLE_TIMEOUT and tool_names:
-                _PREP_TOOL_HINTS = {
-                    "get_exercise_history": "preparing an exercise",
-                    "get_due_vocabulary": "setting up vocabulary review",
-                    "search_vocabulary": "looking up vocabulary",
-                    "get_progress_summary": "reviewing progress",
-                }
                 hints = [
-                    _PREP_TOOL_HINTS[t] for t in tool_names
-                    if t in _PREP_TOOL_HINTS
+                    _PREP_TOOL_HINTS[tc] for tc in tool_names
+                    if tc in _PREP_TOOL_HINTS
                 ]
                 if hints:
                     activity["pending_context"] = hints[0]
@@ -285,29 +295,55 @@ async def run_post_session(
             updates["session_history"] = history[-tuning.session_history_cap:]
 
             # --- Step 5: Detect milestones ---
+            # Track fired milestones to prevent re-firing across sessions.
+            # Each set is persisted in the milestones JSONB column.
+            fired_streaks: set[int] = set(milestones.get("fired_streaks", []))
+            fired_vocab: set[int] = set(milestones.get("fired_vocab", []))
+            fired_sessions: set[int] = set(milestones.get("fired_sessions", []))
+
             # Streak milestones
-            if streak > 0 and streak in tuning.milestone_streak:
+            if streak > 0 and streak in tuning.milestone_streak and streak not in fired_streaks:
                 msg = t("pipeline.milestone_streak", native_lang, streak=streak)
                 if msg not in pending:
                     pending.append(msg)
+                fired_streaks.add(streak)
+            milestones["fired_streaks"] = sorted(fired_streaks)
 
             # Vocabulary milestones
             actual_count = await VocabularyRepo.count_for_user(db, user_id)
             if user.vocabulary_count != actual_count:
                 updates["vocabulary_count"] = actual_count
 
-            prev_count = user.vocabulary_count or 0
-            if any(prev_count < threshold <= actual_count for threshold in tuning.milestone_vocab):
-                msg = t("pipeline.milestone_vocab", native_lang, count=actual_count)
-                if msg not in pending:
-                    pending.append(msg)
+            # Compute pre-session vocab count by subtracting words added
+            # during this session.  user.vocabulary_count already includes
+            # the session's add_vocabulary increments (atomic UPDATE in tool),
+            # so using it as prev_count would make prev == actual and
+            # milestones crossed during the session would never fire.
+            session_record = await SessionRepo.get(db, session_id)
+            if session_record is not None:
+                session_vocab_added = await VocabularyRepo.count_added_since(
+                    db, user_id, session_record.started_at,
+                )
+            else:
+                session_vocab_added = 0
+            prev_count = max(actual_count - session_vocab_added, 0)
+
+            for threshold in tuning.milestone_vocab:
+                if prev_count < threshold <= actual_count and threshold not in fired_vocab:
+                    msg = t("pipeline.milestone_vocab", native_lang, count=actual_count)
+                    if msg not in pending:
+                        pending.append(msg)
+                    fired_vocab.add(threshold)
+            milestones["fired_vocab"] = sorted(fired_vocab)
 
             # Session milestones
             new_sessions = (user.sessions_completed or 0) + (1 if tools_called else 0)
-            if new_sessions in tuning.milestone_sessions:
+            if new_sessions in tuning.milestone_sessions and new_sessions not in fired_sessions:
                 msg = t("pipeline.milestone_sessions", native_lang, count=new_sessions)
                 if msg not in pending:
                     pending.append(msg)
+                fired_sessions.add(new_sessions)
+            milestones["fired_sessions"] = sorted(fired_sessions)
 
             # Send immediate celebrations if bot is available
             old_pending = list((user.milestones or {}).get("pending_celebrations", []))

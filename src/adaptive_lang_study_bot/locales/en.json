@@ -6,12 +6,11 @@
   "lang.de": "German",
   "lang.pt": "Portuguese",
   "lang.it": "Italian",
-
   "start.welcome_new": "Welcome, <b>{name}</b>! I'm your personal language tutor.\n\nFirst, what is your native language?",
   "start.native_detected": "Welcome, <b>{name}</b>! I'm your personal language tutor.\n\nI detected <b>{language}</b> as your native language from Telegram settings.\nTap to confirm, or select a different one:",
   "start.welcome_back": "Welcome back, <b>{name}</b>! Just send me a message to start learning.\n\n<b>Commands</b>\n/words — Start a vocabulary review\n/stats — View your progress\n/settings — Manage preferences\n/end — End the current session\n/help — Get help",
   "start.resume_timezone": "Welcome back, <b>{name}</b>! Let's pick up where you left off.\n\nWhat's your timezone?\nThis helps me send reminders at the right time.",
-  "start.ask_target_welcome": "Hi, <b>{name}</b>! I'm your personal AI language tutor.\n\nHere's what makes me different:\n\u2022 Just talk to me \u2014 I create exercises from our conversation\n\u2022 I adapt to your level (A1\u2192C2) and adjust difficulty automatically\n\u2022 I learn your interests and weave them into every exercise\n\u2022 Vocabulary flashcards with perfectly timed review reminders\n\u2022 Streaks, milestones, and weekly progress reports\n\nLet's get you set up \u2014 which language would you like to learn or strengthen?",
+  "start.ask_target_welcome": "Hi, <b>{name}</b>! I'm your personal AI language tutor.\n\nHere's what makes me different:\n• Just talk to me — I create exercises from our conversation\n• I adapt to your level (A1→C2) and adjust difficulty automatically\n• I learn your interests and weave them into every exercise\n• Vocabulary flashcards with perfectly timed review reminders\n• Streaks, milestones, and weekly progress reports\n\nLet's get you set up — which language would you like to learn or strengthen?",
   "start.resume_target": "Welcome back, <b>{name}</b>! Let's pick up where you left off.\n\nWhich language would you like to learn or strengthen?",
   "start.native_selected": "Native language: {label}",
   "start.ask_target": "Great! Now, which language would you like to learn or strengthen?",
@@ -41,13 +40,19 @@
   "start.level_set": "Level set!",
   "start.resume_level": "Welcome back, <b>{name}</b>! Let's continue — what's your language level?",
   "start.ask_goal": "Almost there! Why are you learning {target_language}? Tap to select, then press Done.",
+  "start.goal_conversation": "Everyday Conversation",
+  "start.goal_professional": "Work & Business",
+  "start.goal_writing": "Writing & Grammar",
+  "start.goal_exams": "Exams / Certification",
+  "start.goal_text_conversation": "Everyday conversation — daily life, small talk, social situations",
+  "start.goal_text_professional": "Professional communication — emails, meetings, presentations",
+  "start.goal_text_writing": "Writing & grammar — essays, letters, written expression",
+  "start.goal_text_exams": "Prepare for {target_language} certification or exams",
   "start.goal_travel": "Travel",
   "start.goal_work": "Work / Business",
-  "start.goal_exams": "Exams / Certification",
   "start.goal_hobby": "Hobby / Culture",
   "start.goal_text_travel": "Learn conversational {target_language} for travel",
   "start.goal_text_work": "Learn {target_language} for work and business communication",
-  "start.goal_text_exams": "Prepare for {target_language} certification or exams",
   "start.goal_text_hobby": "Learn {target_language} as a hobby and explore the culture",
   "start.goal_set": "Goal saved!",
   "start.btn_skip": "Skip >>",
@@ -77,27 +82,24 @@
   "start.schedule_set": "Reminders set!",
   "start.sched_desc_daily": "Daily vocabulary review at {time}",
   "start.sched_desc_weekly": "Weekly progress report on Sundays at {time}",
-  "start.onboarding_complete_sched": "You're all set! I've set up daily reminders at <b>{time}</b> and a weekly report on <b>Sundays</b>.\n\nStarting your first lesson now \u2014 let's get to know each other!",
-  "start.onboarding_complete_nosched": "You're all set! Starting your first lesson now \u2014 let's get to know each other!\n\nYou can set up study reminders anytime in /settings.",
+  "start.onboarding_complete_sched": "You're all set! I've set up daily reminders at <b>{time}</b> and a weekly report on <b>Sundays</b>.\n\nStarting your first lesson now — let's get to know each other!",
+  "start.onboarding_complete_nosched": "You're all set! Starting your first lesson now — let's get to know each other!\n\nYou can set up study reminders anytime in /settings.",
   "start.first_session_starting": "Starting your first lesson...",
-  "start.first_session_error": "Setup complete! I had a small hiccup starting your first lesson. Tap the button below to try again \u2014 or just send me any message!",
-  "start.first_session_prompt": "Hi! I just finished setting up my profile. I'd love to tell you more about my goals and what I'm interested in \u2014 let's get started!",
+  "start.first_session_error": "Setup complete! I had a small hiccup starting your first lesson. Tap the button below to try again — or just send me any message!",
+  "start.first_session_prompt": "Hi! I just finished setting up my profile. I'd love to tell you more about my goals and what I'm interested in — let's get started!",
   "start.resume_goal": "Welcome back, <b>{name}</b>! Let's continue — what's your learning goal?",
   "start.resume_interests": "Welcome back, <b>{name}</b>! Let's continue — what topics interest you?",
   "start.resume_schedule": "Welcome back, <b>{name}</b>! Almost done — when would you like reminders?",
-
   "help.full": "I'm your personal language tutor. Here's what I can do:\n\nJust send me a message to start a learning session.\n\n<b>Commands</b>\n/start — Restart initial setup\n/words — Review your vocabulary flashcards\n/stats — View your progress\n/settings — Manage preferences & reminders\n/end — End the current session\n/deleteme — Delete all your data\n/help — Show this help message\n\n<b>How it works</b>\n• Send me any message to start a conversation — I'll give you exercises, teach new words, and track your progress.\n• I adapt exercises to your level and interests automatically.\n• Your level adjusts automatically as you improve — just keep practicing!\n• Each conversation has a message limit — I'll let you know when it's close.\n• Use /end to finish, or it closes automatically after a few minutes of inactivity.\n• Tell me your goals (e.g. <i>\"I want to prepare for a trip\"</i>) and I'll tailor exercises to match.\n\n<b>Tips</b>\n• Use /words regularly to strengthen your memory with flashcard reviews.\n• Check /settings to customize difficulty, style, and notifications.",
-  "help.new_user": "Welcome! I'm your personal AI language tutor.\n\nTo get started, complete the setup with /start \u2014 it only takes a minute!\n\nHere's what I can do:\n\u2022 Chat with you naturally and create exercises from our conversation\n\u2022 Adapt to your level, interests, and goals automatically\n\u2022 Track vocabulary with smart flashcard reviews\n\u2022 Adjust difficulty based on your performance\n\nOnce you're set up, just send me any message to start learning!",
+  "help.new_user": "Welcome! I'm your personal AI language tutor.\n\nTo get started, complete the setup with /start — it only takes a minute!\n\nHere's what I can do:\n• Chat with you naturally and create exercises from our conversation\n• Adapt to your level, interests, and goals automatically\n• Track vocabulary with smart flashcard reviews\n• Adjust difficulty based on your performance\n\nOnce you're set up, just send me any message to start learning!",
   "help.getting_started": "You're all set up! Here's how to start:\n\n• <b>Send me any message</b> to begin your first lesson\n• I'll adapt to your level and interests\n• Try saying something like <i>\"Let's practice\"</i> or <i>\"Teach me some basics\"</i>\n\n<b>Useful commands</b>\n/words — Review vocabulary flashcards\n/stats — View your progress\n/settings — Manage preferences\n/help — Show this help",
   "help.returning": "Welcome back! Here's a quick refresher:\n\n• <b>Send me any message</b> to start a session\n• I'll help you warm up and review what you've learned\n• Use /words to catch up on vocabulary flashcards\n\n<b>Commands</b>\n/words — Vocabulary flashcard review\n/stats — View your progress\n/settings — Manage preferences & reminders\n/end — End the current session\n/help — Show this help",
-
   "chat.no_session": "No active session. Use /start to begin setup.",
   "chat.no_active_session": "You don't have an active session right now.",
   "chat.session_ended": "Session ended. Your progress has been saved.\nSend a message anytime to start a new session!",
   "chat.setup_first": "Please complete the setup first! Use /start to begin.",
   "chat.error": "Something went wrong on our end. Please try again in a moment.",
   "chat.text_only": "I can only work with text messages for now. Please type your response instead.",
-
   "settings.title": "<b>Settings</b>\n",
   "settings.language_label": "<b>Language:</b> {lang_display}",
   "settings.strengthening": " (strengthening)",
@@ -197,13 +199,11 @@
   "settings.debug_log_enabled": "Debug logging <b>enabled</b>. Log level set to DEBUG.",
   "settings.debug_log_disabled": "Debug logging <b>disabled</b>. Log level set to INFO.",
   "settings.msg_outdated": "This message is outdated. Please use /settings again.",
-
   "deleteme.confirm": "<b>Are you sure you want to delete your account?</b>\n\nThis will permanently remove:\n  • Your profile and preferences\n  • All vocabulary and review history\n  • All exercise results\n  • All schedules and notifications\n  • All session history\n\n<b>This action cannot be undone.</b>",
   "deleteme.btn_confirm": "Yes, delete everything",
   "deleteme.btn_cancel": "Cancel",
   "deleteme.done": "All your data has been deleted.\nSend /start if you ever want to come back!",
   "deleteme.error": "Something went wrong. Please try again.",
-
   "review.setup_first": "Please complete setup first! Use /start.",
   "review.no_cards_empty": "You don't have any vocabulary cards yet.\nSend me a message to start a learning session — new words will be added to your review deck automatically!",
   "review.no_cards_due": "No vocabulary cards are due for review right now.\nYou have {total} words in your deck. Cards will appear here when it's time to review them.",
@@ -228,7 +228,6 @@
   "review.invalid_data": "Invalid data.",
   "review.invalid_rating_data": "Invalid rating data.",
   "review.invalid_rating": "Invalid rating.",
-
   "stats.setup_first": "Please complete setup first! Use /start.",
   "stats.title": "<b>Your Progress</b> ({target_language})\n",
   "stats.level": "<b>Level:</b> {level}",
@@ -253,10 +252,8 @@
   "stats.sessions_per_day": "  Sessions/day: {count}",
   "stats.sessions_unlimited": "  Sessions/day: unlimited",
   "stats.messages_per_session": "  Messages/session: {count}",
-
   "rate_limit.callback": "Please slow down.",
   "rate_limit.message": "You're sending messages too fast. Please wait about a minute before trying again.",
-
   "session.daily_limit": "You've reached your daily limit of {max_sessions} sessions ({tier} plan). The limit resets at midnight your time. In the meantime, you can use /words to practice your vocabulary!",
   "session.cost_limit": "You've reached today's session limit. It resets at midnight your time. You can still use /words to practice vocabulary!",
   "session.verify_error": "Couldn't verify your session limit. Please try again in a moment.",
@@ -276,23 +273,20 @@
   "session.summary_reviews": "  - Reviewed {count} vocabulary card(s)",
   "session.summary_no_progress": "  - No exercises this time — try /words to practice vocabulary, or send a message to start learning!",
   "session.summary_footer": "\nSend a message to start a new session!",
-
   "cta.start_review": "Start review",
   "cta.start_session": "Start a session",
   "cta.continue": "Continue where I left off",
   "cta.resume_learning": "Resume learning",
   "cta.quick_session": "Quick study session",
-
   "pipeline.milestone_streak": "{streak}-day streak!",
   "pipeline.milestone_vocab": "{count} words learned!",
   "pipeline.milestone_sessions": "{count} sessions and counting! Keep it up!",
   "pipeline.difficulty_adjusted": "Your difficulty has been adjusted from {old} to {new} based on your recent scores!",
   "pipeline.level_changed": "Student manually changed their level from {old_level} to {new_level} via Settings. Acknowledge this and adapt exercises to the new level.",
-
   "notif.streak_risk": [
     "You're on a <b>{streak}-day streak</b>! A quick 2-minute review will keep it going.",
     "{name}, <b>{streak} days</b> of progress — keep the momentum with a quick review!",
-    "Hey {name}, a quick review of <b>{due_count}</b> words will round off your day nicely."
+    "Hey {name}, even a quick 5-minute session will keep your <b>{streak}-day streak</b> alive!"
   ],
   "notif.cards_due": [
     "You have <b>{due_count}</b> vocabulary cards ready for review. A quick session will keep them fresh!",
@@ -339,10 +333,6 @@
   "notif.weekly_summary_template": [
     "<b>Weekly Summary</b>\n\n<b>Level:</b> {level}\n<b>Streak:</b> {streak} days\n<b>Words learned:</b> {vocab_count}\n<b>Sessions this week:</b> {sessions_week}\n\nKeep it up, {name}!"
   ],
-  "notif.retention_decay": [
-    "{name}, some of your vocabulary might need a refresh. <b>{decay_count}</b> words are at risk of being forgotten.",
-    "Time for a review! <b>{decay_count}</b> words could use some reinforcement."
-  ],
   "notif.weak_area_drill": [
     "{name}, it's been a while since you practiced <b>{topic}</b>. Ready for a focused drill?",
     "Time to sharpen your <b>{topic}</b> skills! A quick targeted exercise can make a big difference.",
@@ -372,13 +362,13 @@
     "Hey {name}, even a short session keeps the momentum going. Ready to jump back in?"
   ],
   "notif.lapsed_compelling": [
-    "{name}, you've already learned <b>{vocabulary_count}</b> words and reached level <b>{level}</b>! Don't let that progress fade.",
+    "{name}, you've already learned <b>{vocabulary_count}</b> words and reached level <b>{level}</b>! Your foundation is still strong — a quick session will refresh it.",
     "Your {target_language} skills miss you, {name}! You've built a solid foundation with <b>{sessions_completed}</b> sessions — let's keep building.",
-    "{name}, you've come so far with your {target_language}! A quick session will bring it all back."
+    "{name}, you've come so far with your {target_language}! A quick warm-up session will get you right back on track."
   ],
   "notif.lapsed_miss_you": [
     "{name}, your {target_language} journey doesn't have to end here. Come back and we'll start with a gentle review.",
-    "We saved your progress, {name}! <b>{vocabulary_count}</b> words are waiting for you. Ready for a fresh start?"
+    "Your notes and vocabulary are saved, {name}! <b>{vocabulary_count}</b> words in your collection. Ready for a warm-up to refresh them?"
   ],
   "notif.post_onboarding_14d": [
     "We haven't forgotten about you, {name}! Your {target_language} learning journey is still waiting. Just send a message to get started.",

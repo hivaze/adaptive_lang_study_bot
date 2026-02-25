@@ -90,7 +90,10 @@ KNOWN_INTEREST_CODES = frozenset({
     "food", "music", "sports", "tech", "travel", "news",
     "science", "history", "business", "art", "gaming", "health",
 })
-KNOWN_GOAL_CODES = frozenset({"travel", "work", "exams", "hobby"})
+KNOWN_GOAL_CODES = frozenset({
+    "conversation", "professional", "writing", "exams",
+    "travel", "work", "hobby",  # old codes kept for existing users
+})
 
 
 def render_interest(code: str, lang: str = "en") -> str:

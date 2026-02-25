@@ -111,7 +111,7 @@ All configuration is via environment variables (loaded by `pydantic-settings` fr
 | Max sessions/day | 7 | unlimited |
 | Session idle timeout | 5 min | 10 min |
 | Thinking mode | adaptive | adaptive |
-| Effort | medium | medium |
+| Effort | low | low |
 | LLM notifications/day | 2 | 8 |
 | Rate limit | 5 msg/min | 20 msg/min |
 | Max cost/session | $0.30 | $1.50 |
@@ -158,7 +158,7 @@ Any other text message starts or continues an interactive study session with the
 │              ▼                                                 │
 │ Agent Session (per user)                                       │
 │   ClaudeSDKClient ──────────────────> Anthropic API            │
-│    ├── System Prompt (13 sections)     (Haiku / Sonnet)        │
+│    ├── System Prompt (14 sections)     (Haiku / Sonnet)        │
 │    ├── MCP Server (11 tools) ────────> PostgreSQL              │
 │    └── Hooks (PostToolUse, UserPromptSubmit, Stop)             │
 │              │ on close                                        │
@@ -226,7 +226,7 @@ src/adaptive_lang_study_bot/
 - **Long-lived sessions** — each user gets one `ClaudeSDKClient` that persists across messages until closed (by turn/cost limit, idle timeout, or `/end`). A new session builds a fresh system prompt from the user's current DB profile snapshot.
 - **Hybrid personalization** — the system prompt carries the user profile snapshot (read-only context), while MCP tools handle all DB writes (exercises, vocabulary, preferences).
 - **Three-tier notifications** — template ($0 cost, random variant from locale files), LLM (short-lived proactive session generates personalized message), or hybrid (try LLM, fall back to template). Free users get 2 LLM notifications/day, premium get 8.
-- **Re-engagement triggers** — escalating nudge system for post-onboarding (24h → 3d → 7d → 14d), lapsed users (gentle → compelling → miss-you), and dormant users (weekly nudges for 15-45 days inactive), with automatic stop after final attempt.
+- **Re-engagement triggers** — escalating nudge system for post-onboarding (24h → 3d → 7d → 14d), lapsed users (gentle → compelling → miss-you), and dormant users (weekly nudges for 21-45 days inactive), with automatic stop after final attempt.
 - **Localized UI** — all user-facing messages (bot UI, notifications, session summaries, warnings) rendered via `i18n.t()` in the user's native language.
 - **Post-session pipeline** — after each session, a pure-Python pipeline validates data integrity, updates streaks, auto-adjusts difficulty, and detects milestones.
 
@@ -335,7 +335,7 @@ Require `ANTHROPIC_API_KEY`. Make real Claude API calls via `claude-agent-sdk` t
 
 ### Prometheus Metrics
 
-The bot exposes a Prometheus metrics HTTP endpoint on port `METRICS_PORT` (default 9090). 17 metrics are tracked across 3 types:
+The bot exposes a Prometheus metrics HTTP endpoint on port `METRICS_PORT` (default 9090). 16 metrics are tracked across 3 types:
 
 - **Gauges** — active session pool size (interactive/proactive)
 - **Counters** — sessions created/closed, messages processed, errors, notifications sent/skipped, proactive ticks, pipeline completions

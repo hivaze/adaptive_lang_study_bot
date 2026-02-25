@@ -266,7 +266,7 @@ class TestNotificationToSessionType:
         expected_triggers = {
             "streak_risk", "cards_due", "user_inactive", "weak_area_persistent",
             "score_trend_declining", "score_trend_improving", "incomplete_exercise",
-            "retention_decay", "weak_area_drill_due",
+            "weak_area_drill_due",
         }
         for t in expected_triggers:
             assert t in _TRIGGER_TO_SESSION_TYPE, f"Missing mapping for trigger '{t}'"
