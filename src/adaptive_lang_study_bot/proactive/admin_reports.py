@@ -15,7 +15,7 @@ from adaptive_lang_study_bot.cache.keys import (
     ADMIN_STATS_LOCK_TTL,
 )
 from adaptive_lang_study_bot.cache.redis_lock import acquire_lock, generate_lock_token, release_lock
-from adaptive_lang_study_bot.config import settings
+from adaptive_lang_study_bot.config import settings, tuning
 from adaptive_lang_study_bot.enums import NotificationStatus, UserTier
 from adaptive_lang_study_bot.db.engine import async_session_factory
 from adaptive_lang_study_bot.db.repositories import (
@@ -25,13 +25,8 @@ from adaptive_lang_study_bot.db.repositories import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Health check thresholds
-# ---------------------------------------------------------------------------
-_POOL_USAGE_ALERT_PCT = 80
-_PIPELINE_FAILURE_THRESHOLD = 3
-_NOTIF_FAILURE_MIN_TOTAL = 5
-_NOTIF_FAILURE_RATE_THRESHOLD = 0.30
+# Health check thresholds are in config.py:BotTuning
+# (tuning.pool_usage_alert_pct, tuning.pipeline_failure_threshold, etc.)
 
 # ---------------------------------------------------------------------------
 # Stats Report (runs every 12 hours)
@@ -145,7 +140,7 @@ async def _check_pool_interactive() -> HealthCheckResult:
         session_pool.interactive_active
         / max(1, settings.max_concurrent_interactive_sessions) * 100
     )
-    is_alert = interactive_pct >= _POOL_USAGE_ALERT_PCT
+    is_alert = interactive_pct >= tuning.pool_usage_alert_pct
     return HealthCheckResult(
         check_name="high_pool_interactive",
         is_alert=is_alert,
@@ -162,7 +157,7 @@ async def _check_pool_proactive() -> HealthCheckResult:
         session_pool.proactive_active
         / max(1, settings.max_concurrent_proactive_sessions) * 100
     )
-    is_alert = proactive_pct >= _POOL_USAGE_ALERT_PCT
+    is_alert = proactive_pct >= tuning.pool_usage_alert_pct
     return HealthCheckResult(
         check_name="high_pool_proactive",
         is_alert=is_alert,
@@ -177,7 +172,7 @@ async def _check_pool_proactive() -> HealthCheckResult:
 async def _check_pipeline_failures() -> HealthCheckResult:
     async with async_session_factory() as db:
         failures = await SessionRepo.count_pipeline_failures_recent(db, hours=1)
-    is_alert = failures > _PIPELINE_FAILURE_THRESHOLD
+    is_alert = failures > tuning.pipeline_failure_threshold
     return HealthCheckResult(
         check_name="pipeline_failures",
         is_alert=is_alert,
@@ -231,7 +226,7 @@ async def _check_db() -> HealthCheckResult:
 async def _check_notification_failures() -> HealthCheckResult:
     async with async_session_factory() as db:
         failed, total = await NotificationRepo.get_failure_rate_recent(db, hours=1)
-    is_alert = total >= _NOTIF_FAILURE_MIN_TOTAL and (failed / total) > _NOTIF_FAILURE_RATE_THRESHOLD
+    is_alert = total >= tuning.notif_failure_min_total and (failed / total) > tuning.notif_failure_rate_threshold
     if is_alert:
         rate = failed / total * 100
         alert_msg = f"NOTIFICATION FAILURES: {rate:.0f}% failure rate ({failed}/{total}) in last hour"

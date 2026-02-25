@@ -6,23 +6,8 @@ from adaptive_lang_study_bot.db.models import User
 from adaptive_lang_study_bot.enums import NotificationTier
 from adaptive_lang_study_bot.utils import user_local_now
 
-# Thresholds for trigger evaluation
-INACTIVITY_HOURS_THRESHOLD = 48
-CARDS_DUE_THRESHOLD = 5
-STREAK_RISK_EVENING_HOUR = 18
-RECENT_ACTIVITY_SECONDS = 7200  # 2 hours
-
-# Re-engagement: post-onboarding escalation windows (hours since created_at)
-POST_ONBOARDING_MIN_HOURS = 20
-POST_ONBOARDING_24H_MAX_HOURS = 48
-POST_ONBOARDING_3D_MAX_HOURS = 72
-POST_ONBOARDING_7D_MAX_HOURS = 168
-
-# Re-engagement: lapsed user escalation windows (days since last_session_at)
-LAPSED_GENTLE_MIN_DAYS = 2
-LAPSED_GENTLE_MAX_DAYS = 4
-LAPSED_COMPELLING_MAX_DAYS = 8
-LAPSED_MISS_YOU_MAX_DAYS = 21
+# All trigger thresholds are centralized in config.py:BotTuning.
+# Access via tuning.inactivity_hours_threshold, tuning.cards_due_threshold, etc.
 
 
 def _hours_since(dt: datetime, now: datetime) -> float:
@@ -68,7 +53,7 @@ def check_streak_risk(user: User, *, due_count: int = 0) -> Trigger | None:
         return None
 
     # Check if it's evening in user's local timezone
-    if local_now.hour < STREAK_RISK_EVENING_HOUR:
+    if local_now.hour < tuning.streak_risk_evening_hour:
         return None
 
     return make_trigger(
@@ -81,13 +66,13 @@ def check_streak_risk(user: User, *, due_count: int = 0) -> Trigger | None:
 
 def check_cards_due(user: User, *, due_count: int = 0) -> Trigger | None:
     """Tier 1: Cards due for review."""
-    if due_count < CARDS_DUE_THRESHOLD:
+    if due_count < tuning.cards_due_threshold:
         return None
 
     # Don't nag users who were recently active (within 2 hours)
     if user.last_session_at is not None:
         gap = (datetime.now(timezone.utc) - user.last_session_at).total_seconds()
-        if gap < RECENT_ACTIVITY_SECONDS:
+        if gap < tuning.recent_activity_seconds:
             return None
 
     return make_trigger("cards_due", name=user.first_name, due_count=due_count)
@@ -104,7 +89,7 @@ def check_user_inactive(user: User, *, due_count: int = 0) -> Trigger | None:
     now = datetime.now(timezone.utc)
     gap_hours = _hours_since(user.last_session_at, now)
 
-    if gap_hours < INACTIVITY_HOURS_THRESHOLD:
+    if gap_hours < tuning.inactivity_hours_threshold:
         return None
 
     return make_trigger(
@@ -241,26 +226,26 @@ def check_post_onboarding_nudge(user: User, *, due_count: int = 0) -> Trigger | 
     now = datetime.now(timezone.utc)
     gap_hours = _hours_since(user.created_at, now)
 
-    if gap_hours < POST_ONBOARDING_MIN_HOURS:
+    if gap_hours < tuning.post_onboarding_min_hours:
         return None
 
     target_language = user.target_language
 
-    if gap_hours <= POST_ONBOARDING_24H_MAX_HOURS:
+    if gap_hours <= tuning.post_onboarding_24h_max_hours:
         return make_trigger(
             "post_onboarding_24h",
             name=user.first_name,
             target_language=target_language,
         )
 
-    if gap_hours <= POST_ONBOARDING_3D_MAX_HOURS:
+    if gap_hours <= tuning.post_onboarding_3d_max_hours:
         return make_trigger(
             "post_onboarding_3d",
             name=user.first_name,
             target_language=target_language,
         )
 
-    if gap_hours <= POST_ONBOARDING_7D_MAX_HOURS:
+    if gap_hours <= tuning.post_onboarding_7d_max_hours:
         return make_trigger(
             "post_onboarding_7d",
             tier=NotificationTier.LLM,
@@ -306,7 +291,7 @@ def check_dormant_user(user: User, *, due_count: int = 0) -> Trigger | None:
     now = datetime.now(timezone.utc)
     gap_days = (now - reference_dt).total_seconds() / 86400
 
-    if gap_days <= LAPSED_MISS_YOU_MAX_DAYS:
+    if gap_days <= tuning.lapsed_miss_you_max_days:
         return None
 
     if gap_days >= tuning.dormant_periodic_max_days:
@@ -348,23 +333,23 @@ def check_lapsed_user(user: User, *, due_count: int = 0) -> Trigger | None:
     gap_hours = _hours_since(user.last_session_at, now)
     gap_days = gap_hours / 24
 
-    if gap_days < LAPSED_GENTLE_MIN_DAYS:
+    if gap_days < tuning.lapsed_gentle_min_days:
         return None
 
     # Defer to check_user_inactive for users it already covers
-    if user.streak_days >= 3 and gap_hours >= INACTIVITY_HOURS_THRESHOLD:
+    if user.streak_days >= 3 and gap_hours >= tuning.inactivity_hours_threshold:
         return None
 
     target_language = user.target_language
 
-    if gap_days < LAPSED_GENTLE_MAX_DAYS:
+    if gap_days < tuning.lapsed_gentle_max_days:
         return make_trigger(
             "lapsed_gentle",
             name=user.first_name,
             target_language=target_language,
         )
 
-    if gap_days < LAPSED_COMPELLING_MAX_DAYS:
+    if gap_days < tuning.lapsed_compelling_max_days:
         return make_trigger(
             "lapsed_compelling",
             name=user.first_name,
@@ -374,7 +359,7 @@ def check_lapsed_user(user: User, *, due_count: int = 0) -> Trigger | None:
             sessions_completed=user.sessions_completed,
         )
 
-    if gap_days < LAPSED_MISS_YOU_MAX_DAYS:
+    if gap_days < tuning.lapsed_miss_you_max_days:
         interests = user.interests or []
         return make_trigger(
             "lapsed_miss_you",

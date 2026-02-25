@@ -58,6 +58,20 @@ class BotTuning:
     hook_struggling_threshold: float = 4.0
     hook_excelling_threshold: float = 8.5
 
+    # -- Trigger thresholds (proactive/triggers.py) --
+    inactivity_hours_threshold: int = 48
+    cards_due_threshold: int = 5
+    streak_risk_evening_hour: int = 18
+    recent_activity_seconds: int = 7200  # 2 hours
+    post_onboarding_min_hours: int = 20
+    post_onboarding_24h_max_hours: int = 48
+    post_onboarding_3d_max_hours: int = 72
+    post_onboarding_7d_max_hours: int = 168
+    lapsed_gentle_min_days: int = 2
+    lapsed_gentle_max_days: int = 4
+    lapsed_compelling_max_days: int = 8
+    lapsed_miss_you_max_days: int = 21
+
     # -- Re-engagement triggers --
     dormant_periodic_max_days: int = 45
     dormant_periodic_interval_days: int = 7
@@ -87,6 +101,8 @@ class BotTuning:
     proactive_dispatch_concurrency: int = 20  # max parallel dispatches per tick phase
     proactive_user_page_size: int = 500  # users loaded per page in event trigger phase
     proactive_lock_refresh_interval: int = 60  # seconds between lock refreshes during dispatch
+    schedule_max_backoff_minutes: int = 1440  # 24h max backoff for failed schedules
+    schedule_max_consecutive_failures: int = 10  # auto-pause after this many failures
 
     # -- Session manager timeouts --
     cleanup_interval_seconds: int = 30
@@ -97,6 +113,12 @@ class BotTuning:
 
     # -- Schedule validation --
     min_schedule_interval_minutes: int = 60  # minimum RRULE recurrence interval
+
+    # -- Health check thresholds (proactive/admin_reports.py) --
+    pool_usage_alert_pct: int = 80
+    pipeline_failure_threshold: int = 3
+    notif_failure_min_total: int = 5
+    notif_failure_rate_threshold: float = 0.30
 
 
 # Singleton — import this everywhere instead of using hardcoded magic numbers.

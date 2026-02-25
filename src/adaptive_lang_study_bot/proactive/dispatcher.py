@@ -82,47 +82,42 @@ _TRIGGER_TO_NOTIF_CATEGORY: dict[str, str] = {
     "incomplete_exercise": "learning_nudges",
 }
 
-_DEFAULT_NOTIF_PREFS: dict[str, bool] = {
-    "streak_reminders": True,
-    "vocab_reviews": True,
-    "progress_reports": True,
-    "re_engagement": True,
-    "learning_nudges": True,
+# CTA button mappings: notification_type → (i18n_key, callback_data).
+# Types not listed here get no CTA keyboard.
+_CTA_MAPPINGS: dict[str, tuple[str, str]] = {
+    "cards_due":              ("cta.start_review", "cta:words"),
+    "daily_review":           ("cta.start_review", "cta:words"),
+    "incomplete_exercise":    ("cta.continue", "cta:session"),
+    "lapsed_gentle":          ("cta.resume_learning", "cta:session"),
+    "lapsed_compelling":      ("cta.resume_learning", "cta:session"),
+    "lapsed_miss_you":        ("cta.resume_learning", "cta:session"),
+    "dormant_weekly":         ("cta.resume_learning", "cta:session"),
+    "streak_risk":            ("cta.quick_session", "cta:session"),
+    "user_inactive":          ("cta.start_session", "cta:session"),
+    "weak_area_persistent":   ("cta.start_session", "cta:session"),
+    "weak_area_drill_due":    ("cta.start_session", "cta:session"),
+    "score_trend_declining":  ("cta.start_session", "cta:session"),
+    "score_trend_improving":  ("cta.start_session", "cta:session"),
+    "progress_report":        ("cta.start_session", "cta:session"),
+    "post_onboarding_24h":    ("cta.start_session", "cta:session"),
+    "post_onboarding_3d":     ("cta.start_session", "cta:session"),
+    "post_onboarding_7d":     ("cta.start_session", "cta:session"),
+    "post_onboarding_14d":    ("cta.start_session", "cta:session"),
+    "quiz":                   ("cta.start_session", "cta:session"),
+    "practice_reminder":      ("cta.start_session", "cta:session"),
+    "custom":                 ("cta.start_session", "cta:session"),
 }
 
 
 def _build_cta_keyboard(notification_type: str, lang: str) -> InlineKeyboardMarkup | None:
     """Build a call-to-action inline keyboard differentiated by trigger type."""
-    if notification_type in ("cards_due", "daily_review"):
-        return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=t("cta.start_review", lang), callback_data="cta:words")],
-        ])
-    if notification_type == "incomplete_exercise":
-        return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=t("cta.continue", lang), callback_data="cta:session")],
-        ])
-    if notification_type in (
-        "lapsed_gentle", "lapsed_compelling", "lapsed_miss_you",
-        "dormant_weekly",
-    ):
-        return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=t("cta.resume_learning", lang), callback_data="cta:session")],
-        ])
-    if notification_type == "streak_risk":
-        return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=t("cta.quick_session", lang), callback_data="cta:session")],
-        ])
-    if notification_type in (
-        "user_inactive", "weak_area_persistent", "weak_area_drill_due",
-        "score_trend_declining", "score_trend_improving", "progress_report",
-        "post_onboarding_24h", "post_onboarding_3d", "post_onboarding_7d",
-        "post_onboarding_14d",
-        "quiz", "practice_reminder", "custom",
-    ):
-        return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=t("cta.start_session", lang), callback_data="cta:session")],
-        ])
-    return None
+    mapping = _CTA_MAPPINGS.get(notification_type)
+    if mapping is None:
+        return None
+    i18n_key, callback_data = mapping
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(i18n_key, lang), callback_data=callback_data)],
+    ])
 
 
 async def _release_dedup_slot(dedup_key: str, user_id: int) -> None:
@@ -139,6 +134,22 @@ def _seconds_until_local_midnight(user: User) -> int:
     local_now = user_local_now(user)
     tomorrow = local_now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
     return max(60, int((tomorrow - local_now).total_seconds()))
+
+
+def _is_in_quiet_hours(user: User, local_now) -> bool:
+    """Check if current local time falls within the user's quiet hours.
+
+    Handles both same-day ranges (e.g. 08:00–22:00) and overnight
+    ranges (e.g. 22:00–08:00).
+    """
+    if not user.quiet_hours_start or not user.quiet_hours_end:
+        return False
+    now_time = local_now.time()
+    start, end = user.quiet_hours_start, user.quiet_hours_end
+    if start <= end:
+        return start <= now_time < end
+    # Overnight: quiet from start until midnight, and from midnight until end
+    return now_time >= start or now_time < end
 
 
 async def should_send(user: User, notification_type: str) -> tuple[bool, str]:
@@ -164,16 +175,8 @@ async def should_send(user: User, notification_type: str) -> tuple[bool, str]:
 
     # Quiet hours — use user's local time
     local_now = user_local_now(user)
-    if user.quiet_hours_start and user.quiet_hours_end:
-        now_time = local_now.time()
-        start = user.quiet_hours_start
-        end = user.quiet_hours_end
-        if start <= end:
-            if start <= now_time < end:
-                return False, NotificationStatus.SKIPPED_QUIET
-        else:  # Overnight quiet hours (e.g. 22:00 - 08:00)
-            if now_time >= start or now_time < end:
-                return False, NotificationStatus.SKIPPED_QUIET
+    if _is_in_quiet_hours(user, local_now):
+        return False, NotificationStatus.SKIPPED_QUIET
 
     # Daily limit check removed — the authoritative atomic
     # check_and_increment_notification() in dispatch_notification() handles

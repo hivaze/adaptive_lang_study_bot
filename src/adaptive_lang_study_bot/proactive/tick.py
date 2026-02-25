@@ -27,8 +27,8 @@ from adaptive_lang_study_bot.utils import compute_next_trigger, safe_zoneinfo
 from adaptive_lang_study_bot.agent.session_manager import session_manager
 from adaptive_lang_study_bot.proactive.triggers import ALL_TRIGGERS
 
-_MAX_BACKOFF_MINUTES = 1440  # 24 hours
-_MAX_CONSECUTIVE_FAILURES = 10
+# Schedule failure thresholds are in config.py:BotTuning
+# (tuning.schedule_max_backoff_minutes, tuning.schedule_max_consecutive_failures)
 
 
 async def _refresh_tick_lock(redis, token: str) -> None:
@@ -81,6 +81,35 @@ async def tick_scheduler(bot: Bot) -> None:
         with suppress(asyncio.CancelledError):
             await refresh_task
         await release_lock(redis, PROACTIVE_TICK_LOCK_KEY, token)
+
+
+async def _advance_schedule(schedule, user_timezone: str, *, success: bool) -> None:
+    """Compute next trigger from RRULE and update schedule record.
+
+    Expires the schedule if the RRULE yields no future trigger.
+    """
+    user_tz = safe_zoneinfo(user_timezone)
+    try:
+        next_trigger = compute_next_trigger(schedule.rrule, user_tz)
+    except (ValueError, TypeError):
+        logger.warning(
+            "Invalid RRULE for schedule {} (user {}): {!r}",
+            schedule.id, schedule.user_id, schedule.rrule,
+        )
+        next_trigger = None
+
+    async with async_session_factory() as db:
+        if next_trigger is None:
+            await ScheduleRepo.update_fields(
+                db, schedule.id, status=ScheduleStatus.EXPIRED,
+            )
+        else:
+            await ScheduleRepo.update_after_trigger(
+                db, schedule.id,
+                next_trigger_at=next_trigger,
+                success=success,
+            )
+        await db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -156,28 +185,11 @@ async def _phase_schedules(bot: Bot) -> None:
                     return
 
                 due_count = due_counts.get(user.telegram_id, 0)
-                sessions_week = session_counts.get(user.telegram_id, 0)
 
                 # Skip review-type schedules when no cards are due.
                 # Sending "0 cards waiting" is confusing UX. Advance silently.
                 if due_count == 0 and schedule.schedule_type == ScheduleType.DAILY_REVIEW:
-                    user_tz = safe_zoneinfo(user.timezone)
-                    try:
-                        next_trigger = compute_next_trigger(schedule.rrule, user_tz)
-                    except (ValueError, TypeError):
-                        next_trigger = None
-                    async with async_session_factory() as db:
-                        if next_trigger is None:
-                            await ScheduleRepo.update_fields(
-                                db, schedule.id, status=ScheduleStatus.EXPIRED,
-                            )
-                        else:
-                            await ScheduleRepo.update_after_trigger(
-                                db, schedule.id,
-                                next_trigger_at=next_trigger,
-                                success=True,
-                            )
-                        await db.commit()
+                    await _advance_schedule(schedule, user.timezone, success=True)
                     return
 
                 trigger = {
@@ -192,36 +204,12 @@ async def _phase_schedules(bot: Bot) -> None:
                         "level": user.level,
                         "vocab_count": user.vocabulary_count,
                         "target_language": user.target_language,
-                        "sessions_week": sessions_week,
+                        "sessions_week": session_counts.get(user.telegram_id, 0),
                     },
                 }
 
                 result = await dispatch_notification(user, trigger, bot)
-
-                # Compute next trigger time from RRULE in the user's timezone
-                user_tz = safe_zoneinfo(user.timezone)
-                try:
-                    next_trigger = compute_next_trigger(schedule.rrule, user_tz)
-                except (ValueError, TypeError):
-                    logger.warning(
-                        "Invalid RRULE for schedule {} (user {}): {!r}",
-                        schedule.id, schedule.user_id, schedule.rrule,
-                    )
-                    next_trigger = None
-
-                # Update schedule in a short-lived session
-                async with async_session_factory() as db:
-                    if next_trigger is None:
-                        await ScheduleRepo.update_fields(
-                            db, schedule.id, status=ScheduleStatus.EXPIRED,
-                        )
-                    else:
-                        await ScheduleRepo.update_after_trigger(
-                            db, schedule.id,
-                            next_trigger_at=next_trigger,
-                            success=result is not None,
-                        )
-                    await db.commit()
+                await _advance_schedule(schedule, user.timezone, success=result is not None)
 
             except Exception:
                 logger.exception(
@@ -239,10 +227,10 @@ async def _phase_schedules(bot: Bot) -> None:
 async def _handle_schedule_failure(schedule, bot: Bot) -> None:
     """Increment failure counter with exponential backoff, auto-pause after 10."""
     failures = (schedule.consecutive_failures or 0) + 1
-    backoff_minutes = min(2 ** failures, _MAX_BACKOFF_MINUTES)
+    backoff_minutes = min(2 ** failures, tuning.schedule_max_backoff_minutes)
     try:
         async with async_session_factory() as db:
-            if failures >= _MAX_CONSECUTIVE_FAILURES:
+            if failures >= tuning.schedule_max_consecutive_failures:
                 await ScheduleRepo.update_fields(
                     db, schedule.id, status=ScheduleStatus.PAUSED,
                 )
