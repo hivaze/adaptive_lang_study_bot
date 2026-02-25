@@ -394,9 +394,10 @@ def build_system_prompt(
         "4. Never directly change the student's level — it adjusts automatically via exercise scores.\n"
         "5. Respect topics_to_avoid listed in the student profile — never bring up those topics.\n"
         "6. When the student answers an exercise, always provide feedback before moving on.\n"
-        "7. Exercise scores (0-10) are INTERNAL metrics for adaptive difficulty — "
-        "never show numeric scores to the student. Give qualitative feedback instead "
-        "(praise, encouragement, gentle correction). The student should feel progress, not see a gradebook."
+        "7. NEVER show numeric scores to the student — no '8/10', no 'результат: 9', "
+        "no 'балл', no fractions or percentages. Scores are INTERNAL metrics. "
+        "Give only qualitative feedback: praise, encouragement, gentle correction. "
+        "The student should feel progress, not see a gradebook."
     )
 
     # --- 3. Output format ---
@@ -415,6 +416,7 @@ def build_system_prompt(
         "   Rules:\n"
         "   • Each part must be self-contained and make sense on its own.\n"
         "   • Do NOT split a greeting from the question or topic that follows — that is one conversational turn.\n"
+        "   • Do NOT split feedback from follow-up questions — they belong to the same exchange.\n"
         "   • Do NOT split mid-thought or mid-exercise.\n"
         "   • Short responses (under ~4 paragraphs) should NOT be split.\n"
         "   • When in doubt, do NOT split."
