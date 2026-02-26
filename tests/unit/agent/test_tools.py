@@ -23,7 +23,7 @@ class TestToolConstants:
             assert name.startswith("mcp__langbot__"), f"{name} missing prefix"
 
     def test_tool_count(self):
-        assert len(TOOL_NAMES) == 10
+        assert len(TOOL_NAMES) == 11
 
     def test_session_types_defined(self):
         expected_types = {
@@ -73,6 +73,27 @@ class TestToolConstants:
     def test_session_history_not_mutable(self):
         """session_history is system-managed, not user-mutable."""
         assert "session_history" not in _USER_MUTABLE_FIELDS
+
+    def test_manage_learning_plan_in_tool_names(self):
+        assert "mcp__langbot__manage_learning_plan" in TOOL_NAMES
+
+    def test_interactive_has_manage_learning_plan(self):
+        assert "manage_learning_plan" in _SESSION_TYPE_TOOLS[SessionType.INTERACTIVE]
+
+    def test_proactive_summary_has_manage_learning_plan(self):
+        assert "manage_learning_plan" in _SESSION_TYPE_TOOLS[SessionType.PROACTIVE_SUMMARY]
+
+    def test_onboarding_lacks_manage_learning_plan(self):
+        assert "manage_learning_plan" not in _SESSION_TYPE_TOOLS[SessionType.ONBOARDING]
+
+    def test_proactive_nudge_lacks_manage_learning_plan(self):
+        assert "manage_learning_plan" not in _SESSION_TYPE_TOOLS[SessionType.PROACTIVE_NUDGE]
+
+    def test_proactive_quiz_lacks_manage_learning_plan(self):
+        assert "manage_learning_plan" not in _SESSION_TYPE_TOOLS[SessionType.PROACTIVE_QUIZ]
+
+    def test_proactive_review_lacks_manage_learning_plan(self):
+        assert "manage_learning_plan" not in _SESSION_TYPE_TOOLS[SessionType.PROACTIVE_REVIEW]
 
 
 class TestCanUseTool:
@@ -145,6 +166,22 @@ class TestCanUseTool:
     def test_proactive_nudge_blocks_progress_summary(self, _make_can_use_tool):
         can_use = _make_can_use_tool(SessionType.PROACTIVE_NUDGE)
         assert can_use("get_progress_summary") is False
+
+    def test_interactive_allows_manage_learning_plan(self, _make_can_use_tool):
+        can_use = _make_can_use_tool(SessionType.INTERACTIVE)
+        assert can_use("manage_learning_plan") is True
+
+    def test_proactive_summary_allows_manage_learning_plan(self, _make_can_use_tool):
+        can_use = _make_can_use_tool(SessionType.PROACTIVE_SUMMARY)
+        assert can_use("manage_learning_plan") is True
+
+    def test_onboarding_blocks_manage_learning_plan(self, _make_can_use_tool):
+        can_use = _make_can_use_tool(SessionType.ONBOARDING)
+        assert can_use("manage_learning_plan") is False
+
+    def test_proactive_nudge_blocks_manage_learning_plan(self, _make_can_use_tool):
+        can_use = _make_can_use_tool(SessionType.PROACTIVE_NUDGE)
+        assert can_use("manage_learning_plan") is False
 
     def test_unknown_tool_is_blocked(self, _make_can_use_tool):
         can_use = _make_can_use_tool(SessionType.INTERACTIVE)

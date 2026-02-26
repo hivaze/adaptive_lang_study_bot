@@ -4,6 +4,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from adaptive_lang_study_bot.enums import UserTier  # noqa: F401 — re-exported for backward compat
 
+# Centralized CEFR level progression — imported by tools.py and prompt_builder.py.
+CEFR_LEVELS: list[str] = ["A1", "A2", "B1", "B2", "C1", "C2"]
+
 
 # ---------------------------------------------------------------------------
 # Bot tuning constants — centralized so they're easy to find and adjust.
@@ -23,7 +26,7 @@ class BotTuning:
     difficulty_down_normal_easy: float = 4.5  # avg to go normal→easy (was 4.0)
 
     # -- Level auto-adjust (tools.py record_exercise_result) --
-    level_up_avg: float = 9.0
+    level_up_avg: float = 8.5
     level_down_avg: float = 3.0
     level_recent_window: int = 10
 
@@ -88,10 +91,12 @@ class BotTuning:
     proactive_session_timeout_seconds: float = 30.0
     proactive_max_turns: int = 10
     proactive_model: str = "claude-haiku-4-5"
+    proactive_thinking: str = "disabled"
 
     # -- Summary sessions --
     summary_session_timeout_seconds: float = 15.0
     summary_max_turns: int = 3
+    summary_thinking: str = "adaptive"
 
     # -- Effort levels --
     interactive_effort: str = "low"
@@ -114,6 +119,16 @@ class BotTuning:
 
     # -- Schedule validation --
     min_schedule_interval_minutes: int = 60  # minimum RRULE recurrence interval
+
+    # -- Learning plan --
+    plan_min_weeks: int = 2
+    plan_max_weeks: int = 8
+    plan_default_weeks: int = 4
+    plan_max_topics_per_week: int = 8
+    plan_topic_min_exercises: int = 3
+    plan_topic_mastery_score: float = 7.0
+    plan_behind_schedule_pct: float = 20.0
+    plan_min_sessions_before_suggest: int = 2
 
     # -- Health check thresholds (proactive/admin_reports.py) --
     pool_usage_alert_pct: int = 80
@@ -146,12 +161,12 @@ TIER_LIMITS: dict[UserTier, TierLimits] = {
         max_turns_per_session=20,
         max_sessions_per_day=5,
         max_cost_per_day_usd=2.00,
-        session_idle_timeout_seconds=300,
+        session_idle_timeout_seconds=360,
         thinking_type="adaptive",
         max_llm_notifications_per_day=2,
         rate_limit_per_minute=5,
         max_cost_per_session_usd=0.40,
-        redis_session_ttl_seconds=420,  # idle_timeout (300) + 120s buffer for cleanup loop delays
+        redis_session_ttl_seconds=480,  # idle_timeout (360) + 120s buffer for cleanup loop delays
     ),
     UserTier.PREMIUM: TierLimits(
         model="claude-sonnet-4-6",

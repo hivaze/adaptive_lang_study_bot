@@ -383,5 +383,6 @@
   "notif.dormant_weekly": [
     "{name}, suas habilidades em {target_language} estão esperando por você! Mesmo uma sessão rápida de 5 minutos ajuda a manter tudo fresco.",
     "Ainda pensando em aprender {target_language}, {name}? Seu progresso está salvo e seu tutor está pronto para continuar de onde você parou."
-  ]
+  ],
+  "pipeline.plan_completed": "Você completou seu plano de estudos com objetivo {target_level}! Hora de criar um novo plano para o próximo nível."
 }

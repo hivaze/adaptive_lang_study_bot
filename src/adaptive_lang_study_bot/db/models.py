@@ -133,6 +133,9 @@ class User(Base):
     notifications: Mapped[list["Notification"]] = relationship(
         back_populates="user", cascade="all, delete-orphan", lazy="raise",
     )
+    learning_plans: Mapped[list["LearningPlan"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan", lazy="raise",
+    )
 
     __table_args__ = (
         CheckConstraint("level IN ('A1','A2','B1','B2','C1','C2')", name="ck_users_level"),
@@ -415,6 +418,62 @@ class Notification(Base):
         Index("idx_notifications_user_time", "user_id", "created_at"),
         Index("idx_notifications_schedule", "schedule_id"),
         Index("idx_notifications_session", "session_id"),
+    )
+
+
+class LearningPlan(Base):
+    """A user's active learning plan.  One row per user max (UNIQUE on user_id).
+
+    Existence of a row means the plan is active.  When the plan is completed
+    or replaced, the row is deleted.
+    """
+
+    __tablename__ = "learning_plans"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+    )
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.telegram_id", ondelete="CASCADE"),
+        unique=True,
+    )
+
+    # Plan metadata
+    current_level: Mapped[str] = mapped_column(String(2))
+    target_level: Mapped[str] = mapped_column(String(2))
+
+    # Timeline
+    start_date: Mapped[date] = mapped_column(Date)
+    target_end_date: Mapped[date] = mapped_column(Date)
+    total_weeks: Mapped[int] = mapped_column(SmallInteger)
+
+    # Plan content (JSONB) — phases with topics, structure only
+    plan_data: Mapped[dict] = mapped_column(JSONB)
+
+    # Adaptation tracking
+    times_adapted: Mapped[int] = mapped_column(SmallInteger, default=0)
+    last_adapted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Metadata
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow,
+    )
+
+    # Relationships
+    user: Mapped["User"] = relationship(back_populates="learning_plans", lazy="raise")
+
+    __table_args__ = (
+        CheckConstraint(
+            "current_level IN ('A1','A2','B1','B2','C1','C2')",
+            name="ck_learning_plans_current_level",
+        ),
+        CheckConstraint(
+            "target_level IN ('A1','A2','B1','B2','C1','C2')",
+            name="ck_learning_plans_target_level",
+        ),
     )
 
 

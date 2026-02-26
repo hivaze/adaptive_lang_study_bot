@@ -11,6 +11,7 @@ from adaptive_lang_study_bot.enums import NotificationStatus, PipelineStatus, Sc
 from adaptive_lang_study_bot.utils import compute_new_streak, compute_next_trigger, safe_zoneinfo, user_local_now
 from adaptive_lang_study_bot.db.models import (
     ExerciseResult,
+    LearningPlan,
     Notification,
     Schedule,
     Session,
@@ -1194,6 +1195,52 @@ class ExerciseResultRepo:
         return result.scalar_one()
 
     @staticmethod
+    async def get_stats_for_topics(
+        session: AsyncSession,
+        user_id: int,
+        topics: list[str],
+        since: date,
+    ) -> dict[str, dict]:
+        """Per-topic stats for specific topics since a given date.
+
+        Uses case-insensitive matching so plan topic names align with
+        exercise topic names even when casing differs.
+        """
+        if not topics:
+            return {}
+        since_dt = datetime(since.year, since.month, since.day, tzinfo=timezone.utc)
+        lower_topics = [t.lower() for t in topics]
+        result = await session.execute(
+            select(
+                ExerciseResult.topic,
+                func.count(),
+                func.avg(ExerciseResult.score),
+                func.max(ExerciseResult.created_at),
+            )
+            .where(
+                ExerciseResult.user_id == user_id,
+                ExerciseResult.created_at >= since_dt,
+                func.lower(ExerciseResult.topic).in_(lower_topics),
+            )
+            .group_by(ExerciseResult.topic),
+        )
+        # Build a case-insensitive lookup: map lowercase → original plan topic
+        lower_to_plan: dict[str, str] = {}
+        for t in topics:
+            low = t.lower()
+            if low not in lower_to_plan:
+                lower_to_plan[low] = t
+        stats: dict[str, dict] = {}
+        for row in result.all():
+            plan_topic = lower_to_plan.get(row[0].lower(), row[0])
+            stats[plan_topic] = {
+                "count": row[1],
+                "avg_score": round(float(row[2]), 1) if row[2] is not None else None,
+                "last_practiced": row[3].strftime("%Y-%m-%d") if row[3] else None,
+            }
+        return stats
+
+    @staticmethod
     async def delete_for_user(session: AsyncSession, user_id: int) -> int:
         """Delete all exercise results for a user. Returns count of deleted rows."""
         result = await session.execute(
@@ -1289,6 +1336,59 @@ class NotificationRepo:
 # ---------------------------------------------------------------------------
 # VocabularyReviewLogRepo
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# LearningPlanRepo
+# ---------------------------------------------------------------------------
+
+
+class LearningPlanRepo:
+    """One row per user max.  Existence of a row means the plan is active."""
+
+    @staticmethod
+    async def get_active(session: AsyncSession, user_id: int) -> LearningPlan | None:
+        """Get the user's active learning plan (at most one due to UNIQUE on user_id)."""
+        result = await session.execute(
+            select(LearningPlan).where(LearningPlan.user_id == user_id),
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def create(session: AsyncSession, **kwargs) -> LearningPlan:
+        """Create a new plan.  Deletes any existing plan for this user first."""
+        user_id = kwargs.get("user_id")
+        if user_id is not None:
+            await session.execute(
+                delete(LearningPlan).where(LearningPlan.user_id == user_id),
+            )
+        plan = LearningPlan(**kwargs)
+        session.add(plan)
+        await session.flush()
+        return plan
+
+    @staticmethod
+    async def update_fields(
+        session: AsyncSession,
+        plan_id: uuid.UUID,
+        **kwargs,
+    ) -> None:
+        kwargs["updated_at"] = _utcnow()
+        await session.execute(
+            update(LearningPlan).where(LearningPlan.id == plan_id).values(**kwargs),
+        )
+
+    @staticmethod
+    async def delete(session: AsyncSession, user_id: int) -> None:
+        """Delete the user's plan (plan completed or abandoned)."""
+        await session.execute(
+            delete(LearningPlan).where(LearningPlan.user_id == user_id),
+        )
+
+
+# ---------------------------------------------------------------------------
+# VocabularyReviewLogRepo
+# ---------------------------------------------------------------------------
+
 
 class VocabularyReviewLogRepo:
 

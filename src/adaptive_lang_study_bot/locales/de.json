@@ -383,5 +383,6 @@
   "notif.dormant_weekly": [
     "{name}, deine {target_language}-Kenntnisse warten auf dich! Schon eine kurze 5-Minuten-Sitzung hilft, alles frisch zu halten.",
     "Denkst du immer noch ans {target_language}-Lernen, {name}? Dein Fortschritt ist gespeichert und dein Tutor ist bereit, dort weiterzumachen, wo du aufgehört hast."
-  ]
+  ],
+  "pipeline.plan_completed": "Du hast deinen Lernplan mit dem Ziel {target_level} abgeschlossen! Zeit, einen neuen Plan für das nächste Level zu erstellen."
 }

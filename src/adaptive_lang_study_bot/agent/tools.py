@@ -2,6 +2,7 @@ import json
 import re
 import uuid as _uuid
 from collections.abc import Callable
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
@@ -11,9 +12,10 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from dateutil.rrule import DAILY, HOURLY, MINUTELY, MONTHLY, SECONDLY, WEEKLY, YEARLY, rrulestr
 
-from adaptive_lang_study_bot.config import TIER_LIMITS, tuning
+from adaptive_lang_study_bot.config import CEFR_LEVELS, TIER_LIMITS, tuning
 from adaptive_lang_study_bot.db.repositories import (
     ExerciseResultRepo,
+    LearningPlanRepo,
     ScheduleRepo,
     SessionRepo,
     UserRepo,
@@ -37,7 +39,7 @@ from adaptive_lang_study_bot.utils import compute_next_trigger, safe_zoneinfo, s
 # ---------------------------------------------------------------------------
 
 _USER_MUTABLE_FIELDS = {"interests", "learning_goals", "preferred_difficulty", "session_style", "topics_to_avoid", "notifications_paused", "additional_notes"}
-_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]
+_LEVELS = CEFR_LEVELS
 _MAX_SCHEDULES_PER_USER = 10
 _MAX_SCHEDULES_PER_TYPE = 3
 _VOCAB_SEARCH_LIMIT = 20
@@ -50,6 +52,81 @@ _FREQ_BASE_MINUTES: dict[int, float] = {
     YEARLY: 525960, MONTHLY: 43200, WEEKLY: 10080,
     DAILY: 1440, HOURLY: 60, MINUTELY: 1, SECONDLY: 1 / 60,
 }
+
+
+def compute_plan_progress(
+    plan_data: dict,
+    total_weeks: int,
+    start_date: date,
+    topic_stats: dict[str, dict],
+) -> dict:
+    """Derive learning plan progress from ExerciseResult data.
+
+    Called by the manage_learning_plan tool and by prompt_builder / proactive
+    triggers to compute plan progress without storing per-topic state.
+    """
+    phases = plan_data.get("phases", [])
+
+    completed_topics = 0
+    total_topics = 0
+    phase_results: list[dict] = []
+
+    for phase in phases:
+        topics = phase.get("topics", [])
+        total_topics += len(topics)
+        topic_details: list[dict] = []
+        phase_completed = 0
+
+        for topic_name in topics:
+            stats = topic_stats.get(topic_name, {})
+            count = stats.get("count", 0)
+            avg_score = stats.get("avg_score")
+            last_practiced = stats.get("last_practiced")
+
+            if (
+                count >= tuning.plan_topic_min_exercises
+                and avg_score is not None
+                and avg_score >= tuning.plan_topic_mastery_score
+            ):
+                status = "completed"
+                phase_completed += 1
+                completed_topics += 1
+            elif count > 0:
+                status = "in_progress"
+            else:
+                status = "pending"
+
+            detail: dict[str, Any] = {
+                "name": topic_name,
+                "status": status,
+                "exercises": count,
+            }
+            if avg_score is not None:
+                detail["avg_score"] = avg_score
+            if last_practiced:
+                detail["last_practiced"] = last_practiced
+            topic_details.append(detail)
+
+        phase_status = "completed" if phase_completed == len(topics) and topics else (
+            "in_progress" if phase_completed > 0 or any(
+                t["status"] == "in_progress" for t in topic_details
+            ) else "pending"
+        )
+        phase_results.append({
+            "week": phase.get("week"),
+            "focus": phase.get("focus"),
+            "status": phase_status,
+            "topics": topic_details,
+        })
+
+    progress_pct = round(completed_topics / total_topics * 100) if total_topics > 0 else 0
+
+    return {
+        "progress_pct": progress_pct,
+        "completed_topics": completed_topics,
+        "total_topics": total_topics,
+        "phases": phase_results,
+    }
 
 
 def _rrule_interval_minutes(rrule_str: str) -> float:
@@ -73,6 +150,7 @@ TOOL_NAMES = [
     "mcp__langbot__search_vocabulary",
     "mcp__langbot__get_exercise_history",
     "mcp__langbot__get_progress_summary",
+    "mcp__langbot__manage_learning_plan",
 ]
 
 # Tools allowed per session type
@@ -81,7 +159,7 @@ _SESSION_TYPE_TOOLS: dict[SessionType, set[str]] = {
         "get_user_profile", "update_preference", "record_exercise_result",
         "add_vocabulary", "get_due_vocabulary",
         "manage_schedule", "search_vocabulary", "get_exercise_history",
-        "get_progress_summary",
+        "get_progress_summary", "manage_learning_plan",
     },
     SessionType.ONBOARDING: {
         "get_user_profile", "update_preference", "record_exercise_result",
@@ -92,11 +170,11 @@ _SESSION_TYPE_TOOLS: dict[SessionType, set[str]] = {
         "send_notification",
     },
     SessionType.PROACTIVE_QUIZ: {
-        "get_user_profile", "record_exercise_result", "send_notification",
+        "get_user_profile", "send_notification",
     },
     SessionType.PROACTIVE_SUMMARY: {
         "get_user_profile", "get_exercise_history", "get_progress_summary",
-        "send_notification",
+        "send_notification", "manage_learning_plan",
     },
     SessionType.PROACTIVE_NUDGE: {
         "get_user_profile", "send_notification",
@@ -353,6 +431,7 @@ def create_session_tools(
                     return _err("User not found")
 
                 # Level adjustment based on recent scores
+                new_level: str | None = None
                 window = tuning.level_recent_window
                 if len(scores) >= window:
                     recent_n = scores[-window:]
@@ -367,6 +446,32 @@ def create_session_tools(
                         new_level = _LEVELS[current_idx - 1]
                         await UserRepo.update_fields(db_session, user_id, level=new_level)
                         adjustments.append(f"Level DOWN: {user.level} → {new_level}")
+
+                # Check learning plan impact on level change
+                if new_level is not None:
+                    try:
+                        active_plan = await LearningPlanRepo.get_active(db_session, user_id)
+                        if active_plan:
+                            new_idx = _LEVELS.index(new_level)
+                            target_idx = (
+                                _LEVELS.index(active_plan.target_level)
+                                if active_plan.target_level in _LEVELS else 0
+                            )
+                            if new_idx >= target_idx:
+                                await LearningPlanRepo.delete(db_session, user_id)
+                                adjustments.append(
+                                    f"Learning plan COMPLETED: reached target level "
+                                    f"{active_plan.target_level}. Consider creating a new plan."
+                                )
+                            elif new_idx < _LEVELS.index(active_plan.current_level):
+                                adjustments.append(
+                                    f"Level dropped below plan baseline. "
+                                    f"Consider adapting your learning plan."
+                                )
+                    except SQLAlchemyError:
+                        logger.warning(
+                            "Failed to check learning plan on level change for user {}", user_id,
+                        )
 
                 # Weak/strong area adjustment — requires multiple qualifying
                 # scores for the same topic before modifying areas.
@@ -931,6 +1036,289 @@ def create_session_tools(
 
             return _ok(result)
 
+    # ---------------------------------------------------------------
+    # manage_learning_plan
+    # ---------------------------------------------------------------
+
+    @tool(
+        "manage_learning_plan",
+        "Manage the student's learning plan. "
+        "Actions: 'get' (retrieve active plan with derived progress), "
+        "'create' (create a new plan — supersedes any existing active plan), "
+        "'adapt' (modify remaining phases when student is ahead/behind). "
+        "Plans have a 2-8 week horizon and target the next CEFR level. "
+        "When recording exercises for plan topics, use the exact plan topic names in the topic field.",
+        {"action": str, "description": str, "total_weeks": int,
+         "phases": str, "updated_phases": str, "adaptation_reason": str},
+    )
+    async def manage_learning_plan(args: dict[str, Any]) -> dict[str, Any]:
+        action = args["action"].lower()
+
+        # Proactive sessions can only read
+        _read_only = session_type not in (
+            SessionType.INTERACTIVE, SessionType.ONBOARDING,
+        )
+
+        async with session_factory() as db_session:
+            try:
+                if action == "get":
+                    plan = await LearningPlanRepo.get_active(db_session, user_id)
+                    if plan is None:
+                        return _ok({"has_plan": False})
+
+                    # Derive progress from ExerciseResult data
+                    all_topics = [
+                        t
+                        for p in (plan.plan_data or {}).get("phases", [])
+                        for t in p.get("topics", [])
+                    ]
+                    topic_stats = await ExerciseResultRepo.get_stats_for_topics(
+                        db_session, user_id, all_topics, plan.start_date,
+                    )
+                    progress = compute_plan_progress(
+                        plan.plan_data or {},
+                        plan.total_weeks,
+                        plan.start_date,
+                        topic_stats,
+                    )
+
+                    # Compute current week from date
+                    today = datetime.now(_user_tz).date()
+                    elapsed_days = (today - plan.start_date).days
+                    current_week = max(1, min(plan.total_weeks, elapsed_days // 7 + 1))
+                    days_remaining = max(0, (plan.target_end_date - today).days)
+
+                    return _ok({
+                        "has_plan": True,
+                        "plan": {
+                            "id": str(plan.id),
+                            "current_level": plan.current_level,
+                            "target_level": plan.target_level,
+                            "start_date": plan.start_date.isoformat(),
+                            "target_end_date": plan.target_end_date.isoformat(),
+                            "days_remaining": days_remaining,
+                            "current_week": current_week,
+                            "total_weeks": plan.total_weeks,
+                            "progress_pct": progress["progress_pct"],
+                            "completed_topics": progress["completed_topics"],
+                            "total_topics": progress["total_topics"],
+                            "times_adapted": plan.times_adapted,
+                            "description": (plan.plan_data or {}).get("description", ""),
+                            "phases": progress["phases"],
+                        },
+                    })
+
+                if _read_only:
+                    return _err("This session type can only read learning plans (action='get').")
+
+                if action == "create":
+                    desc = str(args.get("description", "")).strip()
+                    if not desc:
+                        return _err("description is required")
+
+                    total_weeks = int(args.get("total_weeks", tuning.plan_default_weeks))
+                    if not (tuning.plan_min_weeks <= total_weeks <= tuning.plan_max_weeks):
+                        return _err(
+                            f"total_weeks must be between {tuning.plan_min_weeks} "
+                            f"and {tuning.plan_max_weeks}"
+                        )
+
+                    # Parse phases JSON
+                    phases_raw = args.get("phases", "[]")
+                    try:
+                        phases = json.loads(phases_raw) if isinstance(phases_raw, str) else phases_raw
+                    except json.JSONDecodeError:
+                        return _err("phases must be valid JSON array")
+                    if not isinstance(phases, list) or len(phases) != total_weeks:
+                        return _err(f"phases must be a JSON array with exactly {total_weeks} entries")
+
+                    # Validate each phase
+                    for i, phase in enumerate(phases):
+                        if not isinstance(phase, dict):
+                            return _err(f"Phase {i + 1} must be a JSON object")
+                        if not phase.get("focus"):
+                            return _err(f"Phase {i + 1} missing 'focus'")
+                        topics = phase.get("topics", [])
+                        if not isinstance(topics, list) or not topics:
+                            return _err(f"Phase {i + 1} must have at least one topic")
+                        if len(topics) > tuning.plan_max_topics_per_week:
+                            return _err(
+                                f"Phase {i + 1} has {len(topics)} topics, "
+                                f"max is {tuning.plan_max_topics_per_week}"
+                            )
+
+                    # Compute dates
+                    today = datetime.now(_user_tz).date()
+                    target_end = today + timedelta(weeks=total_weeks)
+
+                    # Build plan_data with computed dates per phase
+                    enriched_phases = []
+                    for i, phase in enumerate(phases):
+                        phase_start = today + timedelta(weeks=i)
+                        phase_end = today + timedelta(weeks=i + 1) - timedelta(days=1)
+                        enriched = {
+                            "week": i + 1,
+                            "start_date": phase_start.isoformat(),
+                            "end_date": phase_end.isoformat(),
+                            "focus": str(phase["focus"]).strip()[:200],
+                            "topics": [str(t).strip()[:100] for t in phase["topics"]],
+                        }
+                        if phase.get("vocabulary_theme"):
+                            enriched["vocabulary_theme"] = str(phase["vocabulary_theme"]).strip()[:100]
+                        if phase.get("vocabulary_target"):
+                            enriched["vocabulary_target"] = min(
+                                int(phase["vocabulary_target"]), 30,
+                            )
+                        if phase.get("assessment"):
+                            enriched["assessment"] = phase["assessment"]
+                        enriched_phases.append(enriched)
+
+                    # Determine target level
+                    user = await UserRepo.get(db_session, user_id)
+                    if user is None:
+                        return _err("User not found")
+                    current_level = user.level
+                    current_idx = _LEVELS.index(current_level) if current_level in _LEVELS else 0
+                    target_level = (
+                        _LEVELS[current_idx + 1]
+                        if current_idx < len(_LEVELS) - 1
+                        else current_level
+                    )
+
+                    plan_data = {
+                        "description": desc[:500],
+                        "weekly_sessions_target": int(args.get("weekly_sessions_target", 4)),
+                        "phases": enriched_phases,
+                        "adaptation_log": [],
+                    }
+
+                    # create() deletes any existing plan for this user
+                    new_plan = await LearningPlanRepo.create(
+                        db_session,
+                        user_id=user_id,
+                        current_level=current_level,
+                        target_level=target_level,
+                        start_date=today,
+                        target_end_date=target_end,
+                        total_weeks=total_weeks,
+                        plan_data=plan_data,
+                    )
+                    await db_session.commit()
+
+                    return _ok({
+                        "status": "created",
+                        "plan_id": str(new_plan.id),
+                        "current_level": current_level,
+                        "target_level": target_level,
+                        "start_date": today.isoformat(),
+                        "target_end_date": target_end.isoformat(),
+                        "total_weeks": total_weeks,
+                        "total_topics": sum(len(p.get("topics", [])) for p in enriched_phases),
+                    })
+
+                if action == "adapt":
+                    plan = await LearningPlanRepo.get_active(db_session, user_id)
+                    if plan is None:
+                        return _err("No active learning plan to adapt")
+
+                    reason = str(args.get("adaptation_reason", "")).strip()
+                    if not reason:
+                        return _err("adaptation_reason is required")
+
+                    updated_raw = args.get("updated_phases", "[]")
+                    try:
+                        updated_phases = (
+                            json.loads(updated_raw) if isinstance(updated_raw, str) else updated_raw
+                        )
+                    except json.JSONDecodeError:
+                        return _err("updated_phases must be valid JSON array")
+                    if not isinstance(updated_phases, list) or not updated_phases:
+                        return _err("updated_phases must be a non-empty JSON array")
+
+                    # Compute current week
+                    today = datetime.now(_user_tz).date()
+                    elapsed_days = (today - plan.start_date).days
+                    current_week = max(1, min(plan.total_weeks, elapsed_days // 7 + 1))
+
+                    # Validate phase structure
+                    for i, phase in enumerate(updated_phases):
+                        if not isinstance(phase, dict):
+                            return _err(f"Updated phase {i + 1} must be a JSON object")
+                        if not phase.get("focus"):
+                            return _err(f"Updated phase {i + 1} missing 'focus'")
+                        topics = phase.get("topics", [])
+                        if not isinstance(topics, list) or not topics:
+                            return _err(f"Updated phase {i + 1} must have at least one topic")
+                        if len(topics) > tuning.plan_max_topics_per_week:
+                            return _err(
+                                f"Updated phase {i + 1} has {len(topics)} topics, "
+                                f"max is {tuning.plan_max_topics_per_week}"
+                            )
+
+                    # Replace future phases, keep past/current ones
+                    plan_data = dict(plan.plan_data or {})
+                    old_phases = plan_data.get("phases", [])
+                    kept_phases = [p for p in old_phases if p.get("week", 0) <= current_week]
+
+                    # Enrich updated phases with dates
+                    new_total_weeks = current_week + len(updated_phases)
+                    new_end_date = plan.start_date + timedelta(weeks=new_total_weeks)
+
+                    for i, phase in enumerate(updated_phases):
+                        week_num = current_week + i + 1
+                        phase_start = plan.start_date + timedelta(weeks=week_num - 1)
+                        phase_end = plan.start_date + timedelta(weeks=week_num) - timedelta(days=1)
+                        enriched = {
+                            "week": week_num,
+                            "start_date": phase_start.isoformat(),
+                            "end_date": phase_end.isoformat(),
+                            "focus": str(phase["focus"]).strip()[:200],
+                            "topics": [str(t).strip()[:100] for t in phase["topics"]],
+                        }
+                        if phase.get("vocabulary_theme"):
+                            enriched["vocabulary_theme"] = str(phase["vocabulary_theme"]).strip()[:100]
+                        if phase.get("vocabulary_target"):
+                            enriched["vocabulary_target"] = min(int(phase["vocabulary_target"]), 30)
+                        if phase.get("assessment"):
+                            enriched["assessment"] = phase["assessment"]
+                        kept_phases.append(enriched)
+
+                    plan_data["phases"] = kept_phases
+
+                    # Record adaptation
+                    log = plan_data.setdefault("adaptation_log", [])
+                    log.append({
+                        "date": today.isoformat(),
+                        "reason": reason[:300],
+                        "week": current_week,
+                    })
+
+                    await LearningPlanRepo.update_fields(
+                        db_session,
+                        plan.id,
+                        plan_data=plan_data,
+                        total_weeks=new_total_weeks,
+                        target_end_date=new_end_date,
+                        times_adapted=plan.times_adapted + 1,
+                        last_adapted_at=datetime.now(timezone.utc),
+                    )
+                    await db_session.commit()
+
+                    return _ok({
+                        "status": "adapted",
+                        "plan_id": str(plan.id),
+                        "new_total_weeks": new_total_weeks,
+                        "new_end_date": new_end_date.isoformat(),
+                        "times_adapted": plan.times_adapted + 1,
+                        "reason": reason,
+                    })
+
+                return _err(f"Unknown action '{action}'. Use: get, create, adapt")
+
+            except (IntegrityError, SQLAlchemyError):
+                logger.exception("Failed to manage learning plan for user {}", user_id)
+                return _err("Database error managing learning plan, please try again")
+
     # --- Build list and permission check ---
 
     all_tools = [
@@ -944,6 +1332,7 @@ def create_session_tools(
         search_vocabulary,
         get_exercise_history,
         get_progress_summary,
+        manage_learning_plan,
     ]
 
     def can_use_tool(tool_name: str) -> bool:

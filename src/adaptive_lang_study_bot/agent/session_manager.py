@@ -36,6 +36,7 @@ from adaptive_lang_study_bot.agent.prompt_builder import (
     compute_session_context,
 )
 from adaptive_lang_study_bot.agent.tools import (
+    compute_plan_progress,
     create_langbot_server,
     create_session_tools,
 )
@@ -52,6 +53,7 @@ from adaptive_lang_study_bot.db.engine import async_session_factory
 from adaptive_lang_study_bot.db.models import Session, User
 from adaptive_lang_study_bot.db.repositories import (
     ExerciseResultRepo,
+    LearningPlanRepo,
     ScheduleRepo,
     SessionRepo,
     UserRepo,
@@ -175,8 +177,32 @@ async def run_proactive_llm_session(
     sdk_started = False
 
     try:
-        # 2. Build proactive system prompt
-        system_prompt = build_proactive_prompt(user, session_type, trigger_data)
+        # 2. Build proactive system prompt (with plan context for summaries)
+        active_plan = None
+        plan_progress = None
+        if session_type == SessionType.PROACTIVE_SUMMARY:
+            async with async_session_factory() as db:
+                active_plan = await LearningPlanRepo.get_active(db, user_id)
+                if active_plan:
+                    all_plan_topics = [
+                        t
+                        for p in (active_plan.plan_data or {}).get("phases", [])
+                        for t in p.get("topics", [])
+                    ]
+                    topic_stats = await ExerciseResultRepo.get_stats_for_topics(
+                        db, user_id, all_plan_topics, active_plan.start_date,
+                    )
+                    plan_progress = compute_plan_progress(
+                        active_plan.plan_data or {},
+                        active_plan.total_weeks,
+                        active_plan.start_date,
+                        topic_stats,
+                    )
+
+        system_prompt = build_proactive_prompt(
+            user, session_type, trigger_data,
+            active_plan=active_plan, plan_progress=plan_progress,
+        )
 
         # 3. Create DB session record
         async with async_session_factory() as db:
@@ -204,11 +230,11 @@ async def run_proactive_llm_session(
         allowed_tool_names = [f"mcp__langbot__{tool.name}" for tool in tools]
         server = create_langbot_server(tools)
 
-        # 7. Create SDK client (haiku, no hooks, no thinking)
+        # 7. Create SDK client (haiku, no hooks)
         options = ClaudeAgentOptions(
             model=tuning.proactive_model,
             max_turns=tuning.proactive_max_turns,
-            thinking={"type": "disabled"},
+            thinking={"type": tuning.proactive_thinking},
             effort=tuning.proactive_effort,
             mcp_servers={"langbot": server},
             allowed_tools=allowed_tool_names,
@@ -308,6 +334,7 @@ async def run_summary_llm_session(
     user_streak: int,
     user_level: str,
     user_timezone: str = "UTC",
+    plan_summary: str | None = None,
 ) -> tuple[str | None, float]:
     """Run a short-lived LLM session to generate an AI session summary.
 
@@ -336,12 +363,13 @@ async def run_summary_llm_session(
             user_streak=user_streak,
             user_level=user_level,
             user_timezone=user_timezone,
+            plan_summary=plan_summary,
         )
 
         options = ClaudeAgentOptions(
             model=tuning.proactive_model,
             max_turns=tuning.summary_max_turns,
-            thinking={"type": "adaptive"},
+            thinking={"type": tuning.summary_thinking},
             effort=tuning.summary_effort,
             permission_mode="bypassPermissions",
             system_prompt=system_prompt,
@@ -459,6 +487,35 @@ async def _generate_and_send_summary(
             or session_data.get("words_reviewed", 0)
         )
 
+        # Fetch plan context for the summary (best-effort)
+        plan_summary: str | None = None
+        try:
+            async with async_session_factory() as db:
+                active_plan = await LearningPlanRepo.get_active(db, user_id)
+                if active_plan:
+                    all_topics = [
+                        t_name
+                        for p in (active_plan.plan_data or {}).get("phases", [])
+                        for t_name in p.get("topics", [])
+                    ]
+                    topic_stats = await ExerciseResultRepo.get_stats_for_topics(
+                        db, user_id, all_topics, active_plan.start_date,
+                    )
+                    progress = compute_plan_progress(
+                        active_plan.plan_data or {},
+                        active_plan.total_weeks,
+                        active_plan.start_date,
+                        topic_stats,
+                    )
+                    plan_summary = (
+                        f"{active_plan.current_level}\u2192{active_plan.target_level}, "
+                        f"Week {progress.get('current_week', '?')}/{active_plan.total_weeks}, "
+                        f"{progress.get('progress_pct', 0)}% complete "
+                        f"({progress.get('completed_topics', 0)}/{progress.get('total_topics', 0)} topics)"
+                    )
+        except Exception:
+            logger.debug("Failed to fetch plan context for summary (user={})", user_id)
+
         # Try AI summary
         summary_text: str | None = None
         if close_reason in _AI_SUMMARY_REASONS:
@@ -471,6 +528,7 @@ async def _generate_and_send_summary(
                 user_streak=user_streak,
                 user_level=user_level,
                 user_timezone=managed.user_timezone,
+                plan_summary=plan_summary,
             )
 
         # Fallback to enriched template
@@ -879,6 +937,25 @@ class SessionManager:
                     stale_topics, topic_performance = [], {}
                 active_schedules = await ScheduleRepo.get_for_user(db, user_id)
 
+                # Fetch active learning plan and derive progress
+                active_plan = await LearningPlanRepo.get_active(db, user_id)
+                plan_progress = None
+                if active_plan:
+                    all_plan_topics = [
+                        t
+                        for p in (active_plan.plan_data or {}).get("phases", [])
+                        for t in p.get("topics", [])
+                    ]
+                    topic_stats = await ExerciseResultRepo.get_stats_for_topics(
+                        db, user_id, all_plan_topics, active_plan.start_date,
+                    )
+                    plan_progress = compute_plan_progress(
+                        active_plan.plan_data or {},
+                        active_plan.total_weeks,
+                        active_plan.start_date,
+                        topic_stats,
+                    )
+
                 # Clear consumed celebrations so they aren't shown again
                 needs_commit = False
                 if session_ctx.get("celebrations"):
@@ -911,6 +988,8 @@ class SessionManager:
                     }
                     for s in active_schedules
                 ],
+                active_plan=active_plan,
+                plan_progress=plan_progress,
             )
 
             # Create DB session record

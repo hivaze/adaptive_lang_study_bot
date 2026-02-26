@@ -71,8 +71,6 @@ class SessionHookState:
 
     def __init__(self, user_id: int) -> None:
         self.user_id = user_id
-        self.tool_calls: list[dict] = []
-        self.prompts: list[dict] = []
         self.stop_data: dict | None = None
         self.turn_count: int = 0
         self.max_turns: int = 0
@@ -110,11 +108,6 @@ def build_session_hooks(user_id: int) -> tuple[dict[str, list[HookMatcher]], Ses
         tool_name = input_data.get("tool_name", "unknown")
         tool_input = input_data.get("tool_input", {})
         tool_output = input_data.get("tool_response", "")
-
-        state.tool_calls.append({
-            "tool": tool_name,
-            "timestamp": time.time(),
-        })
 
         logger.debug("PostToolUse [user={}]: {} (input: {})", user_id, tool_name, str(tool_input)[:100])
 
@@ -225,10 +218,6 @@ def build_session_hooks(user_id: int) -> tuple[dict[str, list[HookMatcher]], Ses
     ) -> dict[str, Any]:
         """Log user prompts and inject wrap-up hint near turn limit."""
         prompt = input_data.get("prompt", "")
-        state.prompts.append({
-            "text": prompt[:500],
-            "timestamp": time.time(),
-        })
         logger.debug("UserPromptSubmit [user={}]: {}", user_id, prompt[:80])
 
         # Inject wrap-up hint when approaching turn limit

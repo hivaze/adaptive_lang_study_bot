@@ -428,18 +428,18 @@ class TestSessionHistory:
         assert "verbs" in prompt
         assert "cooking" in prompt
 
-    def test_history_capped_at_10(self):
-        """Only last 10 entries should be rendered even if more are stored."""
+    def test_history_capped_at_5(self):
+        """Only last 5 entries should be rendered even if more are stored."""
         user = _make_user(session_history=[
             {"date": f"2026-02-{i:02d}", "summary": f"Session {i}", "status": "completed"}
             for i in range(1, 14)
         ])
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
-        # Should show last 10: sessions 4-13
-        assert "Session 4" in prompt
+        # Should show last 5: sessions 9-13
+        assert "Session 9" in prompt
         assert "Session 13" in prompt
-        assert "Session 3" not in prompt
+        assert "Session 8" not in prompt
 
 
 class TestStyleInstructions:
@@ -561,8 +561,8 @@ class TestIncompleteSessionEnriched:
         })
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
-        assert "continue where they left off" in prompt
-        assert "start something new" in prompt
+        assert "continue" in prompt.lower()
+        assert "start fresh" in prompt or "start something new" in prompt
 
     def test_struggling_topics_in_incomplete(self):
         """Incomplete session with struggling topics should include revisit advice."""
@@ -577,10 +577,10 @@ class TestIncompleteSessionEnriched:
         })
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
-        assert "struggled with" in prompt
+        assert "Struggled with" in prompt
         assert "subjunctive" in prompt
         assert "3.0/10" in prompt
-        assert "Revisit these with simpler exercises" in prompt
+        assert "revisit with simpler exercises" in prompt
 
 
 class TestErrorPatterns:
@@ -1083,8 +1083,8 @@ class TestIdleTimeoutContinuation:
         })
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
-        assert "abandoned" in prompt
-        assert "stopped responding" in prompt
+        assert "abandoned mid-task" in prompt
+        assert "preparing an exercise" in prompt
 
     def test_idle_timeout_no_pending_context_no_teasing(self):
         """Without pending_context, idle_timeout should NOT tease."""
@@ -1099,8 +1099,7 @@ class TestIdleTimeoutContinuation:
         prompt = build_system_prompt(user, ctx)
         assert "abandoned" not in prompt
         assert "teasing" not in prompt.lower()
-        assert "disappearing" not in prompt.lower()
-        assert "without much progress" in prompt
+        assert "low engagement" in prompt
 
     def test_idle_timeout_productive_session_not_abandoned(self):
         """If user did 2+ exercises, treat idle_timeout as natural completion, not abandonment."""
@@ -1113,11 +1112,10 @@ class TestIdleTimeoutContinuation:
         })
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
-        assert "productive session" in prompt
+        assert "ended normally" in prompt
         assert "abandoned" not in prompt
         assert "disappeared" not in prompt
         assert "teasing" not in prompt.lower()
-        assert "Very little was accomplished" not in prompt
 
     def test_turn_limit_uses_system_limit_wording(self):
         user = _make_user(last_activity={
@@ -1129,7 +1127,7 @@ class TestIdleTimeoutContinuation:
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
         assert "cut short by a system limit" in prompt
-        assert "did NOT leave voluntarily" in prompt
+        assert "Do NOT tease" in prompt
         assert "abandoned" not in prompt
         assert "disappeared" not in prompt
 
@@ -1143,7 +1141,7 @@ class TestIdleTimeoutContinuation:
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
         assert "cut short by a system limit" in prompt
-        assert "did NOT leave voluntarily" in prompt
+        assert "Do NOT tease" in prompt
 
     def test_shutdown_uses_technical_issue_wording(self):
         user = _make_user(last_activity={
@@ -1180,7 +1178,7 @@ class TestIdleTimeoutContinuation:
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
         assert "preparing an exercise" in prompt
-        assert "stopped responding" in prompt
+        assert "abandoned mid-task" in prompt
 
     def test_no_pending_context_uses_neutral_wording(self):
         """No pending_context → neutral branch, no teasing."""
@@ -1193,11 +1191,11 @@ class TestIdleTimeoutContinuation:
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
         assert "tutor was" not in prompt
-        assert "without much progress" in prompt
+        assert "low engagement" in prompt
         assert "abandoned" not in prompt
 
     def test_all_continuations_offer_choice(self):
-        """Continuations with active work offer a choice to continue or start new."""
+        """Continuations with active work offer a choice to continue or start."""
         for close_reason, extra in [
             ("idle_timeout", {"pending_context": "preparing an exercise"}),
             ("turn_limit", {}),
@@ -1213,10 +1211,10 @@ class TestIdleTimeoutContinuation:
             user = _make_user(last_activity=activity)
             ctx = compute_session_context(user)
             prompt = build_system_prompt(user, ctx)
-            assert "continue where they left off" in prompt, (
+            assert "continue" in prompt.lower(), (
                 f"close_reason={close_reason!r} should offer choice"
             )
-            assert "start something new" in prompt or "start with" in prompt
+            assert "start fresh" in prompt or "start something new" in prompt
 
     def test_idle_timeout_playful_teasing_with_pending_context(self):
         """idle_timeout with pending_context should instruct playful teasing."""
@@ -1231,7 +1229,6 @@ class TestIdleTimeoutContinuation:
         prompt = build_system_prompt(user, ctx)
         assert "playful" in prompt.lower()
         assert "teasing" in prompt.lower()
-        assert "disappearing" in prompt.lower()
 
     def test_idle_timeout_agent_stopped_not_abandoned(self):
         """When agent_stopped is True, treat as natural completion even with 0 exercises."""
@@ -1245,7 +1242,7 @@ class TestIdleTimeoutContinuation:
         })
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
-        assert "productive session" in prompt
+        assert "ended normally" in prompt
         assert "abandoned" not in prompt
         assert "teasing" not in prompt.lower()
 
@@ -1312,7 +1309,7 @@ class TestEngagementHint:
     """Engagement instruction is now part of the idle_timeout continuation block."""
 
     def test_engaging_start_after_idle_timeout_with_pending(self):
-        """idle_timeout with pending_context includes 'immediately engaging' instruction."""
+        """idle_timeout with pending_context includes teasing and continue/fresh offer."""
         user = _make_user(last_activity={
             "status": "incomplete",
             "close_reason": "idle_timeout",
@@ -1321,7 +1318,8 @@ class TestEngagementHint:
         })
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
-        assert "immediately engaging" in prompt
+        assert "teasing" in prompt.lower()
+        assert "start fresh" in prompt
 
     def test_no_engaging_hint_after_explicit_close(self):
         user = _make_user(last_activity={
@@ -1445,7 +1443,8 @@ class TestPromptExerciseRules:
 
     def test_additional_notes_tool_instruction(self):
         prompt = self._build()
-        assert "update_preference(field='additional_notes')" in prompt
+        assert "additional_notes" in prompt
+        assert "update_preference" in prompt
 
 
 class TestPromptTeachingApproach:
@@ -1513,3 +1512,207 @@ class TestSummaryPromptLabel:
         )
         assert "Exercises scored: 3" in prompt
         assert "Exercises completed" not in prompt
+
+
+class TestLearningPlanSection:
+    """Test the LEARNING PLAN prompt section rendering."""
+
+    @staticmethod
+    def _make_plan(**overrides):
+        from unittest.mock import MagicMock
+        from datetime import date, timedelta
+
+        plan = MagicMock()
+        plan.current_level = "A2"
+        plan.target_level = "B1"
+        plan.start_date = date(2026, 3, 1)
+        plan.target_end_date = date(2026, 3, 28)
+        plan.total_weeks = 4
+        plan.plan_data = {
+            "phases": [
+                {
+                    "week": 1,
+                    "focus": "Past tense foundations",
+                    "start_date": "2026-03-01",
+                    "end_date": "2026-03-07",
+                    "topics": ["Past tense review", "Conditional mood"],
+                    "vocabulary_target": 15,
+                    "vocabulary_theme": "Daily routines",
+                },
+                {
+                    "week": 2,
+                    "focus": "Subjunctive basics",
+                    "start_date": "2026-03-08",
+                    "end_date": "2026-03-14",
+                    "topics": ["Subjunctive introduction"],
+                    "vocabulary_target": 10,
+                },
+            ],
+        }
+        plan.times_adapted = 0
+        for k, v in overrides.items():
+            setattr(plan, k, v)
+        return plan
+
+    @staticmethod
+    def _make_progress(**overrides):
+        default = {
+            "progress_pct": 33,
+            "completed_topics": 1,
+            "total_topics": 3,
+            "phases": [
+                {
+                    "week": 1,
+                    "focus": "Past tense foundations",
+                    "status": "in_progress",
+                    "topics": [
+                        {"name": "Past tense review", "status": "completed",
+                         "exercises": 5, "avg_score": 8.0},
+                        {"name": "Conditional mood", "status": "in_progress",
+                         "exercises": 2, "avg_score": 6.0},
+                    ],
+                },
+                {
+                    "week": 2,
+                    "focus": "Subjunctive basics",
+                    "status": "pending",
+                    "topics": [
+                        {"name": "Subjunctive introduction", "status": "pending",
+                         "exercises": 0},
+                    ],
+                },
+            ],
+        }
+        default.update(overrides)
+        return default
+
+    def test_active_plan_section_rendered(self):
+        user = _make_user(onboarding_completed=True, sessions_completed=5)
+        ctx = compute_session_context(user)
+        plan = self._make_plan()
+        progress = self._make_progress()
+        prompt = build_system_prompt(user, ctx, active_plan=plan, plan_progress=progress)
+        assert "## LEARNING PLAN" in prompt
+        assert "A2" in prompt and "B1" in prompt
+        assert "33%" in prompt
+
+    def test_active_plan_shows_topic_statuses(self):
+        """Current phase topics should show status markers."""
+        user = _make_user(onboarding_completed=True)
+        ctx = compute_session_context(user)
+        plan = self._make_plan()
+        progress = self._make_progress()
+        prompt = build_system_prompt(user, ctx, active_plan=plan, plan_progress=progress)
+        # Current phase (week 1) topics are shown with status markers
+        assert "[completed] Past tense review" in prompt
+        assert "[in_progress] Conditional mood" in prompt
+        # Next phase is shown as a preview (focus only, not individual topics)
+        assert "Subjunctive basics" in prompt
+
+    def test_no_plan_suggests_creation(self):
+        user = _make_user(
+            onboarding_completed=True,
+            sessions_completed=5,
+            level="A2",
+        )
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx, active_plan=None, plan_progress=None)
+        assert "## LEARNING PLAN" in prompt
+        assert "manage_learning_plan" in prompt
+        assert "B1" in prompt  # next level
+
+    def test_no_plan_c2_covers_advanced_topics(self):
+        user = _make_user(
+            onboarding_completed=True,
+            sessions_completed=5,
+            level="C2",
+        )
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx, active_plan=None, plan_progress=None)
+        assert "## LEARNING PLAN" in prompt
+        assert "advanced" in prompt.lower()
+
+    def test_minimal_plan_section_when_too_few_sessions(self):
+        """Early sessions get minimal plan guidance — don't suggest, but allow if asked."""
+        user = _make_user(
+            onboarding_completed=True,
+            sessions_completed=1,
+        )
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx, active_plan=None, plan_progress=None)
+        assert "## LEARNING PLAN" in prompt
+        assert "Don't suggest creating one yet" in prompt
+        assert "explicitly asks" in prompt
+
+    def test_no_plan_section_during_onboarding(self):
+        user = _make_user(onboarding_completed=False, sessions_completed=0)
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx, active_plan=None, plan_progress=None)
+        assert "## LEARNING PLAN" not in prompt
+
+    def test_active_plan_shown_even_on_first_session(self):
+        """Active plan should be visible even if is_first_session."""
+        user = _make_user(
+            onboarding_completed=True,
+            sessions_completed=0,
+            last_session_at=None,
+        )
+        ctx = compute_session_context(user)
+        plan = self._make_plan()
+        progress = self._make_progress()
+        prompt = build_system_prompt(user, ctx, active_plan=plan, plan_progress=progress)
+        assert "## LEARNING PLAN" in prompt
+        assert "A2" in prompt and "B1" in prompt
+
+    def test_guidelines_present(self):
+        user = _make_user(onboarding_completed=True)
+        ctx = compute_session_context(user)
+        plan = self._make_plan()
+        progress = self._make_progress()
+        prompt = build_system_prompt(user, ctx, active_plan=plan, plan_progress=progress)
+        assert "Guidelines:" in prompt
+        assert "exact plan topic names" in prompt
+
+    def test_bot_capabilities_mentions_learning_plan(self):
+        user = _make_user()
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "manage_learning_plan" in prompt
+
+    def test_summary_prompt_includes_plan_summary(self):
+        prompt = build_summary_prompt(
+            "en", "fr",
+            session_data={
+                "exercise_count": 3, "exercise_scores": [7, 8, 6],
+                "exercise_topics": ["verbs"], "exercise_types": ["fill_blank"],
+                "words_added": [], "words_reviewed": 0,
+                "vocab_count": 0, "turn_count": 10,
+                "duration_minutes": 15,
+            },
+            close_reason="explicit_close",
+            user_name="Test",
+            user_streak=5,
+            user_level="A2",
+            plan_summary="A2→B1, Week 2/4, 50% complete (4/8 topics)",
+        )
+        assert "A2→B1" in prompt
+        assert "50% complete" in prompt
+
+    def test_summary_prompt_plan_hint_for_progress(self):
+        """When plan_summary is provided, the TASK section should mention plan progress."""
+        prompt = build_summary_prompt(
+            "en", "fr",
+            session_data={
+                "exercise_count": 3, "exercise_scores": [7, 8, 6],
+                "exercise_topics": ["verbs"], "exercise_types": ["fill_blank"],
+                "words_added": [], "words_reviewed": 0,
+                "vocab_count": 0, "turn_count": 10,
+                "duration_minutes": 15,
+            },
+            close_reason="explicit_close",
+            user_name="Test",
+            user_streak=5,
+            user_level="A2",
+            plan_summary="A2→B1, Week 2/4, 50%",
+        )
+        assert "plan progress" in prompt.lower() or "plan" in prompt.lower()

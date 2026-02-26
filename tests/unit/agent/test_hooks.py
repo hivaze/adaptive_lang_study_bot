@@ -210,41 +210,10 @@ class TestSessionHookState:
     def test_initial_state(self):
         state = SessionHookState(user_id=42)
         assert state.user_id == 42
-        assert state.tool_calls == []
-        assert state.prompts == []
         assert state.turn_count == 0
         assert state.max_turns == 0
         assert state.wrap_up_injected is False
         assert state.exercise_scores == []
-
-    @pytest.mark.asyncio
-    async def test_tool_calls_tracked(self):
-        hooks, state = build_session_hooks(user_id=1)
-        handler = hooks["PostToolUse"][0].hooks[0]
-
-        await handler(
-            {"tool_name": "mcp__langbot__add_vocabulary", "tool_input": {}, "tool_response": ""},
-            "id1", None,
-        )
-        await handler(
-            {"tool_name": "mcp__langbot__get_user_profile", "tool_input": {}, "tool_response": ""},
-            "id2", None,
-        )
-
-        assert len(state.tool_calls) == 2
-        assert state.tool_calls[0]["tool"] == "mcp__langbot__add_vocabulary"
-        assert state.tool_calls[1]["tool"] == "mcp__langbot__get_user_profile"
-
-    @pytest.mark.asyncio
-    async def test_prompts_tracked(self):
-        hooks, state = build_session_hooks(user_id=1)
-        handler = hooks["UserPromptSubmit"][0].hooks[0]
-
-        await handler({"prompt": "Teach me Spanish"}, "id1", None)
-        await handler({"prompt": "Quiz me on greetings"}, "id2", None)
-
-        assert len(state.prompts) == 2
-        assert state.prompts[0]["text"] == "Teach me Spanish"
 
     @pytest.mark.asyncio
     async def test_stop_tracked(self):
