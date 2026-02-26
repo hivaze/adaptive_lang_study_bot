@@ -36,7 +36,7 @@ from adaptive_lang_study_bot.utils import compute_next_trigger, safe_zoneinfo, s
 # Constants
 # ---------------------------------------------------------------------------
 
-_USER_MUTABLE_FIELDS = {"interests", "learning_goals", "preferred_difficulty", "session_style", "topics_to_avoid", "notifications_paused"}
+_USER_MUTABLE_FIELDS = {"interests", "learning_goals", "preferred_difficulty", "session_style", "topics_to_avoid", "notifications_paused", "additional_notes"}
 _LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]
 _MAX_SCHEDULES_PER_USER = 10
 _MAX_SCHEDULES_PER_TYPE = 3
@@ -68,7 +68,6 @@ TOOL_NAMES = [
     "mcp__langbot__record_exercise_result",
     "mcp__langbot__add_vocabulary",
     "mcp__langbot__get_due_vocabulary",
-    "mcp__langbot__record_vocabulary_review",
     "mcp__langbot__manage_schedule",
     "mcp__langbot__send_notification",
     "mcp__langbot__search_vocabulary",
@@ -80,7 +79,7 @@ TOOL_NAMES = [
 _SESSION_TYPE_TOOLS: dict[SessionType, set[str]] = {
     SessionType.INTERACTIVE: {
         "get_user_profile", "update_preference", "record_exercise_result",
-        "add_vocabulary", "get_due_vocabulary", "record_vocabulary_review",
+        "add_vocabulary", "get_due_vocabulary",
         "manage_schedule", "search_vocabulary", "get_exercise_history",
         "get_progress_summary",
     },
@@ -89,7 +88,7 @@ _SESSION_TYPE_TOOLS: dict[SessionType, set[str]] = {
         "add_vocabulary", "search_vocabulary", "manage_schedule",
     },
     SessionType.PROACTIVE_REVIEW: {
-        "get_user_profile", "get_due_vocabulary", "record_vocabulary_review",
+        "get_user_profile", "get_due_vocabulary",
         "send_notification",
     },
     SessionType.PROACTIVE_QUIZ: {
@@ -114,11 +113,21 @@ _TELEGRAM_HTML_TAGS = frozenset({
 
 
 def _parse_list_field(raw_value: Any, *, max_items: int, max_len: int) -> list[str]:
-    """Parse a raw value into a bounded, trimmed list of strings."""
+    """Parse a raw value into a bounded, trimmed list of strings.
+
+    Handles: JSON arrays, semicolon-delimited strings, comma-delimited
+    strings, and plain scalar values.  The agent often sends delimited
+    strings instead of JSON arrays for list fields.
+    """
     try:
         value = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
     except json.JSONDecodeError:
-        value = [raw_value]
+        # Fallback: split on semicolons or commas (agent often sends these)
+        if isinstance(raw_value, str) and (";" in raw_value or "," in raw_value):
+            sep = ";" if ";" in raw_value else ","
+            value = [s.strip() for s in raw_value.split(sep) if s.strip()]
+        else:
+            value = [raw_value]
     if not isinstance(value, list):
         value = [value]
     return [str(v).strip()[:max_len] for v in value[:max_items]]
@@ -235,7 +244,9 @@ def create_session_tools(
         "learning_goals (list of up to 5 current learning goals), "
         "preferred_difficulty (easy/normal/hard), session_style (casual/structured/intensive), "
         "topics_to_avoid (list of up to 5), "
-        "notifications_paused (true/false — pause or resume all proactive notifications). "
+        "notifications_paused (true/false — pause or resume all proactive notifications), "
+        "additional_notes (list of up to 10 observations about the student's preferences "
+        "and behavior, e.g. 'prefers vocab before exercises', 'enjoys role-play'). "
         "Use learning_goals to record what the student is working toward, e.g. "
         "'Prepare for DELF B2 exam', 'Learn cooking vocabulary for trip to France'.",
         {"field": str, "value": str},
@@ -263,6 +274,8 @@ def create_session_tools(
             value = raw_value.lower().strip()
             if value not in SessionStyle:
                 return _err(f"Invalid style '{value}'. Use: {', '.join(SessionStyle)}")
+        elif field == "additional_notes":
+            value = _parse_list_field(raw_value, max_items=tuning.max_additional_notes, max_len=200)
         elif field == "notifications_paused":
             if isinstance(raw_value, bool):
                 value = raw_value
@@ -285,8 +298,12 @@ def create_session_tools(
 
     @tool(
         "record_exercise_result",
-        "Record the result of a learning exercise. Must be called after every exercise. "
-        "Auto-adjusts level and weak/strong areas based on scores.",
+        "Record the result of a learning exercise after the student answers it. "
+        "Must be called ONLY AFTER the student provides their answer — never before. "
+        "If the student ignores an exercise, do NOT record a score. "
+        "Auto-adjusts level and weak/strong areas based on scores. "
+        "Words listed in words_involved are automatically reviewed in the spaced "
+        "repetition system (FSRS) — always include the vocabulary words used in the exercise.",
         {"exercise_type": str, "topic": str, "score": int, "max_score": int,
          "words_involved": str, "notes": str},
     )
@@ -385,6 +402,43 @@ def create_session_tools(
                     adjustments.append(f"'{topic}' added to weak areas")
                     logger.info("User {}: '{}' added to weak areas ({} scores <= {})", user_id, topic, weak_count, tuning.weak_area_score)
 
+                # --- Auto-review vocabulary words used in exercise ---
+                # Map exercise score → FSRS rating so exercises count as reviews.
+                reviewed_words: list[str] = []
+                if words:
+                    fsrs_rating = (
+                        1 if normalized_score <= 3
+                        else 2 if normalized_score <= 5
+                        else 4 if normalized_score >= 9
+                        else 3
+                    )
+                    for w in words:
+                        vocab = await VocabularyRepo.get_by_word_ci(db_session, user_id, w)
+                        if vocab is None:
+                            continue
+                        try:
+                            fsrs_result = review_card(vocab, fsrs_rating)
+                            await VocabularyRepo.update_fsrs(
+                                db_session, vocab.id,
+                                fsrs_state=fsrs_result["state"],
+                                fsrs_stability=fsrs_result["stability"],
+                                fsrs_difficulty=fsrs_result["difficulty"],
+                                fsrs_due=fsrs_result["due"],
+                                fsrs_last_review=fsrs_result["last_review"],
+                                fsrs_data=fsrs_result["card_data"],
+                                last_rating=fsrs_rating,
+                            )
+                            await VocabularyReviewLogRepo.create(
+                                db_session,
+                                user_id=user_id,
+                                vocabulary_id=vocab.id,
+                                session_id=_session_uuid(),
+                                rating=fsrs_rating,
+                            )
+                            reviewed_words.append(vocab.word)
+                        except Exception:
+                            logger.warning("FSRS auto-review failed for word '{}' user {}", w, user_id)
+
                 await db_session.commit()
             except SQLAlchemyError:
                 logger.exception("Failed to record exercise for user {}", user_id)
@@ -398,8 +452,10 @@ def create_session_tools(
         }
         if adjustments:
             result["adjustments"] = adjustments
+        if reviewed_words:
+            result["vocabulary_reviewed"] = reviewed_words
 
-        logger.info("Exercise recorded for user {}: {} score={}", user_id, topic, score)
+        logger.info("Exercise recorded for user {}: {} score={} reviewed_words={}", user_id, topic, score, len(reviewed_words))
         return _ok(result)
 
     @tool(
@@ -489,60 +545,6 @@ def create_session_tools(
                 for c in cards
             ]
             return _ok({"due_cards": result, "count": len(result)})
-
-    @tool(
-        "record_vocabulary_review",
-        "Record a vocabulary review rating (1=Again, 2=Hard, 3=Good, 4=Easy). "
-        "Updates the FSRS card state for spaced repetition scheduling.",
-        {"vocabulary_id": int, "rating": int},
-    )
-    async def record_vocabulary_review(args: dict[str, Any]) -> dict[str, Any]:
-        vocab_id = args["vocabulary_id"]
-        rating = args["rating"]
-
-        if rating not in (1, 2, 3, 4):
-            return _err("Rating must be 1 (Again), 2 (Hard), 3 (Good), or 4 (Easy)")
-
-        async with session_factory() as db_session:
-            vocab = await VocabularyRepo.get(db_session, vocab_id)
-            if vocab is None or vocab.user_id != user_id:
-                return _err("Vocabulary card not found")
-
-            fsrs_result = review_card(vocab, rating)
-
-            try:
-                await VocabularyRepo.update_fsrs(
-                    db_session,
-                    vocab_id,
-                    fsrs_state=fsrs_result["state"],
-                    fsrs_stability=fsrs_result["stability"],
-                    fsrs_difficulty=fsrs_result["difficulty"],
-                    fsrs_due=fsrs_result["due"],
-                    fsrs_last_review=fsrs_result["last_review"],
-                    fsrs_data=fsrs_result["card_data"],
-                    last_rating=rating,
-                )
-
-                await VocabularyReviewLogRepo.create(
-                    db_session,
-                    user_id=user_id,
-                    vocabulary_id=vocab_id,
-                    session_id=_session_uuid(),
-                    rating=rating,
-                )
-                await db_session.commit()
-            except SQLAlchemyError:
-                logger.exception("Failed to record review for vocab {}", vocab_id)
-                return _err("Database error recording review, please try again")
-
-        logger.info("Review recorded for vocab {}: rating={}", vocab_id, rating)
-        return _ok({
-            "status": "recorded",
-            "word": vocab.word,
-            "rating": rating,
-            "next_review_in_days": round(fsrs_result["scheduled_days"], 1),
-            "new_state": fsrs_result["state_name"],
-        })
 
     @tool(
         "manage_schedule",
@@ -937,7 +939,6 @@ def create_session_tools(
         record_exercise_result,
         add_vocabulary,
         get_due_vocabulary,
-        record_vocabulary_review,
         manage_schedule,
         send_notification,
         search_vocabulary,

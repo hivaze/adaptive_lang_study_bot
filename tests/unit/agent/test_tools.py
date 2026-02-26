@@ -8,6 +8,7 @@ from adaptive_lang_study_bot.agent.tools import (
     _MAX_SCHEDULES_PER_USER,
     _SESSION_TYPE_TOOLS,
     _USER_MUTABLE_FIELDS,
+    _parse_list_field,
     _rrule_interval_minutes,
     create_session_tools,
 )
@@ -22,7 +23,7 @@ class TestToolConstants:
             assert name.startswith("mcp__langbot__"), f"{name} missing prefix"
 
     def test_tool_count(self):
-        assert len(TOOL_NAMES) == 11
+        assert len(TOOL_NAMES) == 10
 
     def test_session_types_defined(self):
         expected_types = {
@@ -63,7 +64,7 @@ class TestToolConstants:
         assert not _USER_MUTABLE_FIELDS & dangerous_fields
 
     def test_mutable_fields_expected(self):
-        expected = {"interests", "learning_goals", "preferred_difficulty", "session_style", "topics_to_avoid", "notifications_paused"}
+        expected = {"interests", "learning_goals", "preferred_difficulty", "session_style", "topics_to_avoid", "notifications_paused", "additional_notes"}
         assert _USER_MUTABLE_FIELDS == expected
 
     def test_learning_goals_is_mutable(self):
@@ -126,7 +127,6 @@ class TestCanUseTool:
     def test_proactive_review_allows_vocab_tools(self, _make_can_use_tool):
         can_use = _make_can_use_tool(SessionType.PROACTIVE_REVIEW)
         assert can_use("get_due_vocabulary") is True
-        assert can_use("record_vocabulary_review") is True
         assert can_use("send_notification") is True
         assert can_use("add_vocabulary") is False
 
@@ -213,5 +213,55 @@ class TestScheduleValidation:
     def test_premium_tier_llm_limit_is_reasonable(self):
         premium = TIER_LIMITS[UserTier.PREMIUM]
         assert premium.max_llm_notifications_per_day >= TIER_LIMITS[UserTier.FREE].max_llm_notifications_per_day
+
+
+class TestParseListField:
+    """Test _parse_list_field handles various agent output formats."""
+
+    def test_json_array(self):
+        result = _parse_list_field('["a", "b", "c"]', max_items=5, max_len=100)
+        assert result == ["a", "b", "c"]
+
+    def test_semicolon_delimited(self):
+        result = _parse_list_field("Goal 1; Goal 2; Goal 3", max_items=5, max_len=200)
+        assert result == ["Goal 1", "Goal 2", "Goal 3"]
+
+    def test_comma_delimited(self):
+        result = _parse_list_field("cooking, travel, music", max_items=8, max_len=100)
+        assert result == ["cooking", "travel", "music"]
+
+    def test_semicolon_preferred_over_comma(self):
+        """When both ; and , are present, split on ; so commas inside items are preserved."""
+        result = _parse_list_field("Goal 1, part A; Goal 2", max_items=5, max_len=200)
+        assert result == ["Goal 1, part A", "Goal 2"]
+
+    def test_plain_string_no_delimiter(self):
+        result = _parse_list_field("single goal", max_items=5, max_len=200)
+        assert result == ["single goal"]
+
+    def test_max_items_enforced(self):
+        result = _parse_list_field("a; b; c; d; e; f", max_items=3, max_len=100)
+        assert len(result) == 3
+        assert result == ["a", "b", "c"]
+
+    def test_max_len_enforced(self):
+        result = _parse_list_field("a" * 300, max_items=5, max_len=100)
+        assert len(result[0]) == 100
+
+    def test_empty_items_filtered(self):
+        result = _parse_list_field("a;; b; ; c", max_items=5, max_len=100)
+        assert result == ["a", "b", "c"]
+
+    def test_non_string_value(self):
+        result = _parse_list_field(42, max_items=5, max_len=100)
+        assert result == ["42"]
+
+    def test_list_value(self):
+        result = _parse_list_field(["x", "y"], max_items=5, max_len=100)
+        assert result == ["x", "y"]
+
+    def test_whitespace_stripped(self):
+        result = _parse_list_field("  a ;  b  ; c  ", max_items=5, max_len=100)
+        assert result == ["a", "b", "c"]
 
 

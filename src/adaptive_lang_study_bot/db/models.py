@@ -56,6 +56,7 @@ class User(Base):
         String(12), default="structured",
     )
     topics_to_avoid: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+    additional_notes: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
 
     # Performance tracking (system-managed)
     weak_areas: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)

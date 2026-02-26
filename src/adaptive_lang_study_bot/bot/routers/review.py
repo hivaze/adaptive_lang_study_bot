@@ -15,6 +15,7 @@ from loguru import logger
 from sqlalchemy import select as sa_select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from adaptive_lang_study_bot.agent.session_manager import session_manager
 from adaptive_lang_study_bot.db.models import User, Vocabulary as VocabModel
 from adaptive_lang_study_bot.db.repositories import UserRepo, VocabularyRepo, VocabularyReviewLogRepo
 from adaptive_lang_study_bot.fsrs_engine.scheduler import review_card
@@ -58,6 +59,23 @@ _RATING_KEYS = {1: "review.btn_again", 2: "review.btn_hard", 3: "review.btn_good
 
 def _get_rating_label(rating: int, lang: str) -> str:
     return t(_RATING_KEYS.get(rating, "review.btn_good"), lang)
+
+
+def _format_interval(scheduled_days: float, lang: str) -> str:
+    """Format a scheduled_days value as a human-readable interval.
+
+    FSRS schedules learning cards for minutes/hours, not days.
+    Show the most appropriate unit instead of always "0 days".
+    """
+    total_minutes = scheduled_days * 1440  # 24 * 60
+    if total_minutes < 1:
+        return t("review.interval_now", lang)
+    if total_minutes < 60:
+        return t("review.interval_minutes", lang, minutes=int(total_minutes))
+    total_hours = total_minutes / 60
+    if total_hours < 24:
+        return t("review.interval_hours", lang, hours=int(total_hours))
+    return t("review.interval_days", lang, days=round(scheduled_days))
 
 
 def _format_card_front(vocab, position: int, total: int, lang: str) -> tuple[str, InlineKeyboardMarkup]:
@@ -126,6 +144,10 @@ async def cmd_review(message: Message, user: User, db_session: AsyncSession) -> 
     lang = user.native_language or DEFAULT_LANGUAGE
     if not user.onboarding_completed:
         await message.answer(t("review.setup_first", lang))
+        return
+
+    if session_manager.has_active_session(user.telegram_id):
+        await message.answer(t("review.active_session", lang))
         return
 
     due_cards = await VocabularyRepo.get_due(db_session, user.telegram_id, limit=_REVIEW_FETCH_LIMIT)
@@ -250,7 +272,7 @@ async def on_fsrs_rate(
     )
 
     rating_label = _get_rating_label(rating, lang)
-    days = f"{result['scheduled_days']:.0f}"
+    next_interval = _format_interval(result["scheduled_days"], lang)
     next_position = position + 1
 
     # Check for remaining due cards
@@ -268,7 +290,7 @@ async def on_fsrs_rate(
         # Check if more cards became due beyond the current batch
         total_due = await VocabularyRepo.count_due(db_session, user.telegram_id)
         done_text = t("review.rated_done", lang,
-                       word=esc(vocab.word), rating=rating_label, days=days,
+                       word=esc(vocab.word), rating=rating_label, interval=next_interval,
                        position=position, total=total)
         if total_due > 0:
             done_text += "\n\n" + t("review.more_due", lang, count=total_due)
@@ -292,10 +314,10 @@ async def on_fsrs_rate(
     # Adjust total if new cards became due (e.g. "Again" re-queued a card)
     adjusted_total = max(total, next_position + len(remaining) - 1)
     text, keyboard = _format_card_front(remaining[0], next_position, adjusted_total, lang)
-    result_line = t("review.rated_next", lang, word=esc(vocab.word), rating=rating_label, days=days)
+    result_line = t("review.rated_next", lang, word=esc(vocab.word), rating=rating_label, interval=next_interval)
     if callback.message is not None:
         try:
             await callback.message.edit_text(result_line + text, reply_markup=keyboard)
         except TelegramBadRequest:
             logger.debug("edit_text failed for review rated_next callback")
-    await callback.answer(t("review.rating_callback", lang, rating=rating_label, days=days))
+    await callback.answer(t("review.rating_callback", lang, rating=rating_label, interval=next_interval))

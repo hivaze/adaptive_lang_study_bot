@@ -33,5 +33,7 @@ def test_both_tiers_thinking_adaptive():
     assert TIER_LIMITS[UserTier.PREMIUM].thinking_type == "adaptive"
 
 
-def test_premium_tier_unlimited_sessions():
-    assert TIER_LIMITS[UserTier.PREMIUM].max_sessions_per_day == 0
+def test_premium_tier_higher_session_limit():
+    free = TIER_LIMITS[UserTier.FREE]
+    premium = TIER_LIMITS[UserTier.PREMIUM]
+    assert premium.max_sessions_per_day > free.max_sessions_per_day

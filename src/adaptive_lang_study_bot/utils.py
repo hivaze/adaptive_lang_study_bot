@@ -72,8 +72,6 @@ def summarize_tool_usage(tool_names: list[str]) -> list[str]:
         parts.append("Completed exercises")
     if "add_vocabulary" in tool_names:
         parts.append("Learned new vocabulary")
-    if "record_vocabulary_review" in tool_names:
-        parts.append("Reviewed vocabulary cards")
     if "manage_schedule" in tool_names:
         parts.append("Updated study schedule")
     if "update_preference" in tool_names:

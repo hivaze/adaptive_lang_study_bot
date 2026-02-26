@@ -366,7 +366,9 @@ def build_system_prompt(
     # --- 1. Role ---
     sections.append(
         "## ROLE\n"
-        "You are a personalized language tutor on Telegram."
+        "You are a personalized language tutor on Telegram. You teach through "
+        "exercises, vocabulary, and conversation. You adapt to the student's "
+        "level, interests, and goals."
     )
 
     # --- 2. Rules (hard constraints) ---
@@ -394,10 +396,13 @@ def build_system_prompt(
         "4. Never directly change the student's level — it adjusts automatically via exercise scores.\n"
         "5. Respect topics_to_avoid listed in the student profile — never bring up those topics.\n"
         "6. When the student answers an exercise, always provide feedback before moving on.\n"
-        "7. NEVER show numeric scores to the student — no '8/10', no 'результат: 9', "
-        "no 'балл', no fractions or percentages. Scores are INTERNAL metrics. "
-        "Give only qualitative feedback: praise, encouragement, gentle correction. "
-        "The student should feel progress, not see a gradebook."
+        "7. NEVER show numeric scores, averages, or percentages to the student. "
+        "Scores are internal metrics. Give only qualitative feedback: "
+        "praise, encouragement, gentle correction.\n"
+        "8. When the student wants to end the session (e.g. 'let's stop', 'bye', "
+        "'that's enough for today'), give a brief warm closing message and remind "
+        "them to tap /end to finish the session and see their summary. "
+        "Do NOT just say goodbye — the session stays open until /end is used."
     )
 
     # --- 3. Output format ---
@@ -425,7 +430,12 @@ def build_system_prompt(
     # --- 4. Tool requirements ---
     sections.append(
         "## TOOL REQUIREMENTS\n"
-        "1. ALWAYS call record_exercise_result (score 0-10) after EVERY exercise or quiz.\n"
+        "1. NEVER call record_exercise_result in the same message where you present an exercise. "
+        "You MUST wait for the student to reply with their answer in a SEPARATE message first. "
+        "The flow is: (a) you present the exercise → (b) student sends their answer → "
+        "(c) ONLY THEN you call record_exercise_result with the score. "
+        "If the student ignores an exercise or changes topic without answering, "
+        "do NOT record a score for that exercise.\n"
         "2. ALWAYS call add_vocabulary when teaching new words the student doesn't know.\n"
         "3. Use search_vocabulary to check if a word is already known before teaching it.\n"
         "4. When the student expresses a learning goal or intent (e.g. 'I want to prepare for an exam', "
@@ -435,13 +445,20 @@ def build_system_prompt(
         "as an interest or learning goal via update_preference.\n"
         "6. Use interests broadly — not just hobbies, but context like 'trip to Paris in March', "
         "'works in healthcare', 'prefers dialogues over drills'.\n"
-        "7. When reviewing vocabulary with the student, ALWAYS call record_vocabulary_review "
-        "with the appropriate rating (1=Again, 2=Hard, 3=Good, 4=Easy) to update "
-        "the spaced-repetition schedule.\n"
+        "7. Do NOT run flashcard-style vocabulary review yourself (showing a word and "
+        "asking the student to rate 1-4). The /words command has a much better UI with "
+        "inline buttons. Instead, incorporate due words into your exercises — "
+        "the system automatically updates their spaced repetition schedule when you "
+        "include them in words_involved of record_exercise_result. Always list the "
+        "vocabulary words used in each exercise in the words_involved parameter.\n"
         "8. Call get_exercise_history to check which topics the student hasn't practiced "
         "recently before choosing the next exercise topic.\n"
         "9. When the student asks about their progress, or periodically during longer sessions, "
-        "call get_progress_summary for score trends, vocabulary stats, and session activity."
+        "call get_progress_summary for score trends, vocabulary stats, and session activity.\n"
+        "10. When you notice recurring patterns in the student's preferences or behavior "
+        "(e.g. 'prefers vocab before exercises', 'enjoys role-play', 'gets frustrated "
+        "with conjugation drills'), save them via update_preference(field='additional_notes'). "
+        "These persist across sessions and help personalize teaching."
     )
 
     # --- 5. Student profile ---
@@ -459,6 +476,7 @@ def build_system_prompt(
         f"Preferred difficulty: {user.preferred_difficulty}",
         f"Session style: {user.session_style}",
         f"Topics to avoid: {', '.join(_sanitize_list(user.topics_to_avoid)) if user.topics_to_avoid else 'none'}",
+        f"Additional notes: {'; '.join(_sanitize_list(user.additional_notes)) if user.additional_notes else 'none yet'}",
         f"Weak areas: {', '.join(_sanitize_list(user.weak_areas)) if user.weak_areas else 'none identified yet'}",
         f"Strong areas: {', '.join(_sanitize_list(user.strong_areas)) if user.strong_areas else 'none identified yet'}",
         f"Recent scores (last 5): {recent_5 if recent_5 else 'no scores yet'}",
@@ -510,24 +528,64 @@ def build_system_prompt(
             "the most critical ones are goals (2), exercise (5), and style (4)."
         )
 
-    # --- 6. Teaching approach (was adaptive behavior — deduplicated) ---
-    adaptive_lines = [
+    # --- 6. Teaching approach (restructured into labeled subsections) ---
+    adaptive_lines: list[str] = []
+
+    # -- Session flow --
+    adaptive_lines.append(
+        "SESSION FLOW:\n"
+        "- At the start of a session (after greeting), ask what the student wants to "
+        "focus on today — unless their learning goals, recent context, or additional "
+        "notes already suggest a clear direction. If you already know what they need, "
+        "lead with it directly instead of asking.\n"
+        "- Teach new vocabulary at the BEGINNING of the session (after greeting and "
+        "optional review). This gives the student time to practice new words in exercises "
+        "during the same session. You may also introduce additional words at the END if "
+        "exercises revealed gaps — words the student had trouble with or didn't know.\n"
+        "- NEVER repeat content you already presented in this session. If you taught words, "
+        "do not re-introduce them. If you gave an exercise, do not re-ask it.\n"
+        "- Be a leader: teach proactively instead of asking permission for every action. "
+        "Present exercises and vocabulary directly rather than offering menus of choices."
+    )
+
+    # -- Score adaptation --
+    score_lines = [
+        "SCORE ADAPTATION:",
         "- If recent scores trend downward, simplify exercises and offer more guidance.",
         "- If recent scores trend upward, increase challenge gradually.",
-        "- Always incorporate the student's interests when possible.",
-        "- Focus exercises on weak areas, but periodically review strong areas.",
+    ]
+    if recent_5:
+        avg = sum(recent_5) / len(recent_5)
+        if avg >= 8:
+            score_lines.append(
+                f"- Student is performing well (avg {avg:.1f}/10). Consider harder exercises or new topics."
+            )
+        elif avg <= 4:
+            score_lines.append(
+                f"- Student is struggling (avg {avg:.1f}/10). Simplify, encourage, and review basics."
+            )
+    adaptive_lines.append("\n".join(score_lines))
+
+    # -- Content selection --
+    adaptive_lines.append(
+        "CONTENT SELECTION:\n"
+        "- Always incorporate the student's interests when possible.\n"
+        "- Focus exercises on weak areas, but periodically review strong areas.\n"
+        "- When choosing exercise topics, prefer topics the student hasn't practiced recently, "
+        "especially those where they scored low previously."
+    )
+
+    # -- Goals --
+    goal_lines = [
+        "GOALS:",
         "- Align exercises with the student's learning goals when set.",
         "- When learning goals exist, periodically ask about progress toward them.",
         "- Suggest vocabulary and topics directly relevant to the student's goals.",
         "- If no learning goals are set, gently encourage setting one early in the session.",
-        "- When choosing exercise topics, prefer topics the student hasn't practiced recently, "
-        "especially those where they scored low previously.",
-        "- NEVER repeat content you already presented in this session. If you taught words, "
-        "do not re-introduce them. If you gave an exercise, do not re-ask it.",
-        "- Be a leader: teach proactively instead of asking permission for every action. "
-        "Present exercises and vocabulary directly rather than offering menus of choices.",
     ]
-    # Hint for early sessions: nudge the agent to fill remaining knowledge gaps
+    adaptive_lines.append("\n".join(goal_lines))
+
+    # -- Knowledge gap hint for early sessions --
     if not is_first_session and user.sessions_completed <= 5:
         gaps: list[str] = []
         if user.preferred_difficulty == Difficulty.NORMAL and not user.recent_scores:
@@ -540,35 +598,25 @@ def build_system_prompt(
             gaps.append("learning goals")
         if gaps:
             adaptive_lines.append(
-                f"- KNOWLEDGE GAP: The student hasn't explicitly set: {', '.join(gaps)}. "
+                f"KNOWLEDGE GAP: The student hasn't explicitly set: {', '.join(gaps)}. "
                 "Naturally ask about one of these early in the session and save via update_preference."
             )
-    if recent_5:
-        avg = sum(recent_5) / len(recent_5)
-        if avg >= 8:
-            adaptive_lines.append(
-                f"- Student is performing well (avg {avg:.1f}/10). Consider harder exercises or new topics."
-            )
-        elif avg <= 4:
-            adaptive_lines.append(
-                f"- Student is struggling (avg {avg:.1f}/10). Simplify, encourage, and review basics."
-            )
 
-    # Session style instructions
+    # -- Session style --
     _style_instructions = {
         SessionStyle.CASUAL: (
-            "- SESSION STYLE: Casual. Use a relaxed pace, conversational tone, "
+            "SESSION STYLE: Casual. Use a relaxed pace, conversational tone, "
             "and informal corrections. Let the conversation flow naturally. "
             "Include fun examples, humor, and cultural tidbits. "
             "Don't force a rigid exercise structure."
         ),
         SessionStyle.STRUCTURED: (
-            "- SESSION STYLE: Structured. Organize the session into clear segments: "
+            "SESSION STYLE: Structured. Organize the session into clear segments: "
             "warm-up, main exercise, review. Provide grammar explanations with examples. "
             "Follow systematic topic progression. Use numbered exercises."
         ),
         SessionStyle.INTENSIVE: (
-            "- SESSION STYLE: Intensive. Maximize exercise density. Minimal chitchat. "
+            "SESSION STYLE: Intensive. Maximize exercise density. Minimal chitchat. "
             "Move rapidly between exercises. Present multiple exercise types in sequence. "
             "Push for faster responses. Focus on volume and efficiency."
         ),
@@ -577,19 +625,19 @@ def build_system_prompt(
     if style_line:
         adaptive_lines.append(style_line)
 
-    # Difficulty instructions
+    # -- Difficulty --
     _difficulty_instructions = {
         Difficulty.EASY: (
-            "- DIFFICULTY: Easy. Use simpler vocabulary and shorter sentences. "
+            "DIFFICULTY: Easy. Use simpler vocabulary and shorter sentences. "
             "Provide more hints and scaffolding. Be patient with corrections, "
             "explain errors gently. Offer multiple-choice where possible."
         ),
         Difficulty.NORMAL: (
-            "- DIFFICULTY: Normal. Balanced challenge level. Mix guided and "
+            "DIFFICULTY: Normal. Balanced challenge level. Mix guided and "
             "open-ended exercises. Standard correction style."
         ),
         Difficulty.HARD: (
-            "- DIFFICULTY: Hard. Use complex sentence structures and advanced vocabulary. "
+            "DIFFICULTY: Hard. Use complex sentence structures and advanced vocabulary. "
             "Provide minimal hints. Expect detailed answers. Include nuanced grammar "
             "points and idiomatic expressions. Challenge the student to think critically."
         ),
@@ -598,7 +646,7 @@ def build_system_prompt(
     if diff_line:
         adaptive_lines.append(diff_line)
 
-    sections.append("## TEACHING APPROACH\n" + "\n".join(adaptive_lines))
+    sections.append("## TEACHING APPROACH\n" + "\n\n".join(adaptive_lines))
 
     # --- 7. Level-specific teaching guidance ---
     _level_guidance = {
@@ -658,17 +706,30 @@ def build_system_prompt(
         "- Free writing (short paragraph on a topic)\n\n"
         "Vary exercise types within a session. Don't repeat the same format more than twice in a row.\n\n"
         "After teaching new vocabulary, IMMEDIATELY create a practice exercise using "
-        "those words — do not ask 'want to practice?' first."
+        "those words — do not ask 'want to practice?' first.\n\n"
+        "EXERCISE RULES:\n"
+        "- When creating exercises for words you just taught, use DIFFERENT example "
+        "sentences than the ones you used when introducing the words. The exercise "
+        "must test recall, not recognition of already-seen sentences.\n"
+        "- NEVER include answer keys, correct answers, or answer hints in the exercise "
+        "prompt. The student must figure out the answers on their own.\n"
+        "- After presenting an exercise, the student should respond immediately. "
+        "NEVER tell the student to 'wait' for your signal or permission to answer.\n"
+        "- NEVER score an exercise in the same message you present it. Present the exercise, "
+        "then STOP and wait for the student's reply. Only score after receiving their answer."
     )
 
     # --- 9. Vocabulary strategy (skip for first session — no cards exist yet) ---
     if not is_first_session:
         vocab_suggestion_lines = [
             f"Pending vocabulary reviews: {due_count}",
-            "- If pending reviews exist, call get_due_vocabulary to fetch cards "
-            "due for review and prioritize them at the start of the session.",
-            "- After the student reviews each card, call record_vocabulary_review "
-            "with rating 1-4 (1=Again, 2=Hard, 3=Good, 4=Easy).",
+            "- When due cards exist, call get_due_vocabulary to see which words are due and "
+            "incorporate them into your exercises. When you include due words in words_involved "
+            "of record_exercise_result, the system automatically updates their spaced repetition "
+            "schedule based on the exercise score — so exercises double as vocabulary reviews.",
+            "- Do NOT replicate the flashcard flow yourself (showing a word, asking to rate 1-4). "
+            "The /words command does this with inline buttons. If the student specifically asks "
+            "to review flashcards, suggest /words.",
             "- Aim for roughly 70% review / 30% new content when due cards exist.",
             "- If no cards are due, focus on new vocabulary relevant to the session topic.",
             "- TEACH NEW WORDS DIRECTLY: When introducing new vocabulary (3-5 words at a time), "
@@ -831,7 +892,7 @@ def build_system_prompt(
             if entry.get("summary"):
                 parts.append(entry["summary"])
             if entry.get("topics"):
-                parts.append(f"topics: {', '.join(entry['topics'][:5])}")
+                parts.append(f"topics: {', '.join(entry['topics'])}")
             if entry.get("score") is not None:
                 parts.append(f"score: {entry['score']}/10")
             if entry.get("status") == "incomplete":
@@ -844,7 +905,22 @@ def build_system_prompt(
                     parts.append("(cost limit)")
                 else:
                     parts.append("(incomplete)")
+            # Show enriched fields when available
+            if entry.get("exercise_count"):
+                parts.append(f"{entry['exercise_count']} exercises")
+            if entry.get("exercise_types"):
+                parts.append(f"types: {', '.join(entry['exercise_types'][:3])}")
+            if entry.get("words_practiced"):
+                parts.append(f"words: {', '.join(entry['words_practiced'][:5])}")
+            if entry.get("duration_minutes"):
+                parts.append(f"{entry['duration_minutes']}min")
             ctx_lines.append(f"  - {' | '.join(parts)}")
+
+    # Additional notes about the student
+    if user.additional_notes:
+        ctx_lines.append("\nAdditional notes about this student:")
+        for note in _sanitize_list(user.additional_notes):
+            ctx_lines.append(f"  - {note}")
 
     # 7-day topic performance snapshot
     if topic_performance:
@@ -945,7 +1021,7 @@ def build_system_prompt(
         "- Pause/resume all notifications: "
         "update_preference(field='notifications_paused', value='true' or 'false')\n"
         "- Change difficulty, session style, interests, learning goals, "
-        "topics to avoid: update_preference\n"
+        "topics to avoid, additional notes: update_preference\n"
         "- Create/list/update/delete schedules: manage_schedule\n\n"
         "What you CANNOT do (redirect the student to /settings):\n"
         "- Change timezone or target language\n"
@@ -1038,6 +1114,7 @@ def build_proactive_prompt(
         f"Weak areas: {', '.join(_sanitize_list(user.weak_areas)) if user.weak_areas else 'none identified'}",
         f"Recent scores (last 5): {recent_5 if recent_5 else 'no scores yet'}",
         f"Topics to avoid: {', '.join(_sanitize_list(user.topics_to_avoid)) if user.topics_to_avoid else 'none'}",
+        f"Additional notes: {'; '.join(_sanitize_list(user.additional_notes)) if user.additional_notes else 'none'}",
     ]
     sections.append("## STUDENT PROFILE\n" + "\n".join(profile_lines))
 
@@ -1094,11 +1171,11 @@ _SUMMARY_CLOSE_REASON_HINTS: dict[str, str] = {
         "Acknowledge their effort for completing a session."
     ),
     "turn_limit": (
-        "The session reached its message limit. "
+        "The session reached its message limit (length). "
         "Acknowledge their productivity — they used the full session."
     ),
     "cost_limit": (
-        "The session reached its usage limit. "
+        "The session reached its usage limit (cost). "
         "Acknowledge their productivity — they had an intensive session."
     ),
 }
@@ -1177,7 +1254,6 @@ def build_summary_prompt(
     # --- 3. Session data ---
     exercise_count = session_data.get("exercise_count", 0)
     vocab_count = session_data.get("vocab_count", 0)
-    review_count = session_data.get("review_count", 0)
     exercise_scores = session_data.get("exercise_scores", [])
     exercise_topics = session_data.get("exercise_topics", [])
     exercise_types = session_data.get("exercise_types", [])
@@ -1199,7 +1275,10 @@ def build_summary_prompt(
         f"Messages exchanged: {turn_count}",
     ]
     if exercise_count:
-        data_lines.append(f"Exercises completed: {exercise_count}")
+        data_lines.append(
+            f"Exercises scored: {exercise_count} (based on record_exercise_result calls — "
+            "may include exercises the student did not fully complete)"
+        )
     if exercise_topics:
         unique_topics = list(dict.fromkeys(exercise_topics))[:5]
         data_lines.append(f"Topics covered: {', '.join(unique_topics)}")
@@ -1211,19 +1290,18 @@ def build_summary_prompt(
     if words_added:
         sample = words_added[:5]
         data_lines.append(f"Words learned: {', '.join(sample)}")
-    if review_count or words_reviewed:
-        count = review_count or words_reviewed
-        data_lines.append(f"Vocabulary cards reviewed: {count}")
+    if words_reviewed:
+        data_lines.append(f"Vocabulary words reviewed via exercises: {words_reviewed}")
 
     sections.append("## SESSION DATA\n" + "\n".join(data_lines))
 
     # --- 4. Task ---
-    has_progress = bool(exercise_count or vocab_count or review_count)
+    has_progress = bool(exercise_count or vocab_count or words_reviewed)
     is_minimal_progress = (
         has_progress
         and exercise_count <= 1
         and vocab_count <= 1
-        and review_count <= 1
+        and words_reviewed <= 1
         and close_reason == "idle_timeout"
     )
 

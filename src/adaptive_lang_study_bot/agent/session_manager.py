@@ -407,7 +407,7 @@ def _collect_session_data(managed: "ManagedSession") -> dict:
         "words_added": list(hook.words_added) if hook else [],
         "words_reviewed": hook.words_reviewed if hook else 0,
         "vocab_count": tool_names.count("add_vocabulary"),
-        "review_count": tool_names.count("record_vocabulary_review"),
+        "review_count": 0,  # Legacy field; vocab reviews now tracked via words_reviewed
         "turn_count": managed.turn_count,
         "duration_minutes": int((time.time() - managed.started_at) / 60),
     }
@@ -456,7 +456,7 @@ async def _generate_and_send_summary(
         has_progress = bool(
             session_data["exercise_count"]
             or session_data["vocab_count"]
-            or session_data["review_count"]
+            or session_data.get("words_reviewed", 0)
         )
 
         # Try AI summary
@@ -522,7 +522,14 @@ def _build_template_summary(managed: "ManagedSession", session_data: dict | None
 
     exercise_count = session_data["exercise_count"]
     vocab_count = session_data["vocab_count"]
-    review_count = session_data["review_count"]
+    words_reviewed = session_data.get("words_reviewed", 0)
+    turn_count = session_data.get("turn_count", 0)
+
+    # Sanity check: each exercise needs the student to answer in a separate turn.
+    # Minimum turns = 1 (initial) + 1 per exercise answered. If turns are too low,
+    # the agent likely scored exercises in the same turn it presented them.
+    if exercise_count and turn_count < exercise_count + 1:
+        exercise_count = 0
 
     if exercise_count:
         parts.append(t("session.summary_exercises", lang, count=exercise_count))
@@ -534,9 +541,9 @@ def _build_template_summary(managed: "ManagedSession", session_data: dict | None
         if session_data["words_added"]:
             sample = session_data["words_added"][:5]
             parts.append(t("session.summary_words_sample", lang, words=", ".join(sample)))
-    if review_count:
-        parts.append(t("session.summary_reviews", lang, count=review_count))
-    if not (exercise_count or vocab_count or review_count):
+    if words_reviewed:
+        parts.append(t("session.summary_reviews", lang, count=words_reviewed))
+    if not (exercise_count or vocab_count or words_reviewed):
         parts.append(t("session.summary_no_progress", lang))
 
     parts.append(t("session.summary_footer", lang))

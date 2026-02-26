@@ -99,18 +99,29 @@ class TestHookStateEnrichment:
         assert state.words_added == ["bonjour"]
 
     @pytest.mark.asyncio
-    async def test_tracks_words_reviewed(self, _hook):
+    async def test_tracks_words_reviewed_via_exercise(self, _hook):
         handler, state = _hook
         await handler(
             {
-                "tool_name": "mcp__langbot__record_vocabulary_review",
-                "tool_input": {"vocabulary_id": 42, "rating": 3},
-                "tool_response": "",
+                "tool_name": "mcp__langbot__record_exercise_result",
+                "tool_input": {
+                    "exercise_type": "translation",
+                    "topic": "food",
+                    "score": 7,
+                },
+                "tool_response": {
+                    "content": [
+                        {"type": "text", "text": json.dumps({
+                            "score": 7, "status": "recorded",
+                            "vocabulary_reviewed": ["pomme", "fromage"],
+                        })},
+                    ],
+                },
             },
             "id-1",
             None,
         )
-        assert state.words_reviewed == 1
+        assert state.words_reviewed == 2
 
     @pytest.mark.asyncio
     async def test_empty_topic_not_tracked(self, _hook):
@@ -166,7 +177,6 @@ class TestBuildSummaryPrompt:
                 "words_added": ["hello"],
                 "words_reviewed": 0,
                 "vocab_count": 1,
-                "review_count": 0,
                 "turn_count": 10,
                 "duration_minutes": 5,
             },
@@ -192,7 +202,6 @@ class TestBuildSummaryPrompt:
                 "words_added": [],
                 "words_reviewed": 0,
                 "vocab_count": 0,
-                "review_count": 0,
                 "turn_count": 3,
                 "duration_minutes": 2,
             },
@@ -213,7 +222,6 @@ class TestBuildSummaryPrompt:
             "words_added": [],
             "words_reviewed": 0,
             "vocab_count": 0,
-            "review_count": 0,
             "turn_count": 3,
             "duration_minutes": 2,
         }
@@ -244,7 +252,6 @@ class TestBuildSummaryPrompt:
                 "words_added": [],
                 "words_reviewed": 0,
                 "vocab_count": 0,
-                "review_count": 0,
                 "turn_count": 5,
                 "duration_minutes": 3,
             },
@@ -264,7 +271,7 @@ class TestBuildSummaryPrompt:
                 "exercise_count": 0, "exercise_scores": [],
                 "exercise_topics": [], "exercise_types": [],
                 "words_added": [], "words_reviewed": 0,
-                "vocab_count": 0, "review_count": 0,
+                "vocab_count": 0,
                 "turn_count": 1, "duration_minutes": 1,
             },
             close_reason=CloseReason.IDLE_TIMEOUT,
@@ -327,15 +334,16 @@ class TestBuildTemplateSummary:
 
     def test_reviews_shown(self):
         state = SessionHookState(user_id=1)
+        state.words_reviewed = 2
         managed = _make_managed(
             tools_called=[
-                "mcp__langbot__record_vocabulary_review",
-                "mcp__langbot__record_vocabulary_review",
+                "mcp__langbot__record_exercise_result",
+                "mcp__langbot__record_exercise_result",
             ],
             hook_state=state,
         )
         summary = _build_template_summary(managed)
-        assert "2" in summary  # review count
+        assert "2" in summary  # reviewed word count
 
 
 # ---------------------------------------------------------------------------
@@ -357,8 +365,6 @@ class TestCollectSessionData:
                 "mcp__langbot__record_exercise_result",
                 "mcp__langbot__record_exercise_result",
                 "mcp__langbot__add_vocabulary",
-                "mcp__langbot__record_vocabulary_review",
-                "mcp__langbot__record_vocabulary_review",
             ],
             hook_state=state,
             turn_count=10,
@@ -369,7 +375,7 @@ class TestCollectSessionData:
         assert data["exercise_topics"] == ["verbs"]
         assert data["words_added"] == ["bonjour"]
         assert data["vocab_count"] == 1
-        assert data["review_count"] == 2
+        assert data["words_reviewed"] == 2
         assert data["turn_count"] == 10
 
     def test_no_hook_state_graceful(self):

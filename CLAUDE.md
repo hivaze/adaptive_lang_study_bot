@@ -33,11 +33,11 @@ src/adaptive_lang_study_bot/
 ├── metrics.py             # Prometheus counters/gauges/histograms (16 metrics)
 ├── locales/               # JSON locale files (en, ru, es, fr, de, pt, it)
 ├── agent/
-│   ├── tools.py           # 11 MCP tools, _SESSION_TYPE_TOOLS, _USER_MUTABLE_FIELDS
+│   ├── tools.py           # 10 MCP tools, _SESSION_TYPE_TOOLS, _USER_MUTABLE_FIELDS
 │   ├── hooks.py           # PostToolUse (adaptive hints), UserPromptSubmit (turn limit), Stop hooks
 │   ├── prompt_builder.py  # build_system_prompt(), build_proactive_prompt(), compute_session_context()
 │   ├── session_manager.py # SessionManager (interactive) + run_proactive_llm_session() + run_summary_llm_session() (standalone)
-│   └── pool.py            # SessionPool: asyncio.Semaphore (100 interactive, 20 proactive)
+│   └── pool.py            # SessionPool: asyncio.Semaphore (500 interactive, 50 proactive)
 ├── bot/
 │   ├── app.py             # Bot + Dispatcher setup, middleware/router registration, startup/shutdown
 │   ├── helpers.py         # get_user_lang, safe_edit_text, build_filterable_keyboard, split_agent_sections
@@ -89,7 +89,7 @@ Each `ClaudeSDKClient` instance spawns a Claude CLI subprocess. Sessions are ass
 
 1. **System prompt** (`prompt_builder.py`) — full string override, built fresh per session from a DB snapshot of the user's profile. Up to 14 sections for interactive (role, rules, output format, tool requirements, student profile, first session guide, teaching approach, level guidance, exercise types, vocab strategy, session context, comeback adaptation, scheduling, bot capabilities). Some are conditional: first session guide (new users only), level guidance, vocab strategy, comeback adaptation (gap ≥ 48h). Proactive prompts are compact (5 sections: role+rules, profile, time context, task, trigger context).
 
-2. **MCP tools** (`tools.py`) — 11 tools registered via `@tool` + `create_sdk_mcp_server()`. Each tool is a closure capturing `(session_factory, user_id)` — creates its own short-lived DB session per call. Tools are filtered by `_SESSION_TYPE_TOOLS[session_type]` before MCP server creation — the SDK never sees disallowed tools.
+2. **MCP tools** (`tools.py`) — 10 tools registered via `@tool` + `create_sdk_mcp_server()`. Each tool is a closure capturing `(session_factory, user_id)` — creates its own short-lived DB session per call. Tools are filtered by `_SESSION_TYPE_TOOLS[session_type]` before MCP server creation — the SDK never sees disallowed tools.
 
 3. **Hooks** (`hooks.py`) — per-session `SessionHookState` tracks exercise scores, tool calls, turn count. `PostToolUse` injects adaptive difficulty hints after exercises (cheap behavior steering — no extra LLM call). `UserPromptSubmit` injects wrap-up hint at 80% of turn limit.
 
@@ -97,12 +97,12 @@ Each `ClaudeSDKClient` instance spawns a Claude CLI subprocess. Sessions are ass
 
 ### Two-tier system
 
-Free vs premium tiers (admin-assigned, no billing). Defined in `config.py:TIER_LIMITS` as `dict[UserTier, TierLimits]`. Affects: model (haiku/sonnet), turn limits (20/30), cost caps (per-session and daily), idle timeout (5/10 min), thinking (adaptive for both), effort (low), notification limits (2/8 LLM/day), rate limits (5/20 msg/min).
+Free vs premium tiers (admin-assigned, no billing). Defined in `config.py:TIER_LIMITS` as `dict[UserTier, TierLimits]`. Affects: model (haiku/sonnet), turn limits (20/35), cost caps (per-session and daily), idle timeout (5/10 min), thinking (adaptive for both), effort (low), notification limits (2/8 LLM/day), rate limits (5/20 msg/min).
 
 ### Concurrency model
 
 - **One session per user** — Redis SET NX lock with tier-based TTL (`cache/session_lock.py`)
-- **Global pool** — `SessionPool` with two `asyncio.Semaphore`s: 100 interactive, 20 proactive (`agent/pool.py`)
+- **Global pool** — `SessionPool` with two `asyncio.Semaphore`s: 500 interactive, 50 proactive (`agent/pool.py`)
 - **Idle cleanup** — `SessionManager` background loop (30s interval) closes sessions after tier-specific timeout, sends warning at 70%
 - **Proactive tick lock** — Redis distributed lock prevents concurrent tick evaluation across hypothetical multi-process deployments
 - **Rate limiting** — Redis-based per-user, enforced in middleware
@@ -128,6 +128,7 @@ Redis is NOT used as a traditional cache — it provides distributed coordinatio
 | Rate limiting | `ratelimit:user:{user_id}:minute` | Increment with TTL |
 | Notification dedup | `notif:dedup:{user_id}:{type}:{date}` | SET with daily TTL |
 | LLM notification counter | `notif:llm_count:{user_id}:{date}` | Increment with daily TTL |
+| Notification cooldown | `notif:cooldown:{user_id}` | SET with 5-min TTL |
 | Proactive tick lock | `lock:proactive_tick` | Distributed lock |
 | Admin health/stats locks | `lock:admin_health`, `lock:admin_stats_report` | Distributed lock |
 | Admin alert dedup | `admin:alert:{type}:{date_hour}` | 1-hour cooldown |
@@ -136,7 +137,7 @@ Redis is NOT used as a traditional cache — it provides distributed coordinatio
 
 10 event triggers in `triggers.py:ALL_TRIGGERS`, evaluated in priority order. Only one fires per user per tick. Phase 2 skips users with active interactive sessions to avoid mid-session interruptions. Three tiers of triggers: Tier 1 (engagement — streak risk, due cards, inactivity), Tier 1.5 (re-engagement — post-onboarding escalation windows, lapsed user escalation, dormant weekly), Tier 2 (learning — weak areas, score trends, incomplete exercises).
 
-Notifications dispatch via three tiers: **template** (i18n, $0), **LLM** (`run_proactive_llm_session()`), **hybrid** (try LLM, fall back to template). `should_send()` gates: paused → preference → quiet hours → dedup. LLM notifications exceeding daily limit downgrade to template.
+Notifications dispatch via three tiers: **template** (i18n, $0), **LLM** (`run_proactive_llm_session()`), **hybrid** (try LLM, fall back to template). `should_send()` gates: paused → preference → quiet hours → cooldown → dedup. LLM notifications exceeding daily limit downgrade to template.
 
 ### Guardrail layers
 
@@ -172,10 +173,10 @@ The bot is a single async process. All stateful objects are module-level singlet
 |--------|--------|------|----------|-------|
 | `settings` | `config.py` | Import time (pydantic-settings, reads env) | — | Immutable `Settings` instance |
 | `tuning` | `config.py` | Import time | — | Immutable `BotTuning` frozen dataclass, centralized magic numbers |
-| `engine` | `db/engine.py` | Import time (`create_async_engine`) | `dispose_engine()` | SQLAlchemy async engine, pool_size=50, max_overflow=30, pool_timeout=10s |
+| `engine` | `db/engine.py` | Import time (`create_async_engine`) | `dispose_engine()` | SQLAlchemy async engine, pool_size=150, max_overflow=100, pool_timeout=10s |
 | `async_session_factory` | `db/engine.py` | Import time (`async_sessionmaker`) | — (engine disposes pool) | Factory callable; `expire_on_commit=False` |
 | `_redis` | `cache/client.py` | Lazy on first `get_redis()` call, thread-safe via `asyncio.Lock` | `close_redis()` | `Redis` + `ConnectionPool` pair; all cache modules call `get_redis()` |
-| `session_pool` | `agent/pool.py` | Import time | — (semaphores don't need cleanup) | Two `asyncio.Semaphore`s (100 interactive, 20 proactive) + counters |
+| `session_pool` | `agent/pool.py` | Import time | — (semaphores don't need cleanup) | Two `asyncio.Semaphore`s (500 interactive, 50 proactive) + counters |
 | `session_manager` | `agent/session_manager.py` | Import time (empty) | `session_manager.stop()` | Owns `_sessions: dict[int, ManagedSession]`, started via `.start(bot)` which launches `_cleanup_loop` |
 | `_scheduler` | `fsrs_engine/scheduler.py` | Import time | — | FSRS `Scheduler()` instance, stateless evaluator |
 | Prometheus metrics | `metrics.py` | Import time (module-level `Counter`/`Gauge`/`Histogram`) | — | 16 metrics, HTTP server started in `on_startup` |
@@ -237,7 +238,7 @@ SDK spawns Claude CLI as subprocess. Nesting guard removed at import time in `se
 
 | Type | Entry point | Model | Hooks | Tools | Timeout | Notes |
 |------|-------------|-------|-------|-------|---------|-------|
-| Interactive | `SessionManager._create_session()` | Tier-based (haiku/sonnet) | PostToolUse + UserPromptSubmit + Stop | 6-10 (session-type filtered) | Idle timeout (5/10 min) | Long-lived, multi-turn, reused across messages |
+| Interactive | `SessionManager._create_session()` | Tier-based (haiku/sonnet) | PostToolUse + UserPromptSubmit + Stop | 6-9 (session-type filtered) | Idle timeout (5/10 min) | Long-lived, multi-turn, reused across messages |
 | Proactive | `run_proactive_llm_session()` | haiku (`tuning.proactive_model`) | None | 2-4 (session-type filtered) | 30s hard timeout | Standalone function, single query, must call `send_notification` once |
 | Summary | `run_summary_llm_session()` | haiku (`tuning.proactive_model`) | None | None (tool-less) | 15s timeout, max 3 turns | Generates session-end summary, no DB writes |
 
@@ -291,16 +292,16 @@ These rules MUST be maintained when modifying code:
 **Middleware order** (`bot/app.py`): `DBSessionMiddleware → AuthMiddleware → RateLimitMiddleware`. Handlers receive `db_session: AsyncSession` and `user: User` from middleware. Never create sessions via `async_session_factory()` in handlers.
 
 **Callback data prefixes** — routers use distinct prefixes to avoid conflicts:
-- `start.py`: `native:`, `target:`, `tz:`, `level:`, `goal:`, `interest:`, `interestdone:`, `schedpref:`, `back:`, `moretarget:`, `moretz:`, `cta:`
+- `start.py`: `native:`, `target:`, `tz:`, `level:`, `goal:`, `goaldone:`, `interest:`, `interestdone:`, `schedpref:`, `back:`, `moretarget:`, `moretz:`, `cta:`
 - `settings.py`: `set:`, `setval:`, `setlvl:`, `setntp:`, `stz:`, `setlang:`, `setlangconfirm:`, `deletemeconfirm`, `sched:pause:`, `sched:resume:`, `sched:del:`, `sched:cdel:`, `setqh:`, `setmn:`, `morelang_s:`, `moretz_s:`
 - `review.py`: `fsrs:`
 - Never reuse a prefix across routers.
 
 **Security boundaries** (in `tools.py`):
-- `_USER_MUTABLE_FIELDS`: only `{interests, learning_goals, preferred_difficulty, session_style, topics_to_avoid, notifications_paused}` can be modified via `update_preference`
+- `_USER_MUTABLE_FIELDS`: only `{interests, learning_goals, preferred_difficulty, session_style, topics_to_avoid, notifications_paused, additional_notes}` can be modified via `update_preference`
 - `_SESSION_TYPE_TOOLS`: defines which tools each session type can access — disallowed tools are excluded from MCP server entirely
 - `send_notification` only available in proactive session types
-- Array caps enforced: interests ≤ 8, learning_goals ≤ 5, topics_to_avoid ≤ 5, weak/strong areas ≤ 10
+- Array caps enforced: interests ≤ 8, learning_goals ≤ 5, topics_to_avoid ≤ 5, additional_notes ≤ 10, weak/strong areas ≤ 10
 
 **One session per user**: Redis SET NX lock. `SessionManager` for interactive, `run_proactive_llm_session()` as standalone function for proactive.
 

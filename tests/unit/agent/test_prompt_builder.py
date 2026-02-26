@@ -46,6 +46,7 @@ def _make_user(**overrides):
     user.tier = "free"
     user.timezone = "UTC"
     user.notifications_paused = False
+    user.additional_notes = []
     for k, v in overrides.items():
         setattr(user, k, v)
     return user
@@ -1352,7 +1353,7 @@ class TestBuildSummaryPrompt:
     """Test the three-tier summary task generation."""
 
     @staticmethod
-    def _build(*, exercise_count=0, vocab_count=0, review_count=0,
+    def _build(*, exercise_count=0, vocab_count=0, words_reviewed=0,
                close_reason="explicit_close", duration_minutes=10,
                exercise_scores=None, exercise_topics=None):
         return build_summary_prompt(
@@ -1363,9 +1364,8 @@ class TestBuildSummaryPrompt:
                 "exercise_topics": exercise_topics or [],
                 "exercise_types": [],
                 "words_added": [],
-                "words_reviewed": 0,
+                "words_reviewed": words_reviewed,
                 "vocab_count": vocab_count,
-                "review_count": review_count,
                 "turn_count": 5,
                 "duration_minutes": duration_minutes,
             },
@@ -1403,3 +1403,113 @@ class TestBuildSummaryPrompt:
         prompt = self._build()
         assert "honest and constructive" in prompt.lower()
         assert "NEVER guilt-trip or criticize" not in prompt
+
+
+class TestPromptExerciseRules:
+    """Test exercise rules and tool requirement changes."""
+
+    def _build(self, **overrides):
+        user = _make_user(**overrides)
+        ctx = compute_session_context(user)
+        return build_system_prompt(user, ctx, due_count=0)
+
+    def test_record_only_after_answer(self):
+        prompt = self._build()
+        assert "NEVER call record_exercise_result in the same message" in prompt
+
+    def test_no_always_call_record(self):
+        """Old 'ALWAYS call record_exercise_result' pattern should not appear."""
+        prompt = self._build()
+        assert "ALWAYS call record_exercise_result" not in prompt
+
+    def test_different_example_sentences(self):
+        prompt = self._build()
+        assert "DIFFERENT example sentences" in prompt
+
+    def test_no_answer_keys(self):
+        prompt = self._build()
+        assert "NEVER include answer keys" in prompt
+
+    def test_no_wait_instruction(self):
+        prompt = self._build()
+        assert "NEVER tell the student to" in prompt
+        assert "wait" in prompt
+
+    def test_additional_notes_in_profile(self):
+        prompt = self._build(additional_notes=["prefers vocab before exercises"])
+        assert "prefers vocab before exercises" in prompt
+
+    def test_additional_notes_empty_shows_none_yet(self):
+        prompt = self._build(additional_notes=[])
+        assert "Additional notes: none yet" in prompt
+
+    def test_additional_notes_tool_instruction(self):
+        prompt = self._build()
+        assert "update_preference(field='additional_notes')" in prompt
+
+
+class TestPromptTeachingApproach:
+    """Test teaching approach restructuring and new rules."""
+
+    def _build(self, **overrides):
+        user = _make_user(**overrides)
+        ctx = compute_session_context(user)
+        return build_system_prompt(user, ctx, due_count=0)
+
+    def test_subsection_labels_present(self):
+        prompt = self._build()
+        assert "SESSION FLOW:" in prompt
+        assert "SCORE ADAPTATION:" in prompt
+        assert "CONTENT SELECTION:" in prompt
+        assert "GOALS:" in prompt
+
+    def test_vocab_timing_guidance(self):
+        prompt = self._build()
+        assert "Teach new vocabulary at the BEGINNING of the session" in prompt
+
+    def test_vocab_end_of_session_gaps(self):
+        prompt = self._build()
+        assert "END if exercises revealed gaps" in prompt
+
+    def test_session_opening_behavior(self):
+        prompt = self._build()
+        assert "ask what the student wants to focus on today" in prompt
+
+    def test_role_expanded(self):
+        prompt = self._build()
+        assert "You teach through exercises, vocabulary, and conversation" in prompt
+
+
+class TestProactivePromptAdditionalNotes:
+    """Test additional_notes in proactive prompt."""
+
+    def test_additional_notes_in_proactive(self):
+        user = _make_user(additional_notes=["enjoys role-play"])
+        prompt = build_proactive_prompt(user, "proactive_nudge", {})
+        assert "enjoys role-play" in prompt
+
+    def test_additional_notes_empty_in_proactive(self):
+        user = _make_user(additional_notes=[])
+        prompt = build_proactive_prompt(user, "proactive_nudge", {})
+        assert "Additional notes: none" in prompt
+
+
+class TestSummaryPromptLabel:
+    """Test summary prompt uses 'Exercises scored' label."""
+
+    def test_exercises_scored_label(self):
+        prompt = build_summary_prompt(
+            "en", "fr",
+            session_data={
+                "exercise_count": 3, "exercise_scores": [7, 8, 6],
+                "exercise_topics": ["verbs"], "exercise_types": ["fill_blank"],
+                "words_added": [], "words_reviewed": 0,
+                "vocab_count": 0, "turn_count": 10,
+            },
+            close_reason="idle_timeout",
+            user_name="Test",
+            user_streak=5,
+            user_level="A2",
+        )
+        assert "Exercises scored: 3" in prompt
+        assert "Exercises completed" not in prompt

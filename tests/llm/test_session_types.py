@@ -28,9 +28,8 @@ async def test_onboarding_uses_limited_tools(create_llm_session):
 
     # Onboarding allows: get_user_profile, update_preference, manage_schedule
     restricted_tools = {"record_exercise_result", "add_vocabulary",
-                        "get_due_vocabulary", "record_vocabulary_review",
-                        "search_vocabulary", "get_exercise_history",
-                        "send_notification"}
+                        "get_due_vocabulary", "search_vocabulary",
+                        "get_exercise_history", "send_notification"}
     called_restricted = restricted_tools & set(session.bare_tools)
     assert not called_restricted, (
         f"Onboarding session should not use restricted tools, but called: {called_restricted}"
@@ -139,9 +138,9 @@ async def test_proactive_quiz_records_exercise(create_llm_session):
     )
 
     # Restricted tools for proactive_quiz should NOT be called
-    restricted = {"add_vocabulary", "get_due_vocabulary", "record_vocabulary_review",
-                  "manage_schedule", "update_preference", "search_vocabulary",
-                  "get_exercise_history"}
+    restricted = {"add_vocabulary", "get_due_vocabulary",
+                  "manage_schedule", "update_preference",
+                  "search_vocabulary", "get_exercise_history"}
     called_restricted = restricted & set(session.bare_tools)
     assert not called_restricted, (
         f"Proactive quiz used restricted tools: {called_restricted}"
@@ -177,8 +176,7 @@ async def test_proactive_summary_loads_history(create_llm_session):
 
     # Restricted tools for proactive_summary should NOT be called
     restricted = {"record_exercise_result", "add_vocabulary", "get_due_vocabulary",
-                  "record_vocabulary_review", "manage_schedule", "update_preference",
-                  "search_vocabulary"}
+                  "manage_schedule", "update_preference", "search_vocabulary"}
     called_restricted = restricted & set(session.bare_tools)
     assert not called_restricted, (
         f"Proactive summary used restricted tools: {called_restricted}"

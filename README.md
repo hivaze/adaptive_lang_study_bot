@@ -42,19 +42,19 @@ POSTGRES_PORT=5432
 POSTGRES_USER=langbot
 POSTGRES_DB=langbot
 REDIS_URL=redis://localhost:6379/0
-MAX_CONCURRENT_INTERACTIVE_SESSIONS=100
-MAX_CONCURRENT_PROACTIVE_SESSIONS=20
+MAX_CONCURRENT_INTERACTIVE_SESSIONS=500
+MAX_CONCURRENT_PROACTIVE_SESSIONS=50
 PROACTIVE_TICK_INTERVAL_SECONDS=60
 ADMIN_HOST=0.0.0.0
 ADMIN_PORT=7860
 ADMIN_TELEGRAM_IDS=[]         # JSON array of admin user IDs, e.g. [123456,789012]
 LOG_LEVEL=INFO
 METRICS_PORT=9090
-DB_POOL_SIZE=50
-DB_MAX_OVERFLOW=30
+DB_POOL_SIZE=150
+DB_MAX_OVERFLOW=100
 DB_POOL_RECYCLE=3600          # seconds
 DB_POOL_TIMEOUT=10            # seconds to wait for a connection before raising
-REDIS_MAX_CONNECTIONS=50
+REDIS_MAX_CONNECTIONS=200
 ```
 
 2. Start all services:
@@ -107,14 +107,14 @@ All configuration is via environment variables (loaded by `pydantic-settings` fr
 | Parameter | Free | Premium |
 |-----------|------|---------|
 | Model | claude-haiku-4-5 | claude-sonnet-4-6 |
-| Max turns/session | 20 | 30 |
-| Max sessions/day | 7 | unlimited |
+| Max turns/session | 20 | 35 |
+| Max sessions/day | 5 | 15 |
 | Session idle timeout | 5 min | 10 min |
 | Thinking mode | adaptive | adaptive |
 | Effort | low | low |
 | LLM notifications/day | 2 | 8 |
 | Rate limit | 5 msg/min | 20 msg/min |
-| Max cost/session | $0.30 | $1.50 |
+| Max cost/session | $0.40 | $1.50 |
 | Max cost/day | $2.00 | $8.00 |
 
 To grant a user premium access, use the admin panel or update the `tier` column in the `users` table directly.
@@ -159,7 +159,7 @@ Any other text message starts or continues an interactive study session with the
 │ Agent Session (per user)                                       │
 │   ClaudeSDKClient ──────────────────> Anthropic API            │
 │    ├── System Prompt (14 sections)     (Haiku / Sonnet)        │
-│    ├── MCP Server (11 tools) ────────> PostgreSQL              │
+│    ├── MCP Server (10 tools) ────────> PostgreSQL              │
 │    └── Hooks (PostToolUse, UserPromptSubmit, Stop)             │
 │              │ on close                                        │
 │              ▼                                                 │
@@ -254,6 +254,7 @@ Used for locking, rate limiting, and deduplication:
 | `ratelimit:user:{id}:*` | 60s | Per-user rate limiting |
 | `notif:dedup:{user_id}:{type}:{date}` | 24h | Prevent duplicate notifications |
 | `notif:llm_count:{user_id}:{date}` | 24h | Track daily LLM notification count per user |
+| `notif:cooldown:{user_id}` | 5 min | Per-user cooldown between any notifications |
 | `lock:proactive_tick` | 5 min | Distributed lock for tick scheduler |
 | `lock:admin_stats_report` | 5 min | Distributed lock for stats report |
 | `lock:admin_health` | 2 min | Distributed lock for health alerts |
@@ -399,6 +400,49 @@ Scale estimates assume 60% daily active rate and 1.5 sessions per active user pe
 | 100 users | ~$180/mo | ~$320/mo | ~$1,500/mo |
 | 1,000 users | ~$1,800/mo | ~$3,200/mo | ~$15,000/mo |
 
+## Capacity & Max Load
+
+The primary bottleneck is the **interactive session pool** — each concurrent user holds one Claude CLI subprocess (~50-80 MB RAM) for the duration of their session (until idle timeout or `/end`). Defaults are tuned for ~50,000 registered users.
+
+### Default resource limits
+
+| Resource | Default | Env var / Config |
+|----------|---------|------------------|
+| Interactive session pool | 500 concurrent | `MAX_CONCURRENT_INTERACTIVE_SESSIONS` |
+| Proactive session pool | 50 concurrent | `MAX_CONCURRENT_PROACTIVE_SESSIONS` |
+| Bot container memory | 40 GB | `docker-compose.yml` deploy limit |
+| DB connection pool | 150 + 100 overflow | `DB_POOL_SIZE`, `DB_MAX_OVERFLOW` |
+| PostgreSQL max connections | 500 | `docker-compose.yml` command args |
+| Redis max connections | 200 | `REDIS_MAX_CONNECTIONS` |
+| Redis memory | 512 MB | `docker-compose.yml` command args |
+
+### User capacity estimates
+
+Assumptions: 60% daily active rate, 1.5 sessions per active user per day, average session occupies a slot for ~5 minutes, activity spread over ~16 waking hours, peak load ~3x average.
+
+| Registered users | Avg concurrent sessions | Peak concurrent (est.) | Fits in 500 slots? |
+|-----------------|------------------------|----------------------|-------------------|
+| 1,000 | ~5 | ~15 | Yes (comfortable) |
+| 10,000 | ~47 | ~140 | Yes |
+| 50,000 | ~234 | ~700 | Yes (some rejection at extreme peaks) |
+| 100,000 | ~469 | ~1,400 | No (pool exhaustion at peak) |
+
+**Memory bound**: 500 concurrent sessions x ~65 MB avg = ~32.5 GB. Fits within the 40 GB container limit with headroom for the Python process and overhead.
+
+### Proactive notification throughput
+
+Each 60-second tick dispatches up to 50 concurrent notifications. Template notifications ($0) resolve in milliseconds; LLM notifications take ~5-30 seconds each. At 50 concurrent LLM slots, the system can dispatch ~100-600 LLM notifications per tick (depending on generation time). Daily LLM limits (2 free / 8 premium per user) bound demand to ~54 avg / ~160 peak per tick at 30k DAU — well within capacity. Excess LLM demand auto-downgrades to free template notifications.
+
+### Scaling beyond defaults
+
+| Bottleneck | How to scale |
+|-----------|-------------|
+| Session pool exhausted | Increase `MAX_CONCURRENT_INTERACTIVE_SESSIONS` (requires proportional RAM) |
+| Bot out of memory | Increase Docker memory limit (~65 MB per additional concurrent session) |
+| DB connections saturated | Increase `DB_POOL_SIZE` and PostgreSQL `max_connections` |
+| Proactive notifications slow | Increase `MAX_CONCURRENT_PROACTIVE_SESSIONS` |
+| Single-process CPU bound | Not horizontally scalable — the bot runs as a single process with in-memory session state. Scaling beyond one instance requires architectural changes (external session store, distributed session management). |
+
 ## Docker Compose Operations
 
 The stack runs 4 services:
@@ -407,8 +451,8 @@ The stack runs 4 services:
 |---------|-------|---------|------|
 | `bot` | custom (Dockerfile) | Telegram bot + APScheduler proactive engine | 9090 (Prometheus metrics) |
 | `admin` | custom (Dockerfile) | Gradio admin panel | 7860 |
-| `postgres` | postgres:16-alpine | Database (max_connections=200, tuned shared_buffers/work_mem) | 5432 (internal) |
-| `redis` | redis:7-alpine | Locks, rate limits, dedup (256MB, noeviction) | 6379 (internal) |
+| `postgres` | postgres:16-alpine | Database (max_connections=500, tuned shared_buffers/work_mem) | 5432 (internal) |
+| `redis` | redis:7-alpine | Locks, rate limits, dedup (512MB, noeviction) | 6379 (internal) |
 
 ### Lifecycle
 
@@ -619,7 +663,7 @@ Or via the admin panel's System tab.
 
 ### Docker resource requirements
 
-The bot container is allocated 8GB memory to support up to 100 concurrent interactive agent sessions (~50-80MB each for the Claude CLI subprocess). PostgreSQL is tuned with `shared_buffers=512MB`, `work_mem=4MB`, and SSD-optimized settings. Redis is capped at 256MB with `noeviction` policy (Redis stores locks and coordination data, not cache — eviction would cause correctness bugs).
+The bot container is allocated 40GB memory to support up to 500 concurrent interactive agent sessions (~50-80MB each for the Claude CLI subprocess). PostgreSQL is tuned with `shared_buffers=1GB`, `work_mem=4MB`, and SSD-optimized settings. Redis is capped at 512MB with `noeviction` policy (Redis stores locks and coordination data, not cache — eviction would cause correctness bugs).
 
 ## Troubleshooting
 

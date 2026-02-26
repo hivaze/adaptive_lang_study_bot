@@ -47,6 +47,25 @@ def _extract_score(tool_output: Any) -> int | None:
     return None
 
 
+def _extract_field(tool_output: Any, field: str) -> Any:
+    """Extract a field from tool output JSON, handling SDK envelope variations."""
+    try:
+        if isinstance(tool_output, dict):
+            content_list = tool_output.get("content", [])
+            if content_list and isinstance(content_list[0], dict):
+                data = json.loads(content_list[0].get("text", "{}"))
+                return data.get(field)
+        if isinstance(tool_output, list):
+            if tool_output and isinstance(tool_output[0], dict):
+                data = json.loads(tool_output[0].get("text", "{}"))
+                return data.get(field)
+        if isinstance(tool_output, str):
+            return json.loads(tool_output).get(field)
+    except (ValueError, TypeError, KeyError, IndexError):
+        pass
+    return None
+
+
 class SessionHookState:
     """Accumulates hook data during a session."""
 
@@ -67,7 +86,7 @@ class SessionHookState:
         self.exercise_topics: list[str] = []
         self.exercise_types: list[str] = []
         self.words_added: list[str] = []
-        self.words_reviewed: int = 0
+        self.words_reviewed: int = 0  # Count of vocab words auto-reviewed via exercises
 
 
 def build_session_hooks(user_id: int) -> tuple[dict[str, list[HookMatcher]], SessionHookState]:
@@ -119,9 +138,6 @@ def build_session_hooks(user_id: int) -> tuple[dict[str, list[HookMatcher]], Ses
                 if isinstance(word, str) and word.strip():
                     state.words_added.append(word.strip()[:100])
 
-        elif stripped_name == "record_vocabulary_review":
-            state.words_reviewed += 1
-
         # Inject adaptive hints after recording exercise results
         if stripped_name == "record_exercise_result":
             topic = tool_input.get("topic", "")
@@ -130,6 +146,11 @@ def build_session_hooks(user_id: int) -> tuple[dict[str, list[HookMatcher]], Ses
             ex_type = tool_input.get("exercise_type", "")
             if isinstance(ex_type, str) and ex_type.strip():
                 state.exercise_types.append(ex_type.strip()[:100])
+
+            # Track auto-reviewed vocabulary words from exercise
+            reviewed = _extract_field(tool_output, "vocabulary_reviewed")
+            if isinstance(reviewed, list):
+                state.words_reviewed += len(reviewed)
 
             score = _extract_score(tool_output)
             if score is None and tool_output:

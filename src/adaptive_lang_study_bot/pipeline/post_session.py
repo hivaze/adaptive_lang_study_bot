@@ -110,6 +110,10 @@ async def run_post_session(
                 updates["strong_areas"] = user.strong_areas[:10]
                 issues.append("Strong areas capped at 10")
 
+            if user.additional_notes and len(user.additional_notes) > tuning.max_additional_notes:
+                updates["additional_notes"] = user.additional_notes[:tuning.max_additional_notes]
+                issues.append(f"Additional notes capped at {tuning.max_additional_notes}")
+
             tool_names = [
                 strip_mcp_prefix(tc) for tc in tools_called
             ]
@@ -243,9 +247,9 @@ async def run_post_session(
                 activity["score"] = last_score
             if all_words:
                 unique_words = list(dict.fromkeys(all_words))
-                activity["words_practiced"] = [w[:100] for w in unique_words[:20]]
+                activity["words_practiced"] = [w[:100] for w in unique_words[:50]]
             if all_topics:
-                activity["topics_covered"] = all_topics[:10]
+                activity["topics_covered"] = all_topics[:30]
 
             # Error patterns: topics where user scored poorly (avg <= 5)
             struggling = [
@@ -284,7 +288,7 @@ async def run_post_session(
 
             updates["last_activity"] = activity
 
-            # Append compact entry to session_history (rolling last 5)
+            # Append enriched entry to session_history (rolling window)
             history = list(user.session_history or [])
             history_entry: dict = {
                 "date": local_now.strftime("%Y-%m-%d %H:%M"),
@@ -293,9 +297,20 @@ async def run_post_session(
                 "close_reason": close_reason,
             }
             if all_topics:
-                history_entry["topics"] = all_topics[:5]
+                history_entry["topics"] = all_topics
             if last_score is not None:
                 history_entry["score"] = last_score
+            if exercises:
+                history_entry["exercise_count"] = len(exercises)
+            if type_scores:
+                history_entry["exercise_types"] = list(type_scores.keys())[:5]
+            if all_words:
+                history_entry["words_practiced"] = [w[:50] for w in all_words[:10]]
+            # Duration: fetch session start time
+            session_for_duration = await SessionRepo.get(db, session_id)
+            if session_for_duration is not None and session_for_duration.started_at:
+                duration_sec = (now - session_for_duration.started_at).total_seconds()
+                history_entry["duration_minutes"] = max(1, int(duration_sec / 60))
             history.append(history_entry)
             updates["session_history"] = history[-tuning.session_history_cap:]
 
@@ -324,7 +339,8 @@ async def run_post_session(
             # the session's add_vocabulary increments (atomic UPDATE in tool),
             # so using it as prev_count would make prev == actual and
             # milestones crossed during the session would never fire.
-            session_record = await SessionRepo.get(db, session_id)
+            # Reuse session record fetched for duration (or fetch if not yet)
+            session_record = session_for_duration or await SessionRepo.get(db, session_id)
             if session_record is not None:
                 session_vocab_added = await VocabularyRepo.count_added_since(
                     db, user_id, session_record.started_at,

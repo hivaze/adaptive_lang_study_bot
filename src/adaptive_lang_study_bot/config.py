@@ -16,7 +16,7 @@ class BotTuning:
     """Tunable behaviour constants for the bot."""
 
     # -- Difficulty auto-adjust (post_session.py) --
-    difficulty_recent_window: int = 7  # how many recent scores to consider (was 5)
+    difficulty_recent_window: int = 5  # how many recent scores to consider (was 7)
     difficulty_up_normal_hard: float = 8.0  # avg to go normal→hard (was 9.0)
     difficulty_up_easy_normal: float = 7.5  # avg to go easy→normal (was 8.5)
     difficulty_down_hard_normal: float = 4.5  # avg to go hard→normal (was 3.0)
@@ -25,7 +25,7 @@ class BotTuning:
     # -- Level auto-adjust (tools.py record_exercise_result) --
     level_up_avg: float = 9.0
     level_down_avg: float = 3.0
-    level_recent_window: int = 5
+    level_recent_window: int = 10
 
     # -- Weak / strong area thresholds (tools.py) --
     weak_area_score: int = 5  # score threshold to consider "weak" (was 4)
@@ -37,6 +37,7 @@ class BotTuning:
     max_interests: int = 8  # was 5
     max_learning_goals: int = 5  # was 3
     max_topics_to_avoid: int = 5
+    max_additional_notes: int = 10
 
     # -- Streak --
     streak_grace_days: int = 2  # days before streak resets (was 1 day = instant reset)
@@ -98,8 +99,8 @@ class BotTuning:
     summary_effort: str = "low"
 
     # -- Proactive tick --
-    proactive_dispatch_concurrency: int = 20  # max parallel dispatches per tick phase
-    proactive_user_page_size: int = 500  # users loaded per page in event trigger phase
+    proactive_dispatch_concurrency: int = 50  # max parallel dispatches per tick phase
+    proactive_user_page_size: int = 1000  # users loaded per page in event trigger phase
     proactive_lock_refresh_interval: int = 60  # seconds between lock refreshes during dispatch
     schedule_max_backoff_minutes: int = 1440  # 24h max backoff for failed schedules
     schedule_max_consecutive_failures: int = 10  # auto-pause after this many failures
@@ -143,19 +144,19 @@ TIER_LIMITS: dict[UserTier, TierLimits] = {
     UserTier.FREE: TierLimits(
         model="claude-haiku-4-5",
         max_turns_per_session=20,
-        max_sessions_per_day=7,
+        max_sessions_per_day=5,
         max_cost_per_day_usd=2.00,
         session_idle_timeout_seconds=300,
         thinking_type="adaptive",
         max_llm_notifications_per_day=2,
         rate_limit_per_minute=5,
-        max_cost_per_session_usd=0.30,
+        max_cost_per_session_usd=0.40,
         redis_session_ttl_seconds=420,  # idle_timeout (300) + 120s buffer for cleanup loop delays
     ),
     UserTier.PREMIUM: TierLimits(
         model="claude-sonnet-4-6",
-        max_turns_per_session=30,
-        max_sessions_per_day=0,  # 0 = unlimited
+        max_turns_per_session=35,
+        max_sessions_per_day=15,
         max_cost_per_day_usd=8.00,
         session_idle_timeout_seconds=600,
         thinking_type="adaptive",
@@ -190,18 +191,18 @@ class Settings(BaseSettings):
     # PostgreSQL pool — tools now use per-call sessions (not held for session
     # lifetime), so peak usage is transient: concurrent tool calls +
     # middleware/pipeline sessions.  50 + 30 overflow is generous.
-    db_pool_size: int = 50
-    db_max_overflow: int = 30
+    db_pool_size: int = 150
+    db_max_overflow: int = 100
     db_pool_recycle: int = 3600  # seconds
     db_pool_timeout: int = 10  # seconds to wait for a connection before raising
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"
-    redis_max_connections: int = 50
+    redis_max_connections: int = 200
 
     # Session manager
-    max_concurrent_interactive_sessions: int = 100
-    max_concurrent_proactive_sessions: int = 20
+    max_concurrent_interactive_sessions: int = 500
+    max_concurrent_proactive_sessions: int = 50
 
     # Proactive engine
     proactive_tick_interval_seconds: int = 60
