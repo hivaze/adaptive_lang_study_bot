@@ -9,6 +9,7 @@ Try the live bot: [@personal_lang_study_bot](https://t.me/personal_lang_study_bo
 ## Features
 
 - **Adaptive exercises** — the AI generates exercises tailored to the user's level (A1-C2), interests, weak areas, and preferred difficulty. No static exercise bank.
+- **Learning plans** — structured multi-week study plans with phases, topics, and vocabulary targets. Progress is derived from exercise results. The agent adapts plans when the student is ahead or behind schedule.
 - **Vocabulary tracking** — words are stored per-user with FSRS spaced repetition. The bot schedules reviews at optimal intervals.
 - **Proactive notifications** — streak-at-risk alerts, vocabulary review reminders, weekly progress summaries. Users control schedules via natural language or `/settings`.
 - **Two-tier system** — Free (Haiku 4.5) and Premium (Sonnet 4.6) with different limits. No billing — admin grants premium via the Gradio panel.
@@ -158,8 +159,8 @@ Any other text message starts or continues an interactive study session with the
 │              ▼                                                 │
 │ Agent Session (per user)                                       │
 │   ClaudeSDKClient ──────────────────> Anthropic API            │
-│    ├── System Prompt (14 sections)     (Haiku / Sonnet)        │
-│    ├── MCP Server (10 tools) ────────> PostgreSQL              │
+│    ├── System Prompt (15 sections)     (Haiku / Sonnet)        │
+│    ├── MCP Server (11 tools) ────────> PostgreSQL              │
 │    └── Hooks (PostToolUse, UserPromptSubmit, Stop)             │
 │              │ on close                                        │
 │              ▼                                                 │
@@ -178,7 +179,7 @@ Any other text message starts or continues an interactive study session with the
            ▼                 ▼
 ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐
 │  PostgreSQL 16   │ │    Redis 7       │ │  Anthropic API   │
-│  7 tables        │ │  session locks   │ │  Haiku 4.5       │
+│  8 tables        │ │  session locks   │ │  Haiku 4.5       │
 │                  │ │  rate limits     │ │  Sonnet 4.6      │
 │  users           │ │  notif dedup     │ │                  │
 │  vocabulary      │ │  tick lock       │ │  via Claude      │
@@ -225,6 +226,7 @@ src/adaptive_lang_study_bot/
 - **Per-session closures** — each agent session creates its own tool and hook functions. Tools capture a session factory and user ID (each tool call gets its own short-lived DB session). This ensures complete data isolation between concurrent users.
 - **Long-lived sessions** — each user gets one `ClaudeSDKClient` that persists across messages until closed (by turn/cost limit, idle timeout, or `/end`). A new session builds a fresh system prompt from the user's current DB profile snapshot.
 - **Hybrid personalization** — the system prompt carries the user profile snapshot (read-only context), while MCP tools handle all DB writes (exercises, vocabulary, preferences).
+- **Learning plans** — structured multi-week plans (2-8 weeks) with phases, focus topics, and vocabulary targets. Progress is derived on-the-fly from exercise results (`compute_plan_progress`) — no stored per-topic state. The agent adapts plans when the student is ahead or behind schedule.
 - **Three-tier notifications** — template ($0 cost, random variant from locale files), LLM (short-lived proactive session generates personalized message), or hybrid (try LLM, fall back to template). Free users get 2 LLM notifications/day, premium get 8.
 - **Re-engagement triggers** — escalating nudge system for post-onboarding (24h → 3d → 7d → 14d), lapsed users (gentle → compelling → miss-you), and dormant users (weekly nudges for 21-45 days inactive), with automatic stop after final attempt.
 - **Localized UI** — all user-facing messages (bot UI, notifications, session summaries, warnings) rendered via `i18n.t()` in the user's native language.
@@ -232,7 +234,7 @@ src/adaptive_lang_study_bot/
 
 ### Database
 
-PostgreSQL with 7 tables:
+PostgreSQL with 8 tables:
 
 | Table | Purpose |
 |-------|---------|
@@ -243,6 +245,7 @@ PostgreSQL with 7 tables:
 | `exercise_results` | Individual exercise scores for analytics |
 | `notifications` | Audit log of all sent/skipped notifications |
 | `vocabulary_review_log` | Individual FSRS review events |
+| `learning_plans` | Structured multi-week study plans with JSONB phases/topics (one per user) |
 
 ### Redis
 
@@ -305,6 +308,7 @@ No database, Redis, or SDK required. They verify:
 - Post-session pipeline steps and post-session logic
 - FSRS engine operations
 - Config validation
+- Learning plan progress computation
 - Hook behavior (adaptive hints, wrap-up injection)
 - Auth middleware logic
 - Admin role checks
@@ -320,6 +324,7 @@ Require Docker. Use `testcontainers` to spin up real PostgreSQL 16 and Redis 7 c
 - Repository operations (user, vocabulary, session, schedule, exercise, notification)
 - Redis session lock and cache behavior
 - Atomic operations and concurrent access
+- Learning plan CRUD and constraints
 - Notification dispatch integration
 
 ### LLM tests (`tests/llm/`)
@@ -329,6 +334,7 @@ Require `ANTHROPIC_API_KEY`. Make real Claude API calls via `claude-agent-sdk` t
 - Security boundaries (tool permissions, field whitelists)
 - Tool calling compliance
 - Session type behavior (onboarding vs interactive)
+- Learning plan tool calling (create, get, session-type restrictions)
 - Adaptive behavior (score-based hints)
 - Multi-turn conversations
 
