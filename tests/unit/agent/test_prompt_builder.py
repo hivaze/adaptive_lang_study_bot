@@ -1422,7 +1422,7 @@ class TestPromptExerciseRules:
 
     def test_different_example_sentences(self):
         prompt = self._build()
-        assert "DIFFERENT example sentences" in prompt
+        assert "COMPLETELY DIFFERENT sentences" in prompt
 
     def test_no_answer_keys(self):
         prompt = self._build()
