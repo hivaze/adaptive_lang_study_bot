@@ -160,7 +160,7 @@ Any other text message starts or continues an interactive study session with the
 │ Agent Session (per user)                                       │
 │   ClaudeSDKClient ──────────────────> Anthropic API            │
 │    ├── System Prompt (15 sections)     (Haiku / Sonnet)        │
-│    ├── MCP Server (11 tools) ────────> PostgreSQL              │
+│    ├── MCP Server (10 tools) ────────> PostgreSQL              │
 │    └── Hooks (PostToolUse, UserPromptSubmit, Stop)             │
 │              │ on close                                        │
 │              ▼                                                 │
@@ -168,7 +168,7 @@ Any other text message starts or continues an interactive study session with the
 │ (streak, difficulty, milestones)                               │
 │                                                                │
 │ PROACTIVE ENGINE                                               │
-│ APScheduler 60s --> 10 Triggers --> Dispatcher                 │
+│ APScheduler 60s --> 11 Triggers --> Dispatcher                 │
 │                                     ├── template --> Telegram  │
 │                                     └── LLM ─────-> Anthropic  │
 │                                                                │
@@ -179,7 +179,7 @@ Any other text message starts or continues an interactive study session with the
            ▼                 ▼
 ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐
 │  PostgreSQL 16   │ │    Redis 7       │ │  Anthropic API   │
-│  8 tables        │ │  session locks   │ │  Haiku 4.5       │
+│  9 tables        │ │  session locks   │ │  Haiku 4.5       │
 │                  │ │  rate limits     │ │  Sonnet 4.6      │
 │  users           │ │  notif dedup     │ │                  │
 │  vocabulary      │ │  tick lock       │ │  via Claude      │
@@ -187,7 +187,9 @@ Any other text message starts or continues an interactive study session with the
 │  schedules       │ │                  │ │                  │
 │  exercises       │ │                  │ │                  │
 │  notifications   │ │                  │ │                  │
+│  learning_plans  │ │                  │ │                  │
 │  review_log      │ │                  │ │                  │
+│  access_requests │ │                  │ │                  │
 └────────▲─────────┘ └──────────────────┘ └──────────────────┘
          │
 ┌────────┴─────────┐
@@ -195,8 +197,10 @@ Any other text message starts or continues an interactive study session with the
 │  Panel :7860     │
 │                  │
 │  Users  Sessions │
-│  Costs  Alerts   │
-│  System          │
+│  Costs Analytics │
+│  Alerts  System  │
+│  Broadcast       │
+│  Whitelist       │
 └──────────────────┘
 ```
 
@@ -234,7 +238,7 @@ src/adaptive_lang_study_bot/
 
 ### Database
 
-PostgreSQL with 8 tables:
+PostgreSQL with 9 tables:
 
 | Table | Purpose |
 |-------|---------|
@@ -246,6 +250,7 @@ PostgreSQL with 8 tables:
 | `notifications` | Audit log of all sent/skipped notifications |
 | `vocabulary_review_log` | Individual FSRS review events |
 | `learning_plans` | Structured multi-week study plans with JSONB phases/topics (one per user) |
+| `access_requests` | Whitelist access requests with approval status and reviewer info |
 
 ### Redis
 
@@ -303,7 +308,7 @@ No database, Redis, or SDK required. They verify:
 - Pure functions (message splitting, timezone conversion, language detection, utils helpers)
 - Prompt builder output structure and sanitization
 - Notification template rendering via i18n
-- Trigger evaluation logic (all 10 triggers + re-engagement escalation)
+- Trigger evaluation logic (all 11 triggers + re-engagement escalation)
 - Dispatcher gate logic (should_send conditions)
 - Post-session pipeline steps and post-session logic
 - FSRS engine operations
@@ -374,12 +379,15 @@ Automated alerts sent to admin Telegram IDs (deduped per hour per type):
 
 ### Admin Panel (Gradio)
 
-Available at `http://localhost:7860` (requires `ADMIN_API_TOKEN`, login as `admin`). Five tabs:
+Available at `http://localhost:7860` (requires `ADMIN_API_TOKEN`, login as `admin`). Eight tabs:
 - **Users** — search by name/username/ID, view full profile, toggle tier (free/premium), toggle active status, toggle admin role
 - **Sessions** — recent 100 sessions: user, type, cost, turns, tools used, pipeline status, duration
 - **Costs** — summary (today/7d/30d), daily breakdown (14 days), per-user cost ranking (7 days)
+- **Analytics** — user activity trends, session metrics, retention data
 - **Alerts** — pipeline failures, notification delivery stats (7-day status breakdown + recent 20)
 - **System** — active session pool, Redis memory, DB status, configuration snapshot, health alert status (7 checks)
+- **Broadcast** — send messages to all users or filtered groups
+- **Whitelist** — manage access requests: view pending, approve/reject, track approvals
 
 ### Logs
 

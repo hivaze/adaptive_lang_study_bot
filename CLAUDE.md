@@ -27,25 +27,25 @@ poetry add <package>                           # add dependency
 src/adaptive_lang_study_bot/
 ├── config.py              # Settings (pydantic-settings), BotTuning (centralized magic numbers), TIER_LIMITS
 ├── enums.py               # StrEnum: UserTier, SessionType, NotificationTier, CloseReason, Difficulty, SessionStyle, etc.
-├── utils.py               # Helpers: user_local_now, safe_zoneinfo, compute_next_trigger, get_language_name, strip_mcp_prefix, is_user_admin, compute_new_streak, summarize_tool_usage
+├── utils.py               # Helpers: user_local_now, safe_zoneinfo, compute_next_trigger, get_language_name, strip_mcp_prefix, is_user_admin, compute_new_streak, summarize_tool_usage, stamp_field/stamp_fields/get_item_date (field timestamps)
 ├── i18n.py                # t(key, lang, **kwargs) with JSON locale fallback
 ├── logging_config.py      # Loguru setup + stdlib bridge, runtime log level toggle
 ├── metrics.py             # Prometheus counters/gauges/histograms (16 metrics)
 ├── locales/               # JSON locale files (en, ru, es, fr, de, pt, it)
 ├── agent/
-│   ├── tools.py           # 11 MCP tools, _SESSION_TYPE_TOOLS, _USER_MUTABLE_FIELDS, compute_plan_progress()
+│   ├── tools.py           # 10 MCP tools, _SESSION_TYPE_TOOLS, _USER_MUTABLE_FIELDS, compute_plan_progress()
 │   ├── hooks.py           # PostToolUse (adaptive hints), UserPromptSubmit (turn limit), Stop hooks
 │   ├── prompt_builder.py  # build_system_prompt(), build_proactive_prompt(), compute_session_context()
 │   ├── session_manager.py # SessionManager (interactive) + run_proactive_llm_session() + run_summary_llm_session() (standalone)
 │   └── pool.py            # SessionPool: asyncio.Semaphore (500 interactive, 50 proactive)
 ├── bot/
 │   ├── app.py             # Bot + Dispatcher setup, middleware/router registration, startup/shutdown
-│   ├── helpers.py         # get_user_lang, safe_edit_text, build_filterable_keyboard, split_agent_sections
+│   ├── helpers.py         # get_user_lang, safe_edit_text, build_filterable_keyboard, split_agent_sections, markdown_to_telegram_html
 │   ├── middlewares/       # DBSession → Auth → RateLimit (order matters)
 │   └── routers/           # start, chat, settings, review, stats, debug
 ├── db/
 │   ├── engine.py          # SQLAlchemy async engine + session factory
-│   ├── models.py          # 8 ORM models: User, Vocabulary, Session, Schedule, ExerciseResult, Notification, VocabularyReviewLog, LearningPlan
+│   ├── models.py          # 9 ORM models: User, Vocabulary, Session, Schedule, ExerciseResult, Notification, LearningPlan, VocabularyReviewLog, AccessRequest
 │   ├── repositories.py    # Static-method repos with explicit AsyncSession param
 │   └── migrations/        # Alembic
 ├── cache/
@@ -55,12 +55,12 @@ src/adaptive_lang_study_bot/
 │   └── session_lock.py    # Per-user session lock (SET NX)
 ├── proactive/
 │   ├── tick.py            # APScheduler 60s tick: Phase 1 (schedules) → Phase 2 (event triggers)
-│   ├── triggers.py        # 10 event triggers in ALL_TRIGGERS priority list
+│   ├── triggers.py        # 11 event triggers in ALL_TRIGGERS priority list
 │   ├── dispatcher.py      # should_send() gates, template/LLM/hybrid dispatch, CTA keyboards
 │   └── admin_reports.py   # Stats reports (12h), health alerts (60s), 7 health checks
 ├── fsrs_engine/scheduler.py  # FSRS spaced repetition wrapper
 ├── pipeline/post_session.py  # Post-session pipeline (pure Python, no LLM): validation, streak, difficulty, milestones
-├── admin/app.py              # Gradio admin panel (5 tabs: Users, Sessions, Costs, Alerts, System)
+├── admin/app.py              # Gradio admin panel (8 tabs: Users, Sessions, Costs, Analytics, Alerts, System, Broadcast, Whitelist)
 └── entrypoints/              # run_bot.py (bot + APScheduler), run_admin.py (Gradio)
 
 tests/
@@ -87,9 +87,9 @@ development/
 
 Each `ClaudeSDKClient` instance spawns a Claude CLI subprocess. Sessions are assembled from four layers:
 
-1. **System prompt** (`prompt_builder.py`) — full string override, built fresh per session from a DB snapshot of the user's profile. Up to 15 sections for interactive (role, rules, output format, tool requirements, student profile, first session guide, teaching approach, level guidance, exercise types, vocab strategy, session context, comeback adaptation, scheduling, learning plan, bot capabilities). Some are conditional: first session guide (new users only), level guidance, vocab strategy, comeback adaptation (gap ≥ 48h), learning plan (three modes: active plan with progress, suggest plan after N sessions, defer). Proactive prompts are compact (5 sections + conditional learning plan context for proactive_summary: role+rules, profile, time context, task, trigger context).
+1. **System prompt** (`prompt_builder.py`) — full string override, built fresh per session from a DB snapshot of the user's profile. Up to 15 sections for interactive (role, rules, output format, tool requirements, student profile, first session guide, teaching approach, level guidance, exercise types, vocab strategy, session context, comeback adaptation, scheduling, learning plan, bot capabilities). Some are conditional: first session guide (new users only), level guidance, vocab strategy, comeback adaptation (gap ≥ 48h), learning plan (three modes: active plan with progress, propose plan interactively on early sessions ≤ `plan_auto_create_after_sessions`, auto-create plan silently for experienced users). Proactive prompts are compact (5 sections + conditional learning plan context for proactive_summary: role+rules, profile, time context, task, trigger context).
 
-2. **MCP tools** (`tools.py`) — 11 tools registered via `@tool` + `create_sdk_mcp_server()`. Each tool is a closure capturing `(session_factory, user_id)` — creates its own short-lived DB session per call. Tools are filtered by `_SESSION_TYPE_TOOLS[session_type]` before MCP server creation — the SDK never sees disallowed tools.
+2. **MCP tools** (`tools.py`) — 10 tools registered via `@tool` + `create_sdk_mcp_server()`. Each tool is a closure capturing `(session_factory, user_id)` — creates its own short-lived DB session per call. Tools are filtered by `_SESSION_TYPE_TOOLS[session_type]` before MCP server creation — the SDK never sees disallowed tools.
 
 3. **Hooks** (`hooks.py`) — per-session `SessionHookState` tracks exercise scores, tool calls, turn count. `PostToolUse` injects adaptive difficulty hints after exercises (cheap behavior steering — no extra LLM call). `UserPromptSubmit` injects wrap-up hint at 80% of turn limit.
 
@@ -109,7 +109,7 @@ Free vs premium tiers (admin-assigned, no billing). Defined in `config.py:TIER_L
 
 ### Database (PostgreSQL)
 
-8 tables, SQLAlchemy 2.0 async ORM. `users.telegram_id` (BIGINT) as PK.
+9 tables, SQLAlchemy 2.0 async ORM. `users.telegram_id` (BIGINT) as PK.
 
 Key patterns:
 - **Repositories** — static methods, explicit `AsyncSession` param, no hidden state. Handlers use middleware-injected `db_session`; tool closures create their own sessions via `session_factory`.
@@ -135,7 +135,7 @@ Redis is NOT used as a traditional cache — it provides distributed coordinatio
 
 ### Proactive engine
 
-10 event triggers in `triggers.py:ALL_TRIGGERS`, evaluated in priority order. Only one fires per user per tick. Phase 2 skips users with active interactive sessions to avoid mid-session interruptions. Three tiers of triggers: Tier 1 (engagement — streak risk, due cards, inactivity), Tier 1.5 (re-engagement — post-onboarding escalation windows, lapsed user escalation, dormant weekly), Tier 2 (learning — weak areas, score trends, incomplete exercises).
+11 event triggers in `triggers.py:ALL_TRIGGERS`, evaluated in priority order. Only one fires per user per tick. Phase 2 skips users with active interactive sessions to avoid mid-session interruptions. Three tiers of triggers: Tier 1 (engagement — streak risk, due cards, inactivity), Tier 1.5 (re-engagement — post-onboarding escalation windows, lapsed user escalation, dormant weekly), Tier 2 (learning — weak areas, score trends, incomplete exercises, progress celebrations).
 
 Notifications dispatch via three tiers: **template** (i18n, $0), **LLM** (`run_proactive_llm_session()`), **hybrid** (try LLM, fall back to template). `should_send()` gates: paused → preference → quiet hours → cooldown → dedup. LLM notifications exceeding daily limit downgrade to template.
 
@@ -239,7 +239,7 @@ SDK spawns Claude CLI as subprocess. Nesting guard removed at import time in `se
 | Type | Entry point | Model | Hooks | Tools | Timeout | Notes |
 |------|-------------|-------|-------|-------|---------|-------|
 | Interactive | `SessionManager._create_session()` | Tier-based (haiku/sonnet) | PostToolUse + UserPromptSubmit + Stop | 7-10 (session-type filtered) | Idle timeout (5/10 min) | Long-lived, multi-turn, reused across messages |
-| Proactive | `run_proactive_llm_session()` | haiku (`tuning.proactive_model`) | None | 2-5 (session-type filtered) | 30s hard timeout | Standalone function, single query, must call `send_notification` once |
+| Proactive | `run_proactive_llm_session()` | haiku (`tuning.proactive_model`) | None | None (tool-less) | 30s hard timeout | Standalone function, single query, generates text directly |
 | Summary | `run_summary_llm_session()` | haiku (`tuning.proactive_model`) | None | None (tool-less) | 15s timeout, max 3 turns | Generates session-end summary, no DB writes |
 
 ### SDK client lifecycle (interactive)
@@ -277,9 +277,9 @@ return {
 
 ### System prompt structure
 
-**Interactive** (`build_system_prompt`) — up to 15 sections: ROLE, RULES, OUTPUT FORMAT, TOOL REQUIREMENTS, STUDENT PROFILE, FIRST SESSION GUIDE (conditional, new users only — added alongside teaching approach, not replacing it), TEACHING APPROACH, LEVEL GUIDANCE (per-CEFR, conditional), EXERCISE TYPES, VOCABULARY STRATEGY (conditional), SESSION CONTEXT (greeting style, last activity, session history, topic performance, celebrations, notification reply context), COMEBACK ADAPTATION (conditional, gap ≥ 48h), SCHEDULING INSTRUCTIONS, LEARNING PLAN (conditional — three modes: active plan with progress/pace/directives, suggest plan after `plan_min_sessions_before_suggest` sessions, defer if below threshold), BOT CAPABILITIES.
+**Interactive** (`build_system_prompt`) — up to 15 sections: ROLE, RULES, OUTPUT FORMAT, TOOL REQUIREMENTS, STUDENT PROFILE, FIRST SESSION GUIDE (conditional, new users only — added alongside teaching approach, not replacing it), TEACHING APPROACH, LEVEL GUIDANCE (per-CEFR, conditional), EXERCISE TYPES, VOCABULARY STRATEGY (conditional), SESSION CONTEXT (greeting style, last activity, session history, topic performance, celebrations, notification reply context), COMEBACK ADAPTATION (conditional, gap ≥ 48h), SCHEDULING INSTRUCTIONS, LEARNING PLAN (conditional — three modes: active plan with progress/pace/directives, propose plan interactively for early sessions ≤ `plan_auto_create_after_sessions`, auto-create plan silently for experienced users > threshold), BOT CAPABILITIES.
 
-**Proactive** (`build_proactive_prompt`) — 5 sections + conditional LEARNING PLAN CONTEXT for proactive_summary: ROLE+RULES, STUDENT PROFILE (compact), TIME CONTEXT, TASK (per-session-type instructions from `_PROACTIVE_TASK_INSTRUCTIONS`), TRIGGER CONTEXT, LEARNING PLAN CONTEXT (conditional, proactive_summary only). Agent must call `send_notification` exactly once.
+**Proactive** (`build_proactive_prompt`) — 5 sections + conditional LEARNING PLAN CONTEXT for proactive_summary: ROLE+RULES, STUDENT PROFILE (compact), TIME CONTEXT, TASK (per-session-type instructions from `_PROACTIVE_TASK_INSTRUCTIONS`), TRIGGER CONTEXT, LEARNING PLAN CONTEXT (conditional, proactive_summary only). Agent generates notification text directly (no tools).
 
 **Summary** (`build_summary_prompt`) — 4 sections: ROLE, RULES (close-reason-aware tone), SESSION DATA (exercise counts, topics, words, duration), TASK (progress vs no-progress branch).
 
@@ -300,9 +300,8 @@ These rules MUST be maintained when modifying code:
 **Security boundaries** (in `tools.py`):
 - `_USER_MUTABLE_FIELDS`: only `{interests, learning_goals, preferred_difficulty, session_style, topics_to_avoid, notifications_paused, additional_notes}` can be modified via `update_preference`
 - `_SESSION_TYPE_TOOLS`: defines which tools each session type can access — disallowed tools are excluded from MCP server entirely
-- `send_notification` only available in proactive session types
-- `manage_learning_plan` write actions (`create`, `adapt`) only in interactive/onboarding; proactive_summary can only `get`
-- Array caps enforced: interests ≤ 8, learning_goals ≤ 5, topics_to_avoid ≤ 5, additional_notes ≤ 10, weak/strong areas ≤ 10
+- `manage_learning_plan` write actions (`create`, `adapt`) only in interactive/onboarding; proactive sessions are tool-less
+- Array caps enforced: interests ≤ 8, learning_goals ≤ 8, topics_to_avoid ≤ 8, additional_notes ≤ 10, weak/strong areas ≤ 10
 
 **One session per user**: Redis SET NX lock. `SessionManager` for interactive, `run_proactive_llm_session()` as standalone function for proactive.
 
@@ -324,7 +323,7 @@ All user-facing strings are localized via `i18n.t(key, lang, **kwargs)`.
 
 ## Database
 
-8 tables in `db/models.py`. PK for `users` is `telegram_id` (BIGINT). All FKs use `ondelete="CASCADE"` or `ondelete="SET NULL"`.
+9 tables in `db/models.py`. PK for `users` is `telegram_id` (BIGINT). All FKs use `ondelete="CASCADE"` or `ondelete="SET NULL"`.
 
 Repositories (`db/repositories.py`) use static methods with explicit `AsyncSession` parameter — no hidden state.
 
@@ -333,6 +332,7 @@ Key design choices (read code for details):
 - Schedules use RRULE strings; `next_trigger_at` is the polled field
 - Notification preferences inlined in users table (avoids JOIN on proactive tick)
 - Learning plans: one per user (UNIQUE constraint), JSONB `plan_data` stores phases/topics, progress derived from exercise results via `compute_plan_progress()` (no stored per-topic state)
+- Field timestamps: `users.field_timestamps` JSONB tracks when profile fields were set/changed (date-only, user-local). Scalar fields use field name → ISO date string. Array fields use `sha256(item)[:8]` hex hash → ISO date string (avoids duplicating item text). Utilities: `stamp_field()`, `stamp_fields()`, `get_item_date()` in `utils.py`. Rendered as "(since DATE)" in system/proactive prompts. Language switch resets timestamps.
 
 ## Sensitive Files
 
