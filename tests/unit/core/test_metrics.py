@@ -1,17 +1,11 @@
 """Tests for the metrics module."""
 
-from prometheus_client import Counter, Gauge, Histogram
-
 from adaptive_lang_study_bot.metrics import (
     MESSAGE_COST_USD,
     MESSAGES_PROCESSED,
-    NOTIFICATION_LLM_COST,
     NOTIFICATIONS_SENT,
     NOTIFICATIONS_SKIPPED,
     PIPELINE_COMPLETED,
-    PIPELINE_DURATION,
-    PROACTIVE_TICK_DURATION,
-    PROACTIVE_TICKS,
     SESSION_COST_USD,
     SESSION_DURATION_SECONDS,
     SESSION_ERRORS,
@@ -19,33 +13,7 @@ from adaptive_lang_study_bot.metrics import (
     SESSION_POOL_MAX,
     SESSIONS_CLOSED,
     SESSIONS_CREATED,
-    start_metrics_server,
 )
-
-
-class TestMetricTypes:
-
-    def test_gauges(self):
-        assert isinstance(SESSION_POOL_ACTIVE, Gauge)
-        assert isinstance(SESSION_POOL_MAX, Gauge)
-
-    def test_counters(self):
-        assert isinstance(SESSIONS_CREATED, Counter)
-        assert isinstance(SESSIONS_CLOSED, Counter)
-        assert isinstance(MESSAGES_PROCESSED, Counter)
-        assert isinstance(SESSION_ERRORS, Counter)
-        assert isinstance(NOTIFICATIONS_SENT, Counter)
-        assert isinstance(NOTIFICATIONS_SKIPPED, Counter)
-        assert isinstance(PROACTIVE_TICKS, Counter)
-        assert isinstance(PIPELINE_COMPLETED, Counter)
-
-    def test_histograms(self):
-        assert isinstance(SESSION_COST_USD, Histogram)
-        assert isinstance(SESSION_DURATION_SECONDS, Histogram)
-        assert isinstance(MESSAGE_COST_USD, Histogram)
-        assert isinstance(PROACTIVE_TICK_DURATION, Histogram)
-        assert isinstance(PIPELINE_DURATION, Histogram)
-        assert isinstance(NOTIFICATION_LLM_COST, Histogram)
 
 
 class TestMetricLabels:
@@ -89,9 +57,3 @@ class TestMetricLabels:
 
     def test_message_cost_labels(self):
         MESSAGE_COST_USD.labels(tier="free")
-
-
-class TestStartMetricsServer:
-
-    def test_callable(self):
-        assert callable(start_metrics_server)

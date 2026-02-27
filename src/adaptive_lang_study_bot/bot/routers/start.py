@@ -5,7 +5,7 @@ from html import escape as esc
 
 from aiogram import Router
 from aiogram.enums import ChatAction
-from aiogram.exceptions import TelegramBadRequest
+
 from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
@@ -17,14 +17,15 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from adaptive_lang_study_bot.agent.session_manager import session_manager
-from adaptive_lang_study_bot.bot.helpers import build_filterable_keyboard, get_user_lang, safe_edit_markup, safe_edit_text, split_agent_sections
-from adaptive_lang_study_bot.bot.routers.chat import TELEGRAM_MSG_MAX_LEN, _split_message
+from adaptive_lang_study_bot.bot.helpers import TELEGRAM_MSG_MAX_LEN, build_filterable_keyboard, get_user_lang, markdown_to_telegram_html, safe_edit_markup, safe_edit_text, send_html_safe, split_agent_sections
+from adaptive_lang_study_bot.bot.routers.chat import _split_message
 from adaptive_lang_study_bot.db.models import User
 from adaptive_lang_study_bot.enums import NotificationTier, ScheduleType
-from adaptive_lang_study_bot.bot.routers.review import _format_card_front
-from adaptive_lang_study_bot.db.repositories import ScheduleRepo, UserRepo, VocabularyRepo
+from adaptive_lang_study_bot.bot.routers.review import _format_card_front, _start_review
+from adaptive_lang_study_bot.config import settings
+from adaptive_lang_study_bot.db.repositories import AccessRequestRepo, ScheduleRepo, UserRepo, VocabularyRepo
 from adaptive_lang_study_bot.i18n import DEFAULT_LANGUAGE, get_localized_language_name, t
-from adaptive_lang_study_bot.utils import safe_zoneinfo
+from adaptive_lang_study_bot.utils import safe_zoneinfo, stamp_field, stamp_fields
 
 router = Router()
 
@@ -229,12 +230,55 @@ def _build_schedule_pref_kb(lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarku
 
 
 # ---------------------------------------------------------------------------
+# Whitelist helpers
+# ---------------------------------------------------------------------------
+
+async def _notify_admins_about_request(bot: object, user: User) -> None:
+    """Notify admin(s) via Telegram about a new whitelist access request."""
+    text = (
+        f"<b>New access request</b>\n\n"
+        f"Name: {esc(user.first_name)}\n"
+        f"Username: @{esc(user.telegram_username) if user.telegram_username else 'N/A'}\n"
+        f"Telegram ID: <code>{user.telegram_id}</code>\n\n"
+        f"Review in the admin panel."
+    )
+    for admin_id in settings.admin_telegram_ids:
+        try:
+            await bot.send_message(admin_id, text, parse_mode="HTML")
+        except Exception:
+            logger.warning("Failed to notify admin {} about access request", admin_id)
+
+
+# ---------------------------------------------------------------------------
 # /start — Onboarding with step resume
 # ---------------------------------------------------------------------------
 
 @router.message(Command("start"))
-async def cmd_start(message: Message, user: User) -> None:
+async def cmd_start(
+    message: Message, user: User, db_session: AsyncSession,
+    whitelist_blocked: bool = False,
+) -> None:
     lang = _lang(user)
+
+    # Whitelist mode: non-approved user can only request access
+    if whitelist_blocked:
+        existing = await AccessRequestRepo.get_by_telegram_id(
+            db_session, user.telegram_id, status="pending",
+        )
+        if existing:
+            await message.answer(t("whitelist.already_requested", lang))
+            return
+
+        await AccessRequestRepo.create(
+            db_session,
+            telegram_id=user.telegram_id,
+            telegram_username=user.telegram_username,
+            first_name=user.first_name,
+            language_code=user.native_language,
+        )
+        await _notify_admins_about_request(message.bot, user)
+        await message.answer(t("whitelist.request_sent", lang))
+        return
 
     if user.onboarding_completed:
         await message.answer(t("start.welcome_back", lang, name=esc(user.first_name)))
@@ -335,10 +379,13 @@ async def on_native_selected(
 
     # Clear target_language when native changes — prevents stale pairing
     # if the user goes back during onboarding and picks a different native.
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    ts = stamp_field(user.field_timestamps, "native_language", native_code, date_str)
     await UserRepo.update_fields(
         db_session, user.telegram_id,
         native_language=native_code,
         target_language="",
+        field_timestamps=ts,
     )
 
     # Get native label for display
@@ -377,9 +424,12 @@ async def on_target_selected(
         await callback.answer(t("start.invalid_selection", lang), show_alert=True)
         return
 
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    ts = stamp_field(user.field_timestamps, "target_language", target_code, date_str)
     await UserRepo.update_fields(
         db_session, user.telegram_id,
         target_language=target_code,
+        field_timestamps=ts,
     )
 
     target_label = next(
@@ -418,10 +468,15 @@ async def on_timezone_selected(
     milestones = dict(user.milestones or {})
     milestones["onboarding_step"] = 4
 
+    # Use new timezone for the date stamp
+    user_tz = safe_zoneinfo(tz_id)
+    date_str = datetime.now(timezone.utc).astimezone(user_tz).strftime("%Y-%m-%d")
+    ts = stamp_field(user.field_timestamps, "timezone", tz_id, date_str)
     await UserRepo.update_fields(
         db_session, user.telegram_id,
         timezone=tz_id,
         milestones=milestones,
+        field_timestamps=ts,
     )
 
     await callback.answer(t("start.timezone_set", lang))
@@ -459,10 +514,14 @@ async def on_level_selected(
     milestones = dict(user.milestones or {})
     milestones["onboarding_step"] = 5
 
+    user_tz = safe_zoneinfo(user.timezone)
+    date_str = datetime.now(timezone.utc).astimezone(user_tz).strftime("%Y-%m-%d")
+    ts = stamp_field(user.field_timestamps, "level", level_code, date_str)
     await UserRepo.update_fields(
         db_session, user.telegram_id,
         level=level_code,
         milestones=milestones,
+        field_timestamps=ts,
     )
 
     await callback.answer(t("start.level_set", lang))
@@ -535,7 +594,12 @@ async def on_goals_done(
     if action == "save":
         selected = milestones.get("onboarding_goals", [])
         if selected:
-            updates["learning_goals"] = [c for c in selected if c in _GOAL_OPTIONS]
+            goals = [c for c in selected if c in _GOAL_OPTIONS]
+            updates["learning_goals"] = goals
+            user_tz = safe_zoneinfo(user.timezone)
+            date_str = datetime.now(timezone.utc).astimezone(user_tz).strftime("%Y-%m-%d")
+            ts = stamp_field(user.field_timestamps, "learning_goals", goals, date_str)
+            updates["field_timestamps"] = ts
 
     # Clean up temp selection
     milestones.pop("onboarding_goals", None)
@@ -609,7 +673,12 @@ async def on_interests_done(
     if action == "save":
         selected = milestones.get("onboarding_interests", [])
         if selected:
-            updates["interests"] = [c for c in selected if c in _INTEREST_OPTIONS]
+            interests = [c for c in selected if c in _INTEREST_OPTIONS]
+            updates["interests"] = interests
+            user_tz = safe_zoneinfo(user.timezone)
+            date_str = datetime.now(timezone.utc).astimezone(user_tz).strftime("%Y-%m-%d")
+            ts = stamp_field(user.field_timestamps, "interests", interests, date_str)
+            updates["field_timestamps"] = ts
 
     # Clean up temp selection
     milestones.pop("onboarding_interests", None)
@@ -733,15 +802,11 @@ async def _auto_start_first_session(message: Message, user: User, lang: str) -> 
             return
 
         for chunk in response_chunks:
-            parts = _split_message(chunk, max_len=TELEGRAM_MSG_MAX_LEN) if len(chunk) > TELEGRAM_MSG_MAX_LEN else [chunk]
-            for part in parts:
-                try:
-                    await message.answer(part)
-                except TelegramBadRequest:
-                    try:
-                        await message.answer(part, parse_mode=None)
-                    except Exception:
-                        logger.exception("Failed to send first session message to user {}", user.telegram_id)
+            sections = [markdown_to_telegram_html(s) for s in split_agent_sections(chunk)]
+            for section in sections:
+                parts = _split_message(section, max_len=TELEGRAM_MSG_MAX_LEN) if len(section) > TELEGRAM_MSG_MAX_LEN else [section]
+                for part in parts:
+                    await send_html_safe(message.answer, part, user_id=user.telegram_id)
     except Exception:
         logger.exception("Failed to auto-start first session for user {}", user.telegram_id)
         try:
@@ -756,7 +821,7 @@ async def _auto_start_first_session(message: Message, user: User, lang: str) -> 
                 reply_markup=cta_keyboard,
             )
         except Exception:
-            pass
+            logger.warning("Failed to send first-session error fallback to user {}", user.telegram_id)
 
 
 # ---------------------------------------------------------------------------
@@ -787,10 +852,15 @@ async def on_back_to_target(callback: CallbackQuery, user: User, db_session: Asy
     if user.onboarding_completed:
         await callback.answer(t("start.already_onboarded_lang", lang), show_alert=True)
         return
-    # Clear onboarding_step so /start resume doesn't skip timezone
+    # Clear onboarding_step and downstream selections (goals, interests)
+    # so the forward flow starts fresh after changing target language.
     milestones = dict(user.milestones or {})
-    if "onboarding_step" in milestones:
-        milestones.pop("onboarding_step")
+    changed = False
+    for key in ("onboarding_step", "onboarding_goals", "onboarding_interests"):
+        if key in milestones:
+            milestones.pop(key)
+            changed = True
+    if changed:
         await UserRepo.update_fields(db_session, user.telegram_id, milestones=milestones)
     keyboard = _build_target_kb(user.native_language, lang=lang)
     await _safe_edit(callback, _step(2, t("start.ask_target", lang)), reply_markup=keyboard)
@@ -916,6 +986,11 @@ async def on_cta_words(callback: CallbackQuery, user: User, db_session: AsyncSes
         await callback.answer()
         return
 
+    # Block if an agent session is active (same guard as /words command)
+    if session_manager.has_active_session(user.telegram_id):
+        await callback.answer(t("review.active_session", lang), show_alert=True)
+        return
+
     # Directly trigger the review flow instead of telling the user to type /words.
     due_cards = await VocabularyRepo.get_due(db_session, user.telegram_id, limit=20)
     if not due_cards:
@@ -927,6 +1002,7 @@ async def on_cta_words(callback: CallbackQuery, user: User, db_session: AsyncSes
         await callback.answer()
         return
 
+    _start_review(user.telegram_id)
     total = len(due_cards)
     text, keyboard = _format_card_front(due_cards[0], 1, total, lang)
     await callback.message.answer(text, reply_markup=keyboard)
@@ -976,23 +1052,14 @@ async def on_cta_session(
         return
 
     for chunk in response_chunks:
-        sections = split_agent_sections(chunk)
+        sections = [markdown_to_telegram_html(s) for s in split_agent_sections(chunk)]
         for section in sections:
             parts = (
                 _split_message(section, max_len=TELEGRAM_MSG_MAX_LEN)
                 if len(section) > TELEGRAM_MSG_MAX_LEN else [section]
             )
             for part in parts:
-                try:
-                    await callback.message.answer(part)
-                except TelegramBadRequest:
-                    try:
-                        await callback.message.answer(part, parse_mode=None)
-                    except Exception:
-                        logger.exception(
-                            "Failed to send CTA session message to user {}",
-                            user.telegram_id,
-                        )
+                await send_html_safe(callback.message.answer, part, user_id=user.telegram_id)
 
 
 # ---------------------------------------------------------------------------

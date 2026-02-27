@@ -1,6 +1,7 @@
 """Shared bot helpers used across routers (start, settings, etc.)."""
 
 import re
+import uuid
 
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
@@ -8,6 +9,63 @@ from loguru import logger
 
 from adaptive_lang_study_bot.db.models import User
 from adaptive_lang_study_bot.i18n import DEFAULT_LANGUAGE, t
+
+# Telegram enforces a 4096-character limit on message text.
+TELEGRAM_MSG_MAX_LEN = 4096
+
+# ---------------------------------------------------------------------------
+# Markdown → Telegram HTML converter
+# ---------------------------------------------------------------------------
+# The LLM naturally outputs GitHub-Flavored Markdown. Since Telegram uses
+# HTML parse mode, we convert the common GFM patterns to their Telegram HTML
+# equivalents.  The converter protects code blocks/inline code first (via
+# placeholder tokens) to avoid processing their contents.
+
+_CODE_BLOCK_RE = re.compile(r"```\w*\n(.*?)```", re.DOTALL)
+_INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
+_BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+_ITALIC_RE = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)")
+_HEADER_RE = re.compile(r"^#{1,6}\s+(.+)$", re.MULTILINE)
+_HR_RE = re.compile(r"^-{3,}\s*$", re.MULTILINE)
+_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+
+
+def markdown_to_telegram_html(text: str) -> str:
+    """Convert common Markdown formatting to Telegram HTML.
+
+    Handles: code blocks, inline code, bold, italic, headers, horizontal
+    rules, and links.  Operates in a safe order — code spans are replaced
+    with placeholders first so their contents are not mangled.
+    """
+    placeholders: dict[str, str] = {}
+
+    def _protect(match: re.Match, tag: str) -> str:
+        token = f"\x00PH{uuid.uuid4().hex}\x00"
+        inner = match.group(1)
+        placeholders[token] = f"<{tag}>{inner}</{tag}>"
+        return token
+
+    # 1. Protect code blocks (``` ... ```)
+    text = _CODE_BLOCK_RE.sub(lambda m: _protect(m, "pre"), text)
+    # 2. Protect inline code (` ... `)
+    text = _INLINE_CODE_RE.sub(lambda m: _protect(m, "code"), text)
+    # 3. Bold (**text**)
+    text = _BOLD_RE.sub(r"<b>\1</b>", text)
+    # 4. Italic (*text*) — only after bold is consumed
+    text = _ITALIC_RE.sub(r"<i>\1</i>", text)
+    # 5. Headers (## text → bold)
+    text = _HEADER_RE.sub(r"<b>\1</b>", text)
+    # 6. Horizontal rules (--- → remove)
+    text = _HR_RE.sub("", text)
+    # 7. Links [text](url)
+    text = _LINK_RE.sub(r'<a href="\2">\1</a>', text)
+
+    # Restore protected code spans
+    for token, replacement in placeholders.items():
+        text = text.replace(token, replacement)
+
+    return text
+
 
 # Maps raw DB enum values to their i18n keys for display.
 _DISPLAY_VALUE_KEYS: dict[str, str] = {
@@ -47,20 +105,48 @@ def localize_field_name(field: str, lang: str) -> str:
     return field.replace("_", " ")
 
 
-# Regex to split agent output on a === line (with optional horizontal whitespace).
+# Regex to split agent output on a --- line (with optional horizontal whitespace).
 # Uses [ \t]* instead of \s* so newlines are not consumed greedily.
-_SECTION_SPLIT_RE = re.compile(r"\n[ \t]*===[ \t]*\n")
+_SECTION_SPLIT_RE = re.compile(r"\n[ \t]*---[ \t]*\n")
 
 
 def split_agent_sections(text: str) -> list[str]:
-    """Split agent output on ``===`` line delimiters into separate message sections.
+    """Split agent output on ``---`` line delimiters into separate message sections.
 
-    The agent is instructed to place ``===`` on its own line between logically
+    The agent is instructed to place ``---`` on its own line between logically
     distinct sections (greeting, exercise, feedback, etc.).  Each section is
     sent as a separate Telegram message.
+
+    IMPORTANT: Call this on raw Markdown text *before* ``markdown_to_telegram_html``
+    because the HTML converter removes ``---`` (horizontal rules).
     """
     parts = _SECTION_SPLIT_RE.split(text)
     return [p.strip() for p in parts if p.strip()]
+
+
+async def send_html_safe(
+    send_fn,
+    text: str,
+    *,
+    user_id: int = 0,
+) -> bool:
+    """Send a message with HTML parse mode, falling back to plaintext on parse error.
+
+    ``send_fn`` must be a coroutine accepting ``(text, **kwargs)`` — e.g.
+    ``message.answer`` or ``bot.send_message``.  Returns True if the message
+    was sent (in either mode).
+    """
+    try:
+        await send_fn(text)
+        return True
+    except TelegramBadRequest:
+        logger.debug("HTML parse failed for user {}, falling back to plaintext", user_id)
+        try:
+            await send_fn(text, parse_mode=None)
+            return True
+        except Exception:
+            logger.exception("Failed to send message to user {}", user_id)
+            return False
 
 
 def get_user_lang(user: User) -> str:

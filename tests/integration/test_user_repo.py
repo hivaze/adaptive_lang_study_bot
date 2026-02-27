@@ -91,11 +91,11 @@ class TestAppendScore:
 
     async def test_rolling_cap(self, db_session: AsyncSession, make_user):
         user = await make_user()
-        for i in range(25):
+        for i in range(35):
             scores = await UserRepo.append_score(db_session, user.telegram_id, i)
-        assert len(scores) == 20
+        assert len(scores) == 30  # default max_len=30
         assert scores[0] == 5  # first 5 were dropped
-        assert scores[-1] == 24
+        assert scores[-1] == 34
 
     async def test_missing_user_raises(self, db_session: AsyncSession):
         with pytest.raises(ValueError, match="not found"):

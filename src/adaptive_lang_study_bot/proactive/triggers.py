@@ -1,3 +1,4 @@
+import hashlib
 from datetime import datetime, timezone
 from typing import Any, TypedDict
 
@@ -116,12 +117,12 @@ def check_weak_area_persistent(user: User, *, due_count: int = 0) -> Trigger | N
     if len(history) < 3:
         return None
 
-    topic = user.weak_areas[0]
-
-    # Skip if this topic was the main topic of the most recent session —
-    # it was likely just added and hasn't actually persisted yet.
+    # Pick the first weak area not covered in the most recent session —
+    # skip topics that were likely just added and haven't persisted yet.
     last = user.last_activity or {}
-    if last.get("topic") == topic:
+    last_topic = last.get("topic")
+    topic = next((t for t in user.weak_areas if t != last_topic), None)
+    if topic is None:
         return None
 
     return make_trigger("weak_area_persistent", name=user.first_name, topic=topic)
@@ -194,7 +195,12 @@ def check_weak_area_drill_due(user: User, *, due_count: int = 0) -> Trigger | No
     if recent_3 and all(s > 6 for s in recent_3):
         return None
 
-    topic = user.weak_areas[0]
+    # Skip the topic from the most recent session (may have just been addressed)
+    last = user.last_activity or {}
+    last_topic = last.get("topic")
+    topic = next((t for t in user.weak_areas if t != last_topic), None)
+    if topic is None:
+        return None
 
     return make_trigger(
         "weak_area_drill_due",
@@ -376,6 +382,60 @@ def check_lapsed_user(user: User, *, due_count: int = 0) -> Trigger | None:
     return None
 
 
+def check_progress_celebration(user: User, *, due_count: int = 0) -> Trigger | None:
+    """Tier 2: Periodic positive reinforcement for active learners.
+
+    Fires for users who have completed enough sessions, were active recently,
+    and meet at least one positive metric (good avg scores, growing vocab,
+    or active streak).  A deterministic daily gate (~33% chance) prevents
+    notification fatigue.
+    """
+    if user.sessions_completed < tuning.progress_celebration_min_sessions:
+        return None
+
+    if user.last_session_at is None:
+        return None
+
+    now = datetime.now(timezone.utc)
+    gap_days = (now - user.last_session_at).total_seconds() / 86400
+    if gap_days > tuning.progress_celebration_max_inactive_days:
+        return None
+
+    # Deterministic daily gate: hash(user_id + local_date) → stable within
+    # a single day but varies across days and users.
+    local_now = user_local_now(user)
+    date_str = local_now.date().isoformat()
+    seed = hashlib.md5(f"{user.telegram_id}:{date_str}".encode()).hexdigest()  # noqa: S324
+    roll = int(seed[:4], 16)  # 0..65535
+    threshold = int(65536 * tuning.progress_celebration_chance_pct / 100)
+    if roll >= threshold:
+        return None
+
+    # Require at least one celebration-worthy metric
+    scores = user.recent_scores or []
+    last_5 = scores[-5:]
+    avg_score = sum(last_5) / len(last_5) if len(last_5) >= 3 else 0.0
+    vocab_count = user.vocabulary_count or 0
+    streak = user.streak_days or 0
+
+    has_good_scores = avg_score >= tuning.progress_celebration_good_avg and len(last_5) >= 3
+    has_vocab_growth = vocab_count >= tuning.progress_celebration_min_vocab
+    has_streak = streak >= tuning.progress_celebration_min_streak
+
+    if not (has_good_scores or has_vocab_growth or has_streak):
+        return None
+
+    data: dict[str, Any] = {"name": user.first_name, "sessions_completed": user.sessions_completed}
+    if has_good_scores:
+        data["avg_score"] = round(avg_score, 1)
+    if has_vocab_growth:
+        data["vocab_count"] = vocab_count
+    if has_streak:
+        data["streak"] = streak
+
+    return make_trigger("progress_celebration", **data)
+
+
 # All trigger functions in evaluation order.
 # Every function has the uniform signature: (user, *, due_count) -> Trigger | None
 # so they can be called in a loop.  Not all functions use due_count —
@@ -395,4 +455,5 @@ ALL_TRIGGERS: list = [
     check_weak_area_drill_due,
     check_score_trend,
     check_incomplete_exercise,
+    check_progress_celebration,
 ]

@@ -39,5 +39,3 @@ class TestDetectNativeLanguage:
         for lang in _SUPPORTED_LANGUAGES:
             assert _detect_native_language(lang) == lang
 
-    def test_supported_languages_count(self):
-        assert len(_SUPPORTED_LANGUAGES) == 7

@@ -47,6 +47,7 @@ def _make_user(**overrides):
     user.timezone = "UTC"
     user.notifications_paused = False
     user.additional_notes = []
+    user.field_timestamps = {}
     for k, v in overrides.items():
         setattr(user, k, v)
     return user
@@ -107,7 +108,7 @@ class TestComputeSessionContext:
     def test_notification_context_old(self):
         user = _make_user(
             last_notification_text="Time to review!",
-            last_notification_at=datetime.now(timezone.utc) - timedelta(hours=15),
+            last_notification_at=datetime.now(timezone.utc) - timedelta(hours=30),
         )
         ctx = compute_session_context(user)
         assert ctx["notification_text"] is None
@@ -428,18 +429,18 @@ class TestSessionHistory:
         assert "verbs" in prompt
         assert "cooking" in prompt
 
-    def test_history_capped_at_5(self):
-        """Only last 5 entries should be rendered even if more are stored."""
+    def test_all_history_entries_rendered(self):
+        """All session_history entries are rendered (bounded upstream by session_history_cap)."""
         user = _make_user(session_history=[
             {"date": f"2026-02-{i:02d}", "summary": f"Session {i}", "status": "completed"}
             for i in range(1, 14)
         ])
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
-        # Should show last 5: sessions 9-13
-        assert "Session 9" in prompt
+        # All entries should be present — no prompt-level cap
+        assert "Session 1" in prompt
+        assert "Session 8" in prompt
         assert "Session 13" in prompt
-        assert "Session 8" not in prompt
 
 
 class TestStyleInstructions:
@@ -699,8 +700,8 @@ class TestTopicPerformance:
         rare_pos = prompt.index("rare_topic")
         assert common_pos < rare_pos
 
-    def test_topic_performance_capped_at_10(self):
-        """Only top 10 topics by count should be rendered."""
+    def test_all_topic_performance_rendered(self):
+        """All topics are rendered (bounded upstream by DB query)."""
         user = _make_user()
         ctx = compute_session_context(user)
         perf = {
@@ -708,10 +709,11 @@ class TestTopicPerformance:
             for i in range(12)
         }
         prompt = build_system_prompt(user, ctx, topic_performance=perf)
-        assert "topic_0" in prompt   # count=20, should be included
-        assert "topic_9" in prompt   # count=11, should be included
-        assert "topic_10" not in prompt  # count=10, excluded (11th)
-        assert "topic_11" not in prompt  # count=9, excluded (12th)
+        # All topics should be present — no prompt-level cap
+        assert "topic_0" in prompt
+        assert "topic_9" in prompt
+        assert "topic_10" in prompt
+        assert "topic_11" in prompt
 
     def test_empty_topic_performance(self):
         user = _make_user()
@@ -748,10 +750,11 @@ class TestBuildProactivePrompt:
         prompt = build_proactive_prompt(user, "proactive_nudge", {})
         assert "Russian" in prompt
 
-    def test_instructs_send_notification(self):
+    def test_instructs_direct_output(self):
         user = _make_user()
         prompt = build_proactive_prompt(user, "proactive_nudge", {})
-        assert "send_notification" in prompt
+        assert "directly as your response" in prompt
+        assert "send_notification" not in prompt
 
     def test_review_mentions_vocabulary(self):
         user = _make_user()
@@ -799,10 +802,10 @@ class TestBuildProactivePrompt:
         assert "politics" in prompt
         assert "topics_to_avoid" in prompt.lower() or "avoid" in prompt.lower()
 
-    def test_html_formatting_instruction(self):
+    def test_formatting_instruction(self):
         user = _make_user()
         prompt = build_proactive_prompt(user, "proactive_nudge", {})
-        assert "HTML" in prompt
+        assert "**bold**" in prompt
 
     def test_unknown_session_type_falls_back_to_nudge(self):
         user = _make_user()
@@ -818,6 +821,75 @@ class TestBuildProactivePrompt:
         user = _make_user(recent_scores=[7, 8, 6, 9, 7])
         prompt = build_proactive_prompt(user, "proactive_nudge", {})
         assert "7, 8, 6, 9, 7" in prompt
+
+    def test_prefetch_due_vocabulary(self):
+        user = _make_user()
+        prefetch = {
+            "due_vocabulary": [
+                {"word": "bonjour", "translation": "hello", "topic": "greetings", "review_count": 3},
+                {"word": "merci", "translation": "thank you", "topic": "greetings", "review_count": 1},
+            ],
+        }
+        prompt = build_proactive_prompt(user, "proactive_review", {"due_count": 2}, prefetch=prefetch)
+        assert "DUE VOCABULARY" in prompt
+        assert "bonjour" in prompt
+        assert "merci" in prompt
+        assert "reviewed 3 times" in prompt
+
+    def test_prefetch_due_vocabulary_empty(self):
+        """Empty due_vocabulary list: no vocabulary section rendered (task may still reference it)."""
+        user = _make_user()
+        prompt = build_proactive_prompt(user, "proactive_review", {"due_count": 5}, prefetch={"due_vocabulary": []})
+        # The ## DUE VOCABULARY header should not be rendered as a section
+        assert "The following cards are due for review" not in prompt
+
+    def test_prefetch_progress_summary(self):
+        user = _make_user()
+        prefetch = {
+            "progress_summary": {
+                "score_7d": {"count": 10, "avg": 7.5},
+                "score_30d": {"count": 30, "avg": 6.8},
+                "topic_performance": [
+                    {"topic": "verbs", "exercise_count": 5, "avg_score": 8.2},
+                    {"topic": "nouns", "exercise_count": 3, "avg_score": 6.0},
+                ],
+                "vocabulary": {"new": 5, "learning": 10, "review": 20, "relearning": 2},
+                "sessions_this_week": 4,
+            },
+        }
+        prompt = build_proactive_prompt(user, "proactive_summary", {}, prefetch=prefetch)
+        assert "PROGRESS DATA" in prompt
+        assert "Score Trends" in prompt
+        assert "7.5" in prompt
+        assert "Topic Performance" in prompt
+        assert "verbs" in prompt
+        assert "8.2" in prompt
+        assert "Vocabulary" in prompt
+        assert "new: 5" in prompt
+        assert "Session Activity" in prompt
+        assert "4 sessions" in prompt
+
+    def test_prefetch_progress_summary_no_exercises(self):
+        user = _make_user()
+        prefetch = {
+            "progress_summary": {
+                "score_7d": {"count": 0, "avg": None},
+                "score_30d": {"count": 0, "avg": None},
+                "topic_performance": [],
+                "vocabulary": {"new": 0, "learning": 0, "review": 0, "relearning": 0},
+                "sessions_this_week": 0,
+            },
+        }
+        prompt = build_proactive_prompt(user, "proactive_summary", {}, prefetch=prefetch)
+        assert "PROGRESS DATA" in prompt
+        assert "no exercises" in prompt
+        assert "Topic Performance" not in prompt
+
+    def test_no_prefetch_no_data_sections(self):
+        user = _make_user()
+        prompt = build_proactive_prompt(user, "proactive_nudge", {})
+        assert "DUE VOCABULARY" not in prompt
+        assert "PROGRESS DATA" not in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -923,6 +995,7 @@ class TestComebackAdaptation:
     def test_zero_engagement_fresh_start(self):
         user = _make_user(
             vocabulary_count=0, recent_scores=[], sessions_completed=0,
+            last_session_at=None,
         )
         result = _build_comeback_section(user, 100.0, due_count=0, stale_topics=None)
         assert "never completed a lesson" in result
@@ -1609,7 +1682,8 @@ class TestLearningPlanSection:
         # Next phase is shown as a preview (focus only, not individual topics)
         assert "Subjunctive basics" in prompt
 
-    def test_no_plan_suggests_creation(self):
+    def test_no_plan_auto_creates_for_experienced_user(self):
+        """Experienced users (sessions > threshold) get auto-create, not propose."""
         user = _make_user(
             onboarding_completed=True,
             sessions_completed=5,
@@ -1618,10 +1692,13 @@ class TestLearningPlanSection:
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx, active_plan=None, plan_progress=None)
         assert "## LEARNING PLAN" in prompt
+        assert "Silently create" in prompt
         assert "manage_learning_plan" in prompt
         assert "B1" in prompt  # next level
+        assert "Propose creating" not in prompt
 
-    def test_no_plan_c2_covers_advanced_topics(self):
+    def test_no_plan_c2_auto_creates_with_advanced_topics(self):
+        """C2 users with enough sessions get auto-create with advanced topic description."""
         user = _make_user(
             onboarding_completed=True,
             sessions_completed=5,
@@ -1631,9 +1708,10 @@ class TestLearningPlanSection:
         prompt = build_system_prompt(user, ctx, active_plan=None, plan_progress=None)
         assert "## LEARNING PLAN" in prompt
         assert "advanced" in prompt.lower()
+        assert "Silently create" in prompt
 
-    def test_minimal_plan_section_when_too_few_sessions(self):
-        """Early sessions get minimal plan guidance — don't suggest, but allow if asked."""
+    def test_plan_proposed_on_early_sessions(self):
+        """Early sessions (sessions <= threshold) get interactive propose."""
         user = _make_user(
             onboarding_completed=True,
             sessions_completed=1,
@@ -1641,8 +1719,31 @@ class TestLearningPlanSection:
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx, active_plan=None, plan_progress=None)
         assert "## LEARNING PLAN" in prompt
-        assert "Don't suggest creating one yet" in prompt
-        assert "explicitly asks" in prompt
+        assert "Propose creating" in prompt
+        assert "manage_learning_plan" in prompt
+        assert "Silently create" not in prompt
+
+    def test_plan_proposed_at_boundary(self):
+        """At exactly plan_auto_create_after_sessions (3), still propose."""
+        user = _make_user(
+            onboarding_completed=True,
+            sessions_completed=3,
+        )
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx, active_plan=None, plan_progress=None)
+        assert "Propose creating" in prompt
+        assert "Silently create" not in prompt
+
+    def test_plan_auto_created_just_above_threshold(self):
+        """At threshold + 1 (4 sessions), auto-create kicks in."""
+        user = _make_user(
+            onboarding_completed=True,
+            sessions_completed=4,
+        )
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx, active_plan=None, plan_progress=None)
+        assert "Silently create" in prompt
+        assert "Propose creating" not in prompt
 
     def test_no_plan_section_during_onboarding(self):
         user = _make_user(onboarding_completed=False, sessions_completed=0)
@@ -1673,6 +1774,40 @@ class TestLearningPlanSection:
         assert "Guidelines:" in prompt
         assert "exact plan topic names" in prompt
 
+    def test_active_plan_staleness_note(self):
+        """Active plan section warns that data is from session start."""
+        user = _make_user(onboarding_completed=True)
+        ctx = compute_session_context(user)
+        plan = self._make_plan()
+        progress = self._make_progress()
+        prompt = build_system_prompt(user, ctx, active_plan=plan, plan_progress=progress)
+        assert "snapshot is from session start" in prompt
+        assert "manage_learning_plan(action='get')" in prompt
+
+    def test_propose_plan_staleness_note(self):
+        """Propose-plan section tells agent to use tool after creating a plan."""
+        user = _make_user(onboarding_completed=True, sessions_completed=1)
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx, active_plan=None, plan_progress=None)
+        assert "Once a plan is created during this session" in prompt
+        assert "manage_learning_plan(action='get')" in prompt
+
+    def test_auto_create_has_staleness_note(self):
+        """Auto-create section also includes staleness note."""
+        user = _make_user(onboarding_completed=True, sessions_completed=5)
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx, active_plan=None, plan_progress=None)
+        assert "Once a plan is created during this session" in prompt
+        assert "manage_learning_plan(action='get')" in prompt
+
+    def test_auto_create_has_guidelines(self):
+        """Auto-create section includes plan creation guidelines."""
+        user = _make_user(onboarding_completed=True, sessions_completed=5)
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx, active_plan=None, plan_progress=None)
+        assert "Weekly phases with 2-5 topics" in prompt
+        assert "assessment" in prompt.lower()
+
     def test_bot_capabilities_mentions_learning_plan(self):
         user = _make_user()
         ctx = compute_session_context(user)
@@ -1697,6 +1832,70 @@ class TestLearningPlanSection:
         )
         assert "A2→B1" in prompt
         assert "50% complete" in prompt
+
+
+class TestFieldTimestampsInPrompt:
+    """Verify '(since DATE)' rendering in STUDENT PROFILE sections."""
+
+    def test_scalar_fields_show_since(self):
+        user = _make_user(field_timestamps={
+            "level": "2026-01-15",
+            "preferred_difficulty": "2026-02-10",
+            "session_style": "2026-02-05",
+        })
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "A2 (since 2026-01-15)" in prompt
+        assert "normal (since 2026-02-10)" in prompt
+        assert "structured (since 2026-02-05)" in prompt
+
+    def test_empty_timestamps_no_since(self):
+        user = _make_user(field_timestamps={})
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "(since" not in prompt
+
+    def test_array_fields_show_since(self):
+        from adaptive_lang_study_bot.utils import _item_key
+        user = _make_user(
+            interests=["cooking"],
+            weak_areas=["subjunctive mood"],
+            field_timestamps={
+                "interests": {_item_key("cooking"): "2026-01-20"},
+                "weak_areas": {_item_key("subjunctive mood"): "2026-02-15"},
+            },
+        )
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "(since 2026-01-20)" in prompt
+        assert "(since 2026-02-15)" in prompt
+
+    def test_notifications_paused_shows_since(self):
+        user = _make_user(
+            notifications_paused=True,
+            field_timestamps={"notifications_paused": "2026-02-26"},
+        )
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "paused (since 2026-02-26)" in prompt
+
+    def test_proactive_prompt_shows_since(self):
+        from adaptive_lang_study_bot.utils import _item_key
+        user = _make_user(
+            interests=["cooking"],
+            field_timestamps={
+                "level": "2026-01-15",
+                "interests": {_item_key("cooking"): "2026-01-20"},
+            },
+        )
+        prompt = build_proactive_prompt(user, "proactive_nudge", {})
+        assert "A2 (since 2026-01-15)" in prompt
+        assert "(since 2026-01-20)" in prompt
+
+    def test_proactive_prompt_empty_timestamps(self):
+        user = _make_user(field_timestamps={})
+        prompt = build_proactive_prompt(user, "proactive_nudge", {})
+        assert "(since" not in prompt
 
     def test_summary_prompt_plan_hint_for_progress(self):
         """When plan_summary is provided, the TASK section should mention plan progress."""

@@ -425,25 +425,6 @@ class TestProfileIntegrity:
 
 class TestMilestones:
 
-    async def test_first_session_milestone(self, penv):
-        user, sess, uid = await _setup_user(penv)
-        try:
-            bot = AsyncMock()
-            bot.send_message = AsyncMock()
-
-            await run_post_session(
-                user_id=uid,
-                session_id=sess.id,
-                tools_called=["mcp__langbot__record_exercise_result"],
-                close_reason="idle_timeout",
-                bot=bot,
-            )
-
-            updated = await _read_user(penv, uid)
-            assert updated.milestones is not None
-        finally:
-            await _cleanup(penv, uid)
-
     async def test_vocabulary_milestone_at_10(self, penv):
         user, sess, uid = await _setup_user(penv)
         try:

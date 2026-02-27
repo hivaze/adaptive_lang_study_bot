@@ -193,6 +193,7 @@
   "settings.level_saved": "¡Nivel actualizado!",
   "settings.level_unchanged": "Ese ya es tu nivel actual.",
   "settings.session_refreshed": "Tu sesión activa fue terminada para aplicar la nueva configuración. Tu progreso está guardado — envía un mensaje para iniciar una nueva sesión.",
+  "settings.active_session": "Tienes una sesión activa. Usa /end para terminarla y luego cambia los ajustes.",
   "settings.cancelled": "Cancelado. Usa /settings para gestionar tus preferencias.",
   "settings.btn_debug_log_on": "Registro de depuración: ON",
   "settings.btn_debug_log_off": "Registro de depuración: OFF",
@@ -229,6 +230,8 @@
   "review.text_during_review": "Estás revisando tarjetas ahora mismo — usa los botones de arriba para calificar cada tarjeta. Envía /words para reiniciar o simplemente continúa.",
   "review.card_not_found": "Tarjeta no encontrada.",
   "review.already_reviewed": "Ya revisada.",
+  "review.btn_done": "Listo",
+  "review.ended_early": "Revisión finalizada. Tu progreso se ha guardado.\n¡Usa /words para revisar más tarjetas en cualquier momento!",
   "review.more_due": "Aún tienes <b>{count}</b> tarjetas más pendientes de revisión.",
   "review.btn_review_more": "Revisar más tarjetas",
   "review.invalid_data": "Datos no válidos.",
@@ -259,8 +262,8 @@
   "stats.sessions_unlimited": "  Sesiones/día: ilimitadas",
   "stats.messages_per_session": "  Mensajes/sesión: {count}",
   "rate_limit.callback": "Por favor, ve más despacio.",
-  "rate_limit.message": "Estás enviando mensajes demasiado rápido. Por favor, espera alrededor de un minuto antes de intentarlo de nuevo.",
-  "session.daily_limit": "Has alcanzado tu límite diario de {max_sessions} sesiones (plan {tier}). El límite se reinicia a medianoche en tu horario. Mientras tanto, ¡puedes usar /words para practicar tu vocabulario!",
+  "rate_limit.message": "Estás enviando mensajes demasiado rápido ({limit} por minuto). Por favor, espera alrededor de un minuto antes de intentarlo de nuevo.",
+  "session.daily_limit": "Has usado {used}/{max_sessions} sesiones hoy (plan {tier}). El límite se reinicia a medianoche en tu horario. Mientras tanto, ¡puedes usar /words para practicar tu vocabulario!",
   "session.cost_limit": "Has alcanzado el límite de sesiones de hoy. El límite se reinicia a medianoche en tu horario. ¡Aún puedes usar /words para practicar vocabulario!",
   "session.verify_error": "No se pudo verificar tu límite de sesiones. Por favor, inténtalo de nuevo en un momento.",
   "session.cost_verify_error": "No se pudo verificar tu límite de sesiones. Por favor, inténtalo de nuevo en un momento.",
@@ -331,7 +334,7 @@
   "notif.daily_review": [
     "¡Hola, {name}! Tienes <b>{due_count}</b> tarjetas de vocabulario listas para revisar.",
     "{name}, ¡hora de tu revisión diaria! <b>{due_count}</b> tarjetas te esperan.",
-    "¡Hora de la revisión diaria! Mantené tu <b>racha de {streak} días</b>, {name}."
+    "¡Buen momento para repasar, {name}! <b>{due_count}</b> tarjetas te esperan — la constancia es clave."
   ],
   "notif.progress_report": [
     "<b>Resumen semanal</b>\n\n<b>Nivel:</b> {level}\n<b>Racha:</b> {streak} días\n<b>Palabras aprendidas:</b> {vocab_count}\n<b>Sesiones esta semana:</b> {sessions_week}\n\n¡Sigue así, {name}!"
@@ -384,5 +387,16 @@
     "{name}, ¡tus habilidades en {target_language} te están esperando! Incluso una sesión rápida de 5 minutos ayuda a mantener todo fresco.",
     "¿Sigues pensando en aprender {target_language}, {name}? Tu progreso está guardado y tu tutor está listo para continuar donde lo dejaste."
   ],
-  "pipeline.plan_completed": "¡Has completado tu plan de estudio con objetivo {target_level}! Es hora de crear un nuevo plan para el siguiente nivel."
+  "notif.progress_celebration": [
+    "¡Lo estás haciendo genial, {name}! Promedio de <b>{avg_score}/10</b> en ejercicios recientes. ¡Sigue así!",
+    "¡Impresionante, {name}! Tu vocabulario creció a <b>{vocab_count} palabras</b>. ¡Eso es dedicación!",
+    "{name}, ¡<b>{sessions_completed}</b> sesiones completadas! Estás construyendo una base sólida.",
+    "¡Sigue así, {name}! Tu <b>racha de {streak} días</b> muestra verdadero compromiso."
+  ],
+  "pipeline.plan_completed": "¡Has completado tu plan de estudio con objetivo {target_level}! Es hora de crear un nuevo plan para el siguiente nivel.",
+
+  "whitelist.request_sent": "Tu solicitud de acceso ha sido enviada al administrador. Se te notificará cuando sea aprobada.",
+  "whitelist.already_requested": "Ya tienes una solicitud de acceso pendiente. Por favor, espera a que el administrador la revise.",
+  "whitelist.approved": "¡Tu acceso ha sido aprobado! Envía /start para comenzar tu viaje de aprendizaje de idiomas.",
+  "whitelist.rejected": "Tu solicitud de acceso no fue aprobada. Contacta al administrador si crees que es un error."
 }

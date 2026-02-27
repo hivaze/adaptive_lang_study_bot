@@ -151,24 +151,6 @@ class TestCountTodayTimezone:
         count = await SessionRepo.count_today(db_session, user.telegram_id, user_timezone="UTC")
         assert count == 1
 
-    async def test_timezone_parameter_is_used(self, db_session: AsyncSession, make_user):
-        """Verify timezone parameter affects the count boundary."""
-        user = await make_user()
-        await SessionRepo.create(
-            db_session, user_id=user.telegram_id, session_type="interactive",
-        )
-        # Both should find the session since it was just created
-        utc_count = await SessionRepo.count_today(
-            db_session, user.telegram_id, user_timezone="UTC",
-        )
-        tokyo_count = await SessionRepo.count_today(
-            db_session, user.telegram_id, user_timezone="Asia/Tokyo",
-        )
-        # At least one should find it (the session was just created, so it
-        # falls within "today" in most timezones)
-        assert utc_count >= 0
-        assert tokyo_count >= 0
-
     async def test_invalid_timezone_defaults_to_utc(self, db_session: AsyncSession, make_user):
         """Invalid timezone should not crash, falls back to UTC."""
         user = await make_user()

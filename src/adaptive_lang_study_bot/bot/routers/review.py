@@ -94,6 +94,10 @@ def _format_card_front(vocab, position: int, total: int, lang: str) -> tuple[str
                 text=t("review.btn_show_answer", lang),
                 callback_data=f"fsrs:show:{vocab.id}:{position}:{total}",
             )],
+            [InlineKeyboardButton(
+                text=t("review.btn_done", lang),
+                callback_data="fsrs:done",
+            )],
         ],
     )
 
@@ -164,6 +168,19 @@ async def cmd_review(message: Message, user: User, db_session: AsyncSession) -> 
     total = len(due_cards)
     text, keyboard = _format_card_front(due_cards[0], 1, total, lang)
     await message.answer(text, reply_markup=keyboard)
+
+
+@router.callback_query(lambda c: c.data == "fsrs:done")
+async def on_fsrs_done(callback: CallbackQuery, user: User) -> None:
+    """End the review session early."""
+    _end_review(user.telegram_id)
+    lang = user.native_language or DEFAULT_LANGUAGE
+    if callback.message is not None:
+        try:
+            await callback.message.edit_text(t("review.ended_early", lang))
+        except TelegramBadRequest:
+            logger.debug("edit_text failed for review done callback")
+    await callback.answer(t("review.complete", lang))
 
 
 @router.callback_query(lambda c: c.data and c.data.startswith("fsrs:show:"))

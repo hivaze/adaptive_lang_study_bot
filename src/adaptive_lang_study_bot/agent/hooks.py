@@ -13,12 +13,33 @@ from adaptive_lang_study_bot.utils import strip_mcp_prefix
 # (user-facing message). Defined here to avoid circular imports.
 TURN_LIMIT_WARN_FRACTION = 0.2
 
+# Adaptive hint constants injected by PostToolUse hook after exercise scoring.
+_HINT_STRUGGLING = (
+    "ADAPTIVE_HINT: Student is struggling on recent exercises. "
+    "Simplify the next exercise, offer encouragement, "
+    "and consider reviewing the basics of this topic."
+)
+_HINT_EXCELLING = (
+    "ADAPTIVE_HINT: Student is excelling on recent exercises. "
+    "Consider increasing difficulty or introducing a new topic."
+)
+_HINT_SINGLE_STRUGGLE = (
+    "ADAPTIVE_HINT: Student struggled with this exercise "
+    "but is doing fine overall. Offer help on this specific topic "
+    "without changing overall difficulty."
+)
+_HINT_SINGLE_EXCELLENT = (
+    "ADAPTIVE_HINT: Student did very well on this exercise. "
+    "Good progress. Continue at the current level."
+)
+_HINT_MODERATE = (
+    "ADAPTIVE_HINT: Moderate result. "
+    "Continue at the current level."
+)
 
-def _extract_score(tool_output: Any) -> int | None:
-    """Extract score from record_exercise_result tool output.
 
-    Handles SDK output envelope variations to avoid silent breakage
-    if the SDK changes the response format.
+def _extract_json_field(tool_output: Any, field: str, default: Any = None) -> Any:
+    """Extract a field from tool output JSON, handling SDK envelope variations.
 
     Known formats:
     - dict: ``{"content": [{"type": "text", "text": "<json>"}]}``
@@ -26,44 +47,29 @@ def _extract_score(tool_output: Any) -> int | None:
     - str: raw JSON string
     """
     try:
-        if isinstance(tool_output, dict):
-            # Standard SDK format: {"content": [{"type": "text", "text": "<json>"}]}
-            content_list = tool_output.get("content", [])
-            if content_list and isinstance(content_list[0], dict):
-                text_str = content_list[0].get("text", "{}")
-                data = json.loads(text_str)
-                return data.get("score")
-        if isinstance(tool_output, list):
-            # SDK may pass content array directly without wrapping dict
-            if tool_output and isinstance(tool_output[0], dict):
-                text_str = tool_output[0].get("text", "{}")
-                data = json.loads(text_str)
-                return data.get("score")
-        if isinstance(tool_output, str):
-            data = json.loads(tool_output)
-            return data.get("score")
-    except (ValueError, TypeError, KeyError, IndexError):
-        pass
-    return None
-
-
-def _extract_field(tool_output: Any, field: str) -> Any:
-    """Extract a field from tool output JSON, handling SDK envelope variations."""
-    try:
+        data = None
         if isinstance(tool_output, dict):
             content_list = tool_output.get("content", [])
             if content_list and isinstance(content_list[0], dict):
                 data = json.loads(content_list[0].get("text", "{}"))
-                return data.get(field)
-        if isinstance(tool_output, list):
+        elif isinstance(tool_output, list):
             if tool_output and isinstance(tool_output[0], dict):
                 data = json.loads(tool_output[0].get("text", "{}"))
-                return data.get(field)
-        if isinstance(tool_output, str):
-            return json.loads(tool_output).get(field)
+        elif isinstance(tool_output, str):
+            data = json.loads(tool_output)
+        return data.get(field, default) if data else default
     except (ValueError, TypeError, KeyError, IndexError):
-        pass
-    return None
+        return default
+
+
+def _extract_score(tool_output: Any) -> int | None:
+    """Extract score from record_exercise_result tool output."""
+    return _extract_json_field(tool_output, "score")
+
+
+def _extract_field(tool_output: Any, field: str) -> Any:
+    """Extract a named field from tool output JSON."""
+    return _extract_json_field(tool_output, field)
 
 
 class SessionHookState:
@@ -160,32 +166,15 @@ def build_session_hooks(user_id: int) -> tuple[dict[str, list[HookMatcher]], Ses
                 count = len(recent)
 
                 if avg <= tuning.hook_struggling_threshold and count >= 2:
-                    hint = (
-                        "ADAPTIVE_HINT: Student is struggling on recent exercises. "
-                        "Simplify the next exercise, offer encouragement, "
-                        "and consider reviewing the basics of this topic."
-                    )
+                    hint = _HINT_STRUGGLING
                 elif avg >= tuning.hook_excelling_threshold and count >= 2:
-                    hint = (
-                        "ADAPTIVE_HINT: Student is excelling on recent exercises. "
-                        "Consider increasing difficulty or introducing a new topic."
-                    )
+                    hint = _HINT_EXCELLING
                 elif score <= 4:
-                    hint = (
-                        "ADAPTIVE_HINT: Student struggled with this exercise "
-                        "but is doing fine overall. Offer help on this specific topic "
-                        "without changing overall difficulty."
-                    )
+                    hint = _HINT_SINGLE_STRUGGLE
                 elif score >= 9:
-                    hint = (
-                        "ADAPTIVE_HINT: Student did very well on this exercise. "
-                        "Good progress. Continue at the current level."
-                    )
+                    hint = _HINT_SINGLE_EXCELLENT
                 else:
-                    hint = (
-                        "ADAPTIVE_HINT: Moderate result. "
-                        "Continue at the current level."
-                    )
+                    hint = _HINT_MODERATE
 
                 return {
                     "continue_": True,
@@ -234,8 +223,10 @@ def build_session_hooks(user_id: int) -> tuple[dict[str, list[HookMatcher]], Ses
                     "hookEventName": "UserPromptSubmit",
                     "additionalContext": (
                         f"SESSION_LIMIT: Only {remaining} turns remain in this session. "
-                        "Start wrapping up the current exercise or topic. "
-                        "Summarize what was covered. Do NOT start new exercises or topics."
+                        "Start wrapping up. Summarize what was covered. "
+                        "Do NOT start new exercises or topics. "
+                        "If you gave an exercise the student hasn't answered yet, "
+                        "do NOT ask them to complete it — just move on."
                     ),
                 },
             }
@@ -253,8 +244,9 @@ def build_session_hooks(user_id: int) -> tuple[dict[str, list[HookMatcher]], Ses
                     "hookEventName": "UserPromptSubmit",
                     "additionalContext": (
                         "SESSION_LIMIT: This session is running low on resources. "
-                        "Finish the current exercise, give brief feedback, and "
-                        "wrap up. Do NOT start new exercises or topics."
+                        "Wrap up now. Do NOT start new exercises or topics. "
+                        "If you gave an exercise the student hasn't answered yet, "
+                        "do NOT ask them to complete it — just move on."
                     ),
                 },
             }

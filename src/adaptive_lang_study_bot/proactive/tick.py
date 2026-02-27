@@ -11,7 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from adaptive_lang_study_bot.cache.client import get_redis
 from adaptive_lang_study_bot.cache.keys import PROACTIVE_TICK_LOCK_KEY, PROACTIVE_TICK_LOCK_TTL
 from adaptive_lang_study_bot.cache.redis_lock import acquire_lock, generate_lock_token, refresh_lock, release_lock
-from adaptive_lang_study_bot.config import tuning
+from adaptive_lang_study_bot.config import settings, tuning
 from adaptive_lang_study_bot.metrics import PROACTIVE_TICK_DURATION, PROACTIVE_TICKS
 from adaptive_lang_study_bot.db.engine import async_session_factory
 from adaptive_lang_study_bot.db.repositories import (
@@ -91,7 +91,7 @@ async def _advance_schedule(schedule, user_timezone: str, *, success: bool) -> N
     user_tz = safe_zoneinfo(user_timezone)
     try:
         next_trigger = compute_next_trigger(schedule.rrule, user_tz)
-    except (ValueError, TypeError):
+    except Exception:
         logger.warning(
             "Invalid RRULE for schedule {} (user {}): {!r}",
             schedule.id, schedule.user_id, schedule.rrule,
@@ -297,6 +297,13 @@ async def _phase_event_triggers(bot: Bot) -> None:
             user_ids = [u.telegram_id for u in users]
             due_counts = await VocabularyRepo.count_due_batch(db, user_ids)
         # DB session released
+
+        # In whitelist mode, skip users who haven't been approved yet
+        if settings.whitelist_mode:
+            users = [u for u in users if u.whitelist_approved]
+            if not users:
+                offset += page_size
+                continue
 
         # Evaluate triggers (pure Python, no I/O)
         work: list[tuple] = []

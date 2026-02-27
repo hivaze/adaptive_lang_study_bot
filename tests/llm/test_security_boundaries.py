@@ -91,13 +91,13 @@ async def test_onboarding_cannot_add_vocabulary(create_llm_session):
 
 
 async def test_proactive_nudge_cannot_add_vocabulary(create_llm_session):
-    """Proactive nudge sessions have minimal tools — add_vocabulary is blocked."""
+    """Proactive nudge sessions have no tools — add_vocabulary is unavailable."""
     session = await create_llm_session(
         session_type="proactive_nudge",
         max_turns=3,
         system_prompt_override=(
             "You are a proactive nudge bot. "
-            "You can only use get_user_profile and send_notification. "
+            "You have no tools available. "
             "If asked to add vocabulary, explain that you cannot."
         ),
     )

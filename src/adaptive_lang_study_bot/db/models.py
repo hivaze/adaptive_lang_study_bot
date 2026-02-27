@@ -49,6 +49,7 @@ class User(Base):
     # Personalization (mutable by user)
     interests: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
     learning_goals: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+    field_timestamps: Mapped[dict] = mapped_column(JSONB, default=dict)
     preferred_difficulty: Mapped[str] = mapped_column(
         String(10), default="normal",
     )
@@ -109,6 +110,7 @@ class User(Base):
     # Metadata
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    whitelist_approved: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow,
     )
@@ -133,8 +135,8 @@ class User(Base):
     notifications: Mapped[list["Notification"]] = relationship(
         back_populates="user", cascade="all, delete-orphan", lazy="raise",
     )
-    learning_plans: Mapped[list["LearningPlan"]] = relationship(
-        back_populates="user", cascade="all, delete-orphan", lazy="raise",
+    learning_plan: Mapped["LearningPlan | None"] = relationship(
+        back_populates="user", cascade="all, delete-orphan", lazy="raise", uselist=False,
     )
 
     __table_args__ = (
@@ -463,7 +465,7 @@ class LearningPlan(Base):
     )
 
     # Relationships
-    user: Mapped["User"] = relationship(back_populates="learning_plans", lazy="raise")
+    user: Mapped["User"] = relationship(back_populates="learning_plan", lazy="raise")
 
     __table_args__ = (
         CheckConstraint(
@@ -505,4 +507,38 @@ class VocabularyReviewLog(Base):
         CheckConstraint("rating BETWEEN 1 AND 4", name="ck_review_rating"),
         Index("idx_review_log_user", "user_id", "created_at"),
         Index("idx_review_log_vocab", "vocabulary_id", "created_at"),
+    )
+
+
+class AccessRequest(Base):
+    """Tracks whitelist access requests from users awaiting admin approval."""
+
+    __tablename__ = "access_requests"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger)
+    telegram_username: Mapped[str | None] = mapped_column(String(255))
+    first_name: Mapped[str] = mapped_column(String(255))
+    language_code: Mapped[str | None] = mapped_column(String(10))
+
+    # Status: pending, approved, rejected
+    status: Mapped[str] = mapped_column(String(10), default="pending")
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reviewed_by: Mapped[int | None] = mapped_column(BigInteger)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow,
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','approved','rejected')",
+            name="ck_access_requests_status",
+        ),
+        Index(
+            "idx_access_requests_pending",
+            "status",
+            postgresql_where="status = 'pending'",
+        ),
+        Index("idx_access_requests_telegram", "telegram_id"),
     )

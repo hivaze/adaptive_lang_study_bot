@@ -3,9 +3,11 @@ from unittest.mock import MagicMock, patch
 
 from adaptive_lang_study_bot.proactive.triggers import (
     check_cards_due,
+    check_dormant_user,
     check_incomplete_exercise,
     check_lapsed_user,
     check_post_onboarding_nudge,
+    check_progress_celebration,
     check_score_trend,
     check_streak_risk,
     check_user_inactive,
@@ -386,3 +388,189 @@ class TestLapsedUser:
         result = check_lapsed_user(user)
         assert result is not None
         assert result["data"]["interests"] == ""
+
+
+class TestDormantUser:
+
+    def test_not_onboarded_no_sessions_no_trigger(self):
+        user = _make_user(
+            sessions_completed=0,
+            onboarding_completed=False,
+            last_session_at=None,
+        )
+        assert check_dormant_user(user) is None
+
+    def test_no_reference_datetime_no_trigger(self):
+        """Users with no last_session_at and not onboarded have no reference point."""
+        user = _make_user(
+            sessions_completed=0,
+            onboarding_completed=False,
+            last_session_at=None,
+            created_at=datetime.now(timezone.utc) - timedelta(days=30),
+        )
+        assert check_dormant_user(user) is None
+
+    def test_recent_session_no_trigger(self):
+        """Users within the lapsed_miss_you window (21 days) are not dormant."""
+        user = _make_user(
+            sessions_completed=5,
+            last_session_at=datetime.now(timezone.utc) - timedelta(days=15),
+        )
+        assert check_dormant_user(user) is None
+
+    def test_too_old_no_trigger(self):
+        """Users beyond dormant_periodic_max_days (45 days) are abandoned."""
+        user = _make_user(
+            sessions_completed=5,
+            last_session_at=datetime.now(timezone.utc) - timedelta(days=50),
+        )
+        assert check_dormant_user(user) is None
+
+    def test_wrong_day_modulo_no_trigger(self):
+        """23 days gap: 23 % 7 != 0, should not fire."""
+        user = _make_user(
+            sessions_completed=5,
+            last_session_at=datetime.now(timezone.utc) - timedelta(days=23),
+        )
+        assert check_dormant_user(user) is None
+
+    def test_correct_day_modulo_triggers(self):
+        """28 days gap: 28 % 7 == 0, should fire."""
+        user = _make_user(
+            sessions_completed=5,
+            last_session_at=datetime.now(timezone.utc) - timedelta(days=28),
+        )
+        result = check_dormant_user(user)
+        assert result is not None
+        assert result["type"] == "dormant_weekly"
+        assert result["data"]["name"] == "Alex"
+        assert result["data"]["target_language"] == "fr"
+
+    def test_onboarded_never_engaged_triggers(self):
+        """User who completed onboarding but never had a session uses created_at."""
+        user = _make_user(
+            sessions_completed=0,
+            onboarding_completed=True,
+            last_session_at=None,
+            created_at=datetime.now(timezone.utc) - timedelta(days=28),
+        )
+        result = check_dormant_user(user)
+        assert result is not None
+        assert result["type"] == "dormant_weekly"
+
+    def test_dedup_ttl_in_data(self):
+        """Trigger data includes custom dedup_ttl for weekly cadence."""
+        user = _make_user(
+            sessions_completed=5,
+            last_session_at=datetime.now(timezone.utc) - timedelta(days=35),
+        )
+        result = check_dormant_user(user)
+        assert result is not None
+        assert result["data"]["dedup_ttl"] == (7 - 1) * 86400
+
+
+class TestProgressCelebration:
+
+    def test_too_few_sessions_no_trigger(self):
+        user = _make_user(sessions_completed=2)
+        assert check_progress_celebration(user) is None
+
+    def test_no_last_session_no_trigger(self):
+        user = _make_user(sessions_completed=10, last_session_at=None)
+        assert check_progress_celebration(user) is None
+
+    def test_inactive_too_long_no_trigger(self):
+        user = _make_user(
+            sessions_completed=10,
+            last_session_at=datetime.now(timezone.utc) - timedelta(days=10),
+        )
+        assert check_progress_celebration(user) is None
+
+    @patch("adaptive_lang_study_bot.proactive.triggers.hashlib")
+    def test_no_positive_metrics_no_trigger(self, mock_hash):
+        """User with low scores, no vocab, no streak — even if random gate passes."""
+        mock_hash.md5.return_value.hexdigest.return_value = "0000" + "0" * 28
+        user = _make_user(
+            sessions_completed=10,
+            recent_scores=[2, 3, 2],
+            vocabulary_count=5,
+            streak_days=0,
+            last_session_at=datetime.now(timezone.utc) - timedelta(hours=12),
+        )
+        assert check_progress_celebration(user) is None
+
+    @patch("adaptive_lang_study_bot.proactive.triggers.hashlib")
+    def test_good_scores_triggers(self, mock_hash):
+        mock_hash.md5.return_value.hexdigest.return_value = "0000" + "0" * 28
+        user = _make_user(
+            sessions_completed=10,
+            recent_scores=[7, 8, 9, 8, 7],
+            vocabulary_count=5,
+            streak_days=0,
+            last_session_at=datetime.now(timezone.utc) - timedelta(hours=12),
+        )
+        result = check_progress_celebration(user)
+        assert result is not None
+        assert result["type"] == "progress_celebration"
+        assert "avg_score" in result["data"]
+        assert result["data"]["name"] == "Alex"
+
+    @patch("adaptive_lang_study_bot.proactive.triggers.hashlib")
+    def test_vocab_growth_triggers(self, mock_hash):
+        mock_hash.md5.return_value.hexdigest.return_value = "0000" + "0" * 28
+        user = _make_user(
+            sessions_completed=10,
+            recent_scores=[3, 4],  # too few for avg check
+            vocabulary_count=50,
+            streak_days=0,
+            last_session_at=datetime.now(timezone.utc) - timedelta(hours=6),
+        )
+        result = check_progress_celebration(user)
+        assert result is not None
+        assert result["data"]["vocab_count"] == 50
+
+    @patch("adaptive_lang_study_bot.proactive.triggers.hashlib")
+    def test_streak_triggers(self, mock_hash):
+        mock_hash.md5.return_value.hexdigest.return_value = "0000" + "0" * 28
+        user = _make_user(
+            sessions_completed=10,
+            recent_scores=[3, 4],
+            vocabulary_count=3,
+            streak_days=5,
+            last_session_at=datetime.now(timezone.utc) - timedelta(hours=6),
+        )
+        result = check_progress_celebration(user)
+        assert result is not None
+        assert result["data"]["streak"] == 5
+
+    def test_random_gate_blocks(self):
+        """Hash roll above threshold prevents trigger."""
+        user = _make_user(
+            sessions_completed=10,
+            recent_scores=[7, 8, 9, 8, 7],
+            vocabulary_count=50,
+            streak_days=5,
+            last_session_at=datetime.now(timezone.utc) - timedelta(hours=6),
+        )
+        with patch("adaptive_lang_study_bot.proactive.triggers.hashlib") as mock_hash:
+            # "ffff" → 65535, above 33% threshold (~21627)
+            mock_hash.md5.return_value.hexdigest.return_value = "ffff" + "0" * 28
+            assert check_progress_celebration(user) is None
+
+    @patch("adaptive_lang_study_bot.proactive.triggers.hashlib")
+    def test_multiple_metrics_included(self, mock_hash):
+        """When multiple metrics qualify, all are in data."""
+        mock_hash.md5.return_value.hexdigest.return_value = "0000" + "0" * 28
+        user = _make_user(
+            sessions_completed=20,
+            recent_scores=[8, 9, 7, 8, 9],
+            vocabulary_count=100,
+            streak_days=10,
+            last_session_at=datetime.now(timezone.utc) - timedelta(hours=2),
+        )
+        result = check_progress_celebration(user)
+        assert result is not None
+        assert "avg_score" in result["data"]
+        assert "vocab_count" in result["data"]
+        assert "streak" in result["data"]
+        assert result["data"]["sessions_completed"] == 20

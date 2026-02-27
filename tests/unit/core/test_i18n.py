@@ -1,7 +1,6 @@
 """Tests for the i18n module."""
 
 from adaptive_lang_study_bot.i18n import (
-    DEFAULT_LANGUAGE,
     SUPPORTED_NATIVE_LANGUAGES,
     _load_locale,
     get_localized_language_name,
@@ -45,14 +44,6 @@ class TestTranslationFunction:
         result = t("notif.streak_risk", "en", name="Alex", streak=5, due_count=3)
         assert isinstance(result, str)
         assert len(result) > 10
-
-    def test_default_language_is_en(self):
-        assert DEFAULT_LANGUAGE == "en"
-
-    def test_supported_languages_count(self):
-        assert len(SUPPORTED_NATIVE_LANGUAGES) == 7
-        assert SUPPORTED_NATIVE_LANGUAGES == frozenset({"en", "ru", "es", "fr", "de", "pt", "it"})
-
 
 class TestGetLocalizedLanguageName:
 

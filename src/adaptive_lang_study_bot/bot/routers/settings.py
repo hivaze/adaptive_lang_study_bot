@@ -33,7 +33,7 @@ from adaptive_lang_study_bot.db.repositories import (
 from adaptive_lang_study_bot.bot.helpers import build_filterable_keyboard, get_user_lang, localize_field_name, localize_value, safe_edit_markup, safe_edit_text
 from adaptive_lang_study_bot.i18n import DEFAULT_LANGUAGE, get_localized_language_name, t
 from adaptive_lang_study_bot.logging_config import is_debug_logging, set_log_level
-from adaptive_lang_study_bot.utils import is_user_admin, user_local_now
+from adaptive_lang_study_bot.utils import is_user_admin, stamp_field, stamp_fields, user_local_now
 
 router = Router()
 
@@ -81,6 +81,15 @@ async def _get_owned_schedule(
         await callback.answer(t("settings.schedule_not_found", lang), show_alert=True)
         return None
     return schedule
+
+
+async def _guard_active_session(callback: CallbackQuery, user: User) -> bool:
+    """Block settings changes during active session. Returns True if blocked."""
+    if session_manager.has_active_session(user.telegram_id):
+        lang = _lang(user)
+        await callback.answer(t("settings.active_session", lang), show_alert=True)
+        return True
+    return False
 
 
 def _build_settings_text_and_kb(user: User) -> tuple[str, InlineKeyboardMarkup]:
@@ -324,6 +333,8 @@ async def on_style(callback: CallbackQuery, user: User) -> None:
 async def on_set_value(
     callback: CallbackQuery, user: User, db_session: AsyncSession,
 ) -> None:
+    if await _guard_active_session(callback, user):
+        return
     lang = _lang(user)
     parts = callback.data.split(":")
     if len(parts) != 3:
@@ -341,11 +352,9 @@ async def on_set_value(
         await callback.answer(t("settings.not_allowed", lang))
         return
 
-    await UserRepo.update_fields(db_session, user.telegram_id, **{field: value})
-
-    # Close active session so the next message picks up the new setting
-    had_session = session_manager.has_active_session(user.telegram_id)
-    await session_manager.close_user_session(user.telegram_id)
+    date_str = user_local_now(user).strftime("%Y-%m-%d")
+    ts = stamp_field(user.field_timestamps, field, value, date_str)
+    await UserRepo.update_fields(db_session, user.telegram_id, field_timestamps=ts, **{field: value})
 
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -353,8 +362,6 @@ async def on_set_value(
         ],
     )
     text = t("settings.updated_field", lang, field=esc(localize_field_name(field, lang)), value=esc(localize_value(value, lang)))
-    if had_session:
-        text += "\n\n" + t("settings.session_refreshed", lang)
     await _safe_edit_text(callback, text, reply_markup=keyboard, lang=lang)
     await callback.answer(t("settings.saved", lang))
 
@@ -384,6 +391,8 @@ async def on_level(callback: CallbackQuery, user: User) -> None:
 async def on_level_set(
     callback: CallbackQuery, user: User, db_session: AsyncSession,
 ) -> None:
+    if await _guard_active_session(callback, user):
+        return
     lang = _lang(user)
     new_level = callback.data.split(":", 1)[1]
 
@@ -396,13 +405,11 @@ async def on_level_set(
         await callback.answer(t("settings.level_unchanged", lang))
         return
 
-    # Close active session so next message picks up the new level
-    had_session = session_manager.has_active_session(user.telegram_id)
-    await session_manager.close_user_session(user.telegram_id)
-
     # Update level and clear recent scores (no longer representative)
+    date_str = user_local_now(user).strftime("%Y-%m-%d")
+    ts = stamp_field(user.field_timestamps, "level", new_level, date_str)
     await UserRepo.update_fields(
-        db_session, user.telegram_id, level=new_level, recent_scores=[],
+        db_session, user.telegram_id, level=new_level, recent_scores=[], field_timestamps=ts,
     )
 
     # Queue celebration so the AI agent is aware of the level change
@@ -420,8 +427,6 @@ async def on_level_set(
         ],
     )
     text = t("settings.level_changed", lang, old_level=esc(old_level), new_level=esc(new_level))
-    if had_session:
-        text += "\n\n" + t("settings.session_refreshed", lang)
     await _safe_edit_text(callback, text, keyboard, lang=lang)
     await callback.answer(t("settings.level_saved", lang))
 
@@ -434,10 +439,14 @@ async def on_level_set(
 async def on_notif_toggle(
     callback: CallbackQuery, user: User, db_session: AsyncSession,
 ) -> None:
+    if await _guard_active_session(callback, user):
+        return
     lang = _lang(user)
     new_state = not user.notifications_paused
+    date_str = user_local_now(user).strftime("%Y-%m-%d")
+    ts = stamp_field(user.field_timestamps, "notifications_paused", new_state, date_str)
     await UserRepo.update_fields(
-        db_session, user.telegram_id, notifications_paused=new_state,
+        db_session, user.telegram_id, notifications_paused=new_state, field_timestamps=ts,
     )
 
     status = t("settings.notif_paused" if new_state else "settings.notif_active", lang)
@@ -519,6 +528,8 @@ async def on_notif_types(callback: CallbackQuery, user: User) -> None:
 async def on_notif_type_toggle(
     callback: CallbackQuery, user: User, db_session: AsyncSession,
 ) -> None:
+    if await _guard_active_session(callback, user):
+        return
     lang = _lang(user)
     key = callback.data.split(":", 1)[1]
 
@@ -596,6 +607,8 @@ async def on_quiet_hours(callback: CallbackQuery, user: User) -> None:
 async def on_quiet_hours_set(
     callback: CallbackQuery, user: User, db_session: AsyncSession,
 ) -> None:
+    if await _guard_active_session(callback, user):
+        return
     lang = _lang(user)
     payload = callback.data.split(":", 1)[1]
 
@@ -664,6 +677,8 @@ async def on_max_notif(callback: CallbackQuery, user: User) -> None:
 async def on_max_notif_set(
     callback: CallbackQuery, user: User, db_session: AsyncSession,
 ) -> None:
+    if await _guard_active_session(callback, user):
+        return
     lang = _lang(user)
     try:
         value = int(callback.data.split(":", 1)[1])
@@ -705,6 +720,8 @@ async def on_view_schedules(
 async def on_schedule_pause(
     callback: CallbackQuery, user: User, db_session: AsyncSession,
 ) -> None:
+    if await _guard_active_session(callback, user):
+        return
     lang = _lang(user)
     schedule = await _get_owned_schedule(callback, db_session, user, lang)
     if not schedule:
@@ -718,6 +735,8 @@ async def on_schedule_pause(
 async def on_schedule_resume(
     callback: CallbackQuery, user: User, db_session: AsyncSession,
 ) -> None:
+    if await _guard_active_session(callback, user):
+        return
     lang = _lang(user)
     schedule = await _get_owned_schedule(callback, db_session, user, lang)
     if not schedule:
@@ -759,6 +778,8 @@ async def on_schedule_delete_ask(
 async def on_schedule_delete_confirmed(
     callback: CallbackQuery, user: User, db_session: AsyncSession,
 ) -> None:
+    if await _guard_active_session(callback, user):
+        return
     lang = _lang(user)
     schedule = await _get_owned_schedule(callback, db_session, user, lang)
     if not schedule:
@@ -792,6 +813,8 @@ async def on_show_all_tz_settings(callback: CallbackQuery, user: User) -> None:
 async def on_settings_timezone_selected(
     callback: CallbackQuery, user: User, db_session: AsyncSession,
 ) -> None:
+    if await _guard_active_session(callback, user):
+        return
     lang = _lang(user)
     tz_id = callback.data.split(":", 1)[1]
 
@@ -799,7 +822,9 @@ async def on_settings_timezone_selected(
         await callback.answer(t("settings.not_allowed", lang))
         return
 
-    await UserRepo.update_fields(db_session, user.telegram_id, timezone=tz_id)
+    date_str = user_local_now(user).strftime("%Y-%m-%d")
+    ts = stamp_field(user.field_timestamps, "timezone", tz_id, date_str)
+    await UserRepo.update_fields(db_session, user.telegram_id, timezone=tz_id, field_timestamps=ts)
 
     # Recalculate schedule triggers for the new timezone
     updated = await ScheduleRepo.recalculate_triggers_for_user(
@@ -811,18 +836,12 @@ async def on_settings_timezone_selected(
             user.telegram_id, tz_id, updated,
         )
 
-    # Close active session so prompt uses the new timezone
-    had_session = session_manager.has_active_session(user.telegram_id)
-    await session_manager.close_user_session(user.telegram_id)
-
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=t("settings.btn_back", lang), callback_data="set:back")],
         ],
     )
     text = t("settings.timezone_changed", lang, tz=esc(tz_id))
-    if had_session:
-        text += "\n\n" + t("settings.session_refreshed", lang)
     await callback.answer(t("settings.timezone_updated", lang))
     await _safe_edit_text(callback, text, keyboard, lang=lang)
 
@@ -903,16 +922,15 @@ async def on_lang_selected(
 async def on_lang_confirmed(
     callback: CallbackQuery, user: User, db_session: AsyncSession,
 ) -> None:
-    """Execute the language switch: close session, delete data, reset fields."""
+    """Execute the language switch: delete data, reset fields."""
+    if await _guard_active_session(callback, user):
+        return
     lang = _lang(user)
     new_lang = callback.data.split(":", 1)[1]
 
     if new_lang not in _VALID_TARGET_CODES:
         await callback.answer(t("settings.not_allowed", lang))
         return
-
-    # Close active SDK session if any (prevents stale prompt)
-    await session_manager.close_user_session(user.telegram_id)
 
     # Wrap all destructive operations in a savepoint so a partial failure
     # rolls back everything (vocabulary deletion + exercise deletion + user reset).
@@ -924,6 +942,8 @@ async def on_lang_confirmed(
         deleted_exercises = await ExerciseResultRepo.delete_for_user(db_session, user.telegram_id)
 
         # Reset user progress fields, keep preferences and schedules
+        date_str = user_local_now(user).strftime("%Y-%m-%d")
+        fresh_ts = stamp_fields(None, {"target_language": new_lang, "level": "A1"}, date_str)
         await UserRepo.update_fields(
             db_session,
             user.telegram_id,
@@ -940,6 +960,7 @@ async def on_lang_confirmed(
             last_activity=None,
             session_history=[],
             learning_goals=[],
+            field_timestamps=fresh_ts,
         )
 
     new_label = next(
@@ -1005,11 +1026,10 @@ async def on_deleteme_confirmed(
     callback: CallbackQuery, user: User, db_session: AsyncSession,
 ) -> None:
     """Delete all user data (CASCADE) and confirm."""
+    if await _guard_active_session(callback, user):
+        return
     lang = _lang(user)
     user_id = user.telegram_id
-
-    # Close active SDK session first
-    await session_manager.close_user_session(user_id)
 
     # Delete user — all related tables cascade-delete via FK
     deleted = await UserRepo.delete(db_session, user_id)

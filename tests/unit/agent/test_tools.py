@@ -4,8 +4,6 @@ import pytest
 
 from adaptive_lang_study_bot.agent.tools import (
     TOOL_NAMES,
-    _MAX_SCHEDULES_PER_TYPE,
-    _MAX_SCHEDULES_PER_USER,
     _SESSION_TYPE_TOOLS,
     _USER_MUTABLE_FIELDS,
     _parse_list_field,
@@ -22,9 +20,6 @@ class TestToolConstants:
         for name in TOOL_NAMES:
             assert name.startswith("mcp__langbot__"), f"{name} missing prefix"
 
-    def test_tool_count(self):
-        assert len(TOOL_NAMES) == 11
-
     def test_session_types_defined(self):
         expected_types = {
             SessionType.INTERACTIVE, SessionType.ONBOARDING,
@@ -40,15 +35,13 @@ class TestToolConstants:
             if session_type != SessionType.INTERACTIVE:
                 assert len(tools) <= len(interactive)
 
-    def test_proactive_sessions_have_send_notification(self):
+    def test_proactive_sessions_have_no_tools(self):
+        """Proactive sessions are tool-less — data is pre-fetched into the prompt."""
         for session_type, tools in _SESSION_TYPE_TOOLS.items():
             if session_type.startswith("proactive"):
-                assert "send_notification" in tools, (
-                    f"{session_type} missing send_notification"
+                assert tools == set(), (
+                    f"{session_type} should have empty tool set, got {tools}"
                 )
-
-    def test_interactive_cannot_send_notification(self):
-        assert "send_notification" not in _SESSION_TYPE_TOOLS[SessionType.INTERACTIVE]
 
     def test_onboarding_has_core_tools(self):
         onboarding = _SESSION_TYPE_TOOLS[SessionType.ONBOARDING]
@@ -67,21 +60,14 @@ class TestToolConstants:
         expected = {"interests", "learning_goals", "preferred_difficulty", "session_style", "topics_to_avoid", "notifications_paused", "additional_notes"}
         assert _USER_MUTABLE_FIELDS == expected
 
-    def test_learning_goals_is_mutable(self):
-        assert "learning_goals" in _USER_MUTABLE_FIELDS
-
-    def test_session_history_not_mutable(self):
-        """session_history is system-managed, not user-mutable."""
-        assert "session_history" not in _USER_MUTABLE_FIELDS
-
     def test_manage_learning_plan_in_tool_names(self):
         assert "mcp__langbot__manage_learning_plan" in TOOL_NAMES
 
     def test_interactive_has_manage_learning_plan(self):
         assert "manage_learning_plan" in _SESSION_TYPE_TOOLS[SessionType.INTERACTIVE]
 
-    def test_proactive_summary_has_manage_learning_plan(self):
-        assert "manage_learning_plan" in _SESSION_TYPE_TOOLS[SessionType.PROACTIVE_SUMMARY]
+    def test_proactive_summary_lacks_manage_learning_plan(self):
+        assert "manage_learning_plan" not in _SESSION_TYPE_TOOLS[SessionType.PROACTIVE_SUMMARY]
 
     def test_onboarding_lacks_manage_learning_plan(self):
         assert "manage_learning_plan" not in _SESSION_TYPE_TOOLS[SessionType.ONBOARDING]
@@ -117,10 +103,6 @@ class TestCanUseTool:
         can_use = _make_can_use_tool(SessionType.INTERACTIVE)
         assert can_use("record_exercise_result") is True
 
-    def test_interactive_blocks_send_notification(self, _make_can_use_tool):
-        can_use = _make_can_use_tool(SessionType.INTERACTIVE)
-        assert can_use("send_notification") is False
-
     def test_interactive_allows_with_mcp_prefix(self, _make_can_use_tool):
         can_use = _make_can_use_tool(SessionType.INTERACTIVE)
         assert can_use("mcp__langbot__add_vocabulary") is True
@@ -138,26 +120,24 @@ class TestCanUseTool:
         assert can_use("get_user_profile") is True
         assert can_use("manage_schedule") is True
 
-    def test_proactive_nudge_minimal_tools(self, _make_can_use_tool):
+    def test_proactive_nudge_blocks_all_tools(self, _make_can_use_tool):
         can_use = _make_can_use_tool(SessionType.PROACTIVE_NUDGE)
-        assert can_use("get_user_profile") is True
-        assert can_use("send_notification") is True
+        assert can_use("get_user_profile") is False
         assert can_use("add_vocabulary") is False
         assert can_use("record_exercise_result") is False
 
-    def test_proactive_review_allows_vocab_tools(self, _make_can_use_tool):
+    def test_proactive_review_blocks_all_tools(self, _make_can_use_tool):
         can_use = _make_can_use_tool(SessionType.PROACTIVE_REVIEW)
-        assert can_use("get_due_vocabulary") is True
-        assert can_use("send_notification") is True
+        assert can_use("get_due_vocabulary") is False
         assert can_use("add_vocabulary") is False
 
     def test_interactive_allows_progress_summary(self, _make_can_use_tool):
         can_use = _make_can_use_tool(SessionType.INTERACTIVE)
         assert can_use("get_progress_summary") is True
 
-    def test_proactive_summary_allows_progress_summary(self, _make_can_use_tool):
+    def test_proactive_summary_blocks_progress_summary(self, _make_can_use_tool):
         can_use = _make_can_use_tool(SessionType.PROACTIVE_SUMMARY)
-        assert can_use("get_progress_summary") is True
+        assert can_use("get_progress_summary") is False
 
     def test_onboarding_blocks_progress_summary(self, _make_can_use_tool):
         can_use = _make_can_use_tool(SessionType.ONBOARDING)
@@ -171,9 +151,9 @@ class TestCanUseTool:
         can_use = _make_can_use_tool(SessionType.INTERACTIVE)
         assert can_use("manage_learning_plan") is True
 
-    def test_proactive_summary_allows_manage_learning_plan(self, _make_can_use_tool):
+    def test_proactive_summary_blocks_manage_learning_plan(self, _make_can_use_tool):
         can_use = _make_can_use_tool(SessionType.PROACTIVE_SUMMARY)
-        assert can_use("manage_learning_plan") is True
+        assert can_use("manage_learning_plan") is False
 
     def test_onboarding_blocks_manage_learning_plan(self, _make_can_use_tool):
         can_use = _make_can_use_tool(SessionType.ONBOARDING)
@@ -186,13 +166,6 @@ class TestCanUseTool:
     def test_unknown_tool_is_blocked(self, _make_can_use_tool):
         can_use = _make_can_use_tool(SessionType.INTERACTIVE)
         assert can_use("nonexistent_tool") is False
-
-    def test_all_session_types_return_valid_callback(self, _make_can_use_tool):
-        for session_type in _SESSION_TYPE_TOOLS:
-            can_use = _make_can_use_tool(session_type)
-            # Should return bool, not raise
-            result = can_use("get_user_profile")
-            assert isinstance(result, bool)
 
     def test_tools_created_match_session_type(self):
         """Verify create_session_tools returns the right number of tools per type."""
@@ -241,7 +214,7 @@ class TestScheduleValidation:
         assert tuning.min_schedule_interval_minutes >= 60
 
     def test_max_per_type_within_total(self):
-        assert 1 <= _MAX_SCHEDULES_PER_TYPE <= _MAX_SCHEDULES_PER_USER
+        assert 1 <= tuning.max_schedules_per_type <= tuning.max_schedules_per_user
 
     def test_free_tier_llm_limit_is_reasonable(self):
         free = TIER_LIMITS[UserTier.FREE]

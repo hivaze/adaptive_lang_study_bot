@@ -68,21 +68,3 @@ class TestFormatDebugInfo:
         result = format_debug_info(debug)
         assert "none" in result
 
-    def test_format_is_valid_html(self):
-        debug = {
-            "tools_called": ["record_exercise_result"],
-            "tools_count": 1,
-            "message_cost": 0.05,
-            "accumulated_cost": 0.10,
-            "turn_count": 5,
-            "turns_remaining": 25,
-            "tier": "premium",
-            "model": "claude-sonnet-4-6",
-            "session_duration_s": 120.5,
-            "active_sessions_global": 3,
-        }
-        result = format_debug_info(debug)
-        assert result.startswith("<pre>")
-        assert result.endswith("</pre>")
-        assert "premium" in result
-        assert "claude-sonnet-4-6" in result

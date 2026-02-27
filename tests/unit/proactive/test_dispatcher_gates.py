@@ -180,33 +180,6 @@ class TestShouldSendQuietHours:
         assert reason == NotificationStatus.SKIPPED_QUIET
 
 
-class TestShouldSendDailyLimit:
-    """Daily limit is now enforced atomically in dispatch_notification() via
-    check_and_increment_notification(), not in should_send().  These tests
-    verify that should_send() no longer blocks on the daily limit (it passes
-    through to the dedup check instead).
-    """
-
-    @pytest.mark.asyncio
-    async def test_daily_limit_not_checked_in_should_send(self):
-        """should_send() no longer checks daily limit — passes through."""
-        user = _make_user()
-        mock_redis = AsyncMock()
-        mock_redis.exists = AsyncMock(return_value=False)
-
-        with patch(
-            "adaptive_lang_study_bot.proactive.dispatcher.user_local_now",
-            return_value=datetime.now(timezone.utc),
-        ), patch(
-            "adaptive_lang_study_bot.proactive.dispatcher.get_redis",
-            new_callable=AsyncMock,
-            return_value=mock_redis,
-        ):
-            can_send, reason = await should_send(user, "streak_risk")
-        assert can_send is True
-        assert reason == ""
-
-
 class TestShouldSendDedup:
 
     @pytest.mark.asyncio
@@ -230,18 +203,6 @@ class TestShouldSendDedup:
             can_send, reason = await should_send(user, "streak_risk")
         assert can_send is False
         assert reason == NotificationStatus.SKIPPED_DEDUP
-
-
-class TestShouldSendSkipReasonValues:
-    """Verify that all skip reason strings are valid notification statuses."""
-
-    def test_all_reasons_are_distinct(self):
-        reasons = {
-            NotificationStatus.SKIPPED_PAUSED, NotificationStatus.SKIPPED_QUIET,
-            NotificationStatus.SKIPPED_LIMIT, NotificationStatus.SKIPPED_DEDUP,
-            NotificationStatus.SKIPPED_COOLDOWN, "",
-        }
-        assert len(reasons) == 6
 
 
 # ---------------------------------------------------------------------------

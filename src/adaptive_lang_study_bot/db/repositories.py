@@ -10,6 +10,7 @@ from adaptive_lang_study_bot.config import settings
 from adaptive_lang_study_bot.enums import NotificationStatus, PipelineStatus, ScheduleStatus, SessionType
 from adaptive_lang_study_bot.utils import compute_new_streak, compute_next_trigger, safe_zoneinfo, user_local_now
 from adaptive_lang_study_bot.db.models import (
+    AccessRequest,
     ExerciseResult,
     LearningPlan,
     Notification,
@@ -92,7 +93,7 @@ class UserRepo:
 
     @staticmethod
     async def append_score(
-        session: AsyncSession, telegram_id: int, score: int, *, max_len: int = 20,
+        session: AsyncSession, telegram_id: int, score: int, *, max_len: int = 30,
     ) -> list[int]:
         """Atomically append a score to recent_scores (keep last `max_len`).
 
@@ -218,13 +219,16 @@ class UserRepo:
         reset date differs (handles day rollover atomically without a
         separate read-modify-write cycle).
         """
-        # Reset counter if the date has changed
+        # Reset counter if the date has changed.
+        # Use IS DISTINCT FROM so NULL != local_date evaluates to True
+        # (plain != produces NULL for NULL values in SQL, skipping the reset
+        # entirely for new users whose notifications_count_reset_date is NULL).
         if local_date is not None:
             await session.execute(
                 update(User)
                 .where(
                     User.telegram_id == telegram_id,
-                    User.notifications_count_reset_date != local_date,
+                    User.notifications_count_reset_date.is_distinct_from(local_date),
                 )
                 .values(
                     notifications_sent_today=0,
@@ -433,7 +437,7 @@ class VocabularyRepo:
         session: AsyncSession,
         user_id: int,
         *,
-        limit: int = 20,
+        limit: int = 40,
         topic: str | None = None,
     ) -> list[Vocabulary]:
         """Fetch FSRS-due cards for a user, sorted by urgency (most overdue first)."""
@@ -595,6 +599,41 @@ class VocabularyRepo:
             delete(Vocabulary).where(Vocabulary.user_id == user_id),
         )
         return result.rowcount
+
+    @staticmethod
+    async def get_global_summary(session: AsyncSession) -> dict[str, int]:
+        """Aggregate vocabulary stats across all users: total words and total due."""
+        result = await session.execute(
+            select(
+                func.count(),
+                func.count(Vocabulary.id).filter(Vocabulary.fsrs_due <= _utcnow()),
+            )
+            .select_from(Vocabulary),
+        )
+        row = result.one()
+        return {"total_words": row[0], "total_due": row[1]}
+
+    @staticmethod
+    async def get_per_user_summary(
+        session: AsyncSession, *, limit: int = 20,
+    ) -> list[tuple]:
+        """Per-user vocab summary: (user_id, first_name, total, due).
+
+        Sorted by total word count descending, limited to top N users.
+        """
+        result = await session.execute(
+            select(
+                Vocabulary.user_id,
+                User.first_name,
+                func.count(),
+                func.count(Vocabulary.id).filter(Vocabulary.fsrs_due <= _utcnow()),
+            )
+            .join(User, Vocabulary.user_id == User.telegram_id)
+            .group_by(Vocabulary.user_id, User.first_name)
+            .order_by(func.count().desc())
+            .limit(limit),
+        )
+        return list(result.all())
 
 
 # ---------------------------------------------------------------------------
@@ -907,6 +946,58 @@ class SessionRepo:
             .group_by(Session.user_id),
         )
         return dict(result.all())
+
+    @staticmethod
+    async def get_daily_active_users(
+        session: AsyncSession, *, days: int = 1,
+    ) -> int:
+        """Count distinct users with interactive sessions in the last N days."""
+        cutoff = _utcnow() - timedelta(days=days)
+        result = await session.execute(
+            select(func.count(Session.user_id.distinct()))
+            .where(
+                Session.started_at >= cutoff,
+                Session.session_type == SessionType.INTERACTIVE,
+            ),
+        )
+        return result.scalar_one()
+
+    @staticmethod
+    async def get_avg_session_duration(
+        session: AsyncSession, *, days: int = 7,
+    ) -> float | None:
+        """Average duration of interactive sessions in the last N days (ms)."""
+        cutoff = _utcnow() - timedelta(days=days)
+        result = await session.execute(
+            select(func.avg(Session.duration_ms))
+            .where(
+                Session.started_at >= cutoff,
+                Session.session_type == SessionType.INTERACTIVE,
+                Session.duration_ms.isnot(None),
+            ),
+        )
+        val = result.scalar_one_or_none()
+        return float(val) if val is not None else None
+
+    @staticmethod
+    async def get_avg_sessions_per_user(
+        session: AsyncSession, *, days: int = 7,
+    ) -> float:
+        """Average number of interactive sessions per active user in the last N days."""
+        cutoff = _utcnow() - timedelta(days=days)
+        result = await session.execute(
+            select(
+                func.count(),
+                func.count(Session.user_id.distinct()),
+            )
+            .where(
+                Session.started_at >= cutoff,
+                Session.session_type == SessionType.INTERACTIVE,
+            ),
+        )
+        row = result.one()
+        total_sessions, unique_users = row[0], row[1]
+        return total_sessions / unique_users if unique_users > 0 else 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -1248,6 +1339,63 @@ class ExerciseResultRepo:
         )
         return result.rowcount
 
+    @staticmethod
+    async def count_all(
+        session: AsyncSession, *, days: int = 30,
+    ) -> int:
+        """Total exercise count across all users in the last N days."""
+        cutoff = _utcnow() - timedelta(days=days)
+        result = await session.execute(
+            select(func.count())
+            .select_from(ExerciseResult)
+            .where(ExerciseResult.created_at >= cutoff),
+        )
+        return result.scalar_one()
+
+    @staticmethod
+    async def get_global_topic_stats(
+        session: AsyncSession, *, days: int = 30, limit: int = 20,
+    ) -> list[dict]:
+        """Per-topic performance stats across ALL users."""
+        cutoff = _utcnow() - timedelta(days=days)
+        result = await session.execute(
+            select(
+                ExerciseResult.topic,
+                func.count(),
+                func.avg(ExerciseResult.score),
+                func.count(ExerciseResult.user_id.distinct()),
+                func.max(ExerciseResult.created_at),
+            )
+            .where(ExerciseResult.created_at >= cutoff)
+            .group_by(ExerciseResult.topic)
+            .order_by(func.count().desc())
+            .limit(limit),
+        )
+        return [
+            {
+                "topic": row[0],
+                "exercise_count": row[1],
+                "avg_score": round(float(row[2]), 1) if row[2] else None,
+                "unique_users": row[3],
+                "last_practiced": row[4].strftime("%Y-%m-%d") if row[4] else None,
+            }
+            for row in result.all()
+        ]
+
+    @staticmethod
+    async def get_global_score_distribution(
+        session: AsyncSession, *, days: int = 30,
+    ) -> list[tuple[int, int]]:
+        """Count exercises per score value (0-10) across all users."""
+        cutoff = _utcnow() - timedelta(days=days)
+        result = await session.execute(
+            select(ExerciseResult.score, func.count())
+            .where(ExerciseResult.created_at >= cutoff)
+            .group_by(ExerciseResult.score)
+            .order_by(ExerciseResult.score),
+        )
+        return list(result.all())
+
 
 # ---------------------------------------------------------------------------
 # NotificationRepo
@@ -1384,6 +1532,22 @@ class LearningPlanRepo:
             delete(LearningPlan).where(LearningPlan.user_id == user_id),
         )
 
+    @staticmethod
+    async def list_all_with_user(session: AsyncSession) -> list[LearningPlan]:
+        """Get all active learning plans with user relationship eagerly loaded."""
+        result = await session.execute(
+            select(LearningPlan).options(selectinload(LearningPlan.user)),
+        )
+        return result.scalars().all()
+
+    @staticmethod
+    async def count_all(session: AsyncSession) -> int:
+        """Count all active learning plans."""
+        result = await session.execute(
+            select(func.count()).select_from(LearningPlan),
+        )
+        return result.scalar_one()
+
 
 # ---------------------------------------------------------------------------
 # VocabularyReviewLogRepo
@@ -1413,3 +1577,72 @@ class VocabularyReviewLogRepo:
             .limit(limit),
         )
         return result.scalars().all()
+
+
+# ---------------------------------------------------------------------------
+# AccessRequestRepo
+# ---------------------------------------------------------------------------
+
+class AccessRequestRepo:
+
+    @staticmethod
+    async def create(session: AsyncSession, **kwargs) -> AccessRequest:
+        request = AccessRequest(**kwargs)
+        session.add(request)
+        await session.flush()
+        return request
+
+    @staticmethod
+    async def get_pending(session: AsyncSession) -> list[AccessRequest]:
+        result = await session.execute(
+            select(AccessRequest)
+            .where(AccessRequest.status == "pending")
+            .order_by(AccessRequest.created_at),
+        )
+        return result.scalars().all()
+
+    @staticmethod
+    async def get_all(session: AsyncSession, *, limit: int = 100) -> list[AccessRequest]:
+        result = await session.execute(
+            select(AccessRequest)
+            .order_by(AccessRequest.created_at.desc())
+            .limit(limit),
+        )
+        return result.scalars().all()
+
+    @staticmethod
+    async def get_by_telegram_id(
+        session: AsyncSession, telegram_id: int, *, status: str | None = None,
+    ) -> list[AccessRequest]:
+        stmt = select(AccessRequest).where(AccessRequest.telegram_id == telegram_id)
+        if status:
+            stmt = stmt.where(AccessRequest.status == status)
+        stmt = stmt.order_by(AccessRequest.created_at.desc())
+        result = await session.execute(stmt)
+        return result.scalars().all()
+
+    @staticmethod
+    async def count_pending(session: AsyncSession) -> int:
+        result = await session.execute(
+            select(func.count())
+            .select_from(AccessRequest)
+            .where(AccessRequest.status == "pending"),
+        )
+        return result.scalar_one()
+
+    @staticmethod
+    async def update_status(
+        session: AsyncSession,
+        request_id: int,
+        status: str,
+        reviewed_by: int,
+    ) -> None:
+        await session.execute(
+            update(AccessRequest)
+            .where(AccessRequest.id == request_id)
+            .values(
+                status=status,
+                reviewed_at=_utcnow(),
+                reviewed_by=reviewed_by,
+            ),
+        )

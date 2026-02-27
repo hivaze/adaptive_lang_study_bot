@@ -12,13 +12,12 @@ from adaptive_lang_study_bot.db.repositories import (
     UserRepo,
     VocabularyRepo,
 )
-from adaptive_lang_study_bot.config import tuning
+from adaptive_lang_study_bot.config import CEFR_LEVELS, tuning
 from adaptive_lang_study_bot.enums import CloseReason, Difficulty, PipelineStatus
 from adaptive_lang_study_bot.metrics import PIPELINE_COMPLETED, PIPELINE_DURATION
 from adaptive_lang_study_bot.i18n import DEFAULT_LANGUAGE, t
-from adaptive_lang_study_bot.utils import compute_new_streak, strip_mcp_prefix, summarize_tool_usage, user_local_now
+from adaptive_lang_study_bot.utils import compute_new_streak, stamp_field, strip_mcp_prefix, summarize_tool_usage, user_local_now
 
-_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]
 
 # Prep tools that hint at what the agent was doing when the user dropped off.
 _PREP_TOOL_HINTS = {
@@ -84,7 +83,7 @@ async def run_post_session(
             original_difficulty = user.preferred_difficulty
 
             # --- Step 1: Validate profile integrity ---
-            if user.level not in _LEVELS:
+            if user.level not in CEFR_LEVELS:
                 issues.append(f"Invalid level: {user.level}")
                 updates["level"] = "A1"
 
@@ -170,6 +169,9 @@ async def run_post_session(
 
             native_lang = user.native_language or DEFAULT_LANGUAGE
             if "preferred_difficulty" in updates:
+                date_str = local_now.strftime("%Y-%m-%d")
+                ts = stamp_field(user.field_timestamps, "preferred_difficulty", difficulty, date_str)
+                updates["field_timestamps"] = ts
                 pending.append(
                     t("pipeline.difficulty_adjusted", native_lang,
                       old=user.preferred_difficulty, new=difficulty)
@@ -305,7 +307,8 @@ async def run_post_session(
             if type_scores:
                 history_entry["exercise_types"] = list(type_scores.keys())[:5]
             if all_words:
-                history_entry["words_practiced"] = [w[:50] for w in all_words[:10]]
+                unique_words = list(dict.fromkeys(all_words))
+                history_entry["words_practiced"] = [w[:50] for w in unique_words[:10]]
             # Duration: fetch session start time
             session_for_duration = await SessionRepo.get(db, session_id)
             if session_for_duration is not None and session_for_duration.started_at:

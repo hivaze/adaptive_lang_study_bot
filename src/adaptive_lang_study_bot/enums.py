@@ -73,6 +73,12 @@ class NotificationTier(StrEnum):
     HYBRID = "hybrid"
 
 
+class AccessRequestStatus(StrEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
 class CloseReason(StrEnum):
     TURN_LIMIT = "turn_limit"
     COST_LIMIT = "cost_limit"

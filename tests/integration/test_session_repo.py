@@ -171,12 +171,6 @@ class TestSessionQueries:
         cost = await SessionRepo.get_daily_cost(db_session, date.today())
         assert cost >= 0.25
 
-    async def test_get_daily_cost_average(self, db_session: AsyncSession, make_user):
-        # Just verify it runs without error and returns a float
-        avg = await SessionRepo.get_daily_cost_average(db_session, days=7)
-        assert isinstance(avg, float)
-        assert avg >= 0
-
     async def test_get_cost_per_user(self, db_session: AsyncSession, make_user):
         user = await make_user()
         s = await SessionRepo.create(
@@ -243,14 +237,6 @@ class TestSessionQueries:
             db_session, today - timedelta(days=1), today,
         )
         assert total >= 0.10
-
-    async def test_list_recent_all(self, db_session: AsyncSession, make_user):
-        user = await make_user()
-        await SessionRepo.create(
-            db_session, user_id=user.telegram_id, session_type="interactive",
-        )
-        results = await SessionRepo.list_recent_all(db_session, limit=50)
-        assert len(results) >= 1
 
 
 # ---------------------------------------------------------------------------

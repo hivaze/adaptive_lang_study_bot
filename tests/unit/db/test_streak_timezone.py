@@ -5,7 +5,7 @@ must both use the user's local date, not UTC date. Otherwise a user west
 of UTC could have their streak recorded on the wrong date.
 """
 
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from adaptive_lang_study_bot.db.repositories import _user_local_date
@@ -17,14 +17,6 @@ class TestUserLocalDate:
     class _FakeUser:
         def __init__(self, tz: str | None):
             self.timezone = tz
-
-    def test_utc_user(self):
-        result = _user_local_date(self._FakeUser("UTC"))
-        assert isinstance(result, date)
-
-    def test_none_timezone_defaults_utc(self):
-        result = _user_local_date(self._FakeUser(None))
-        assert isinstance(result, date)
 
     def test_invalid_timezone_defaults_utc(self):
         result = _user_local_date(self._FakeUser("Invalid/Tz"))

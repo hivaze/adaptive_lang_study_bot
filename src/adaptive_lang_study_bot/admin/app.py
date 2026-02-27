@@ -3,13 +3,19 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 import gradio as gr
+from aiogram import Bot
 from loguru import logger
 
 from adaptive_lang_study_bot.agent.pool import session_pool
+from adaptive_lang_study_bot.bot.helpers import TELEGRAM_MSG_MAX_LEN, markdown_to_telegram_html
 from adaptive_lang_study_bot.cache.client import get_redis
-from adaptive_lang_study_bot.config import settings
+from adaptive_lang_study_bot.config import TIER_LIMITS, settings
 from adaptive_lang_study_bot.db.engine import async_session_factory
+from adaptive_lang_study_bot.db.models import AccessRequest, User
 from adaptive_lang_study_bot.db.repositories import (
+    AccessRequestRepo,
+    ExerciseResultRepo,
+    LearningPlanRepo,
     NotificationRepo,
     ScheduleRepo,
     SessionRepo,
@@ -17,8 +23,9 @@ from adaptive_lang_study_bot.db.repositories import (
     VocabularyRepo,
 )
 from adaptive_lang_study_bot.enums import UserTier
-from adaptive_lang_study_bot.i18n import render_goal, render_interest
+from adaptive_lang_study_bot.i18n import render_goal, render_interest, t
 from adaptive_lang_study_bot.proactive.admin_reports import get_health_status
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import SQLAlchemyError
 
 _PREVIEW_TRUNCATE_LEN = 80
@@ -319,6 +326,39 @@ button.secondary {
     font-style: normal;
     font-size: 0.8rem;
 }
+
+/* ─────────────────────────────────────────────────────────
+   Broadcast preview
+   ───────────────────────────────────────────────────────── */
+.broadcast-preview {
+    background: #111113;
+    border: 1px solid #27272a;
+    border-radius: 8px;
+    padding: 1rem;
+    color: #d4d4d8;
+    font-size: 0.9rem;
+    line-height: 1.5;
+    max-height: 400px;
+    overflow-y: auto;
+}
+.broadcast-preview b { color: #fafafa; }
+.broadcast-preview i { color: #a1a1aa; }
+.broadcast-preview code {
+    background: #18181b;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    color: #d4d4d8;
+}
+.broadcast-preview pre {
+    background: #18181b;
+    border: 1px solid #27272a;
+    border-radius: 6px;
+    padding: 0.75rem;
+    overflow-x: auto;
+    color: #d4d4d8;
+    font-size: 0.82rem;
+}
 """
 
 # ---------------------------------------------------------------------------
@@ -363,6 +403,116 @@ def _health_icon(status_str: str) -> str:
 def _esc(text: str) -> str:
     """Escape pipe characters for Markdown table cells."""
     return text.replace("|", "\\|")
+
+
+# ---------------------------------------------------------------------------
+# Broadcast helpers
+# ---------------------------------------------------------------------------
+
+async def _broadcast(
+    user_ids: list[int], html_text: str, *, delay: float = 0.05,
+) -> tuple[int, int]:
+    """Send *html_text* to all *user_ids*. Returns (success, failed)."""
+    bot = Bot(token=settings.telegram_bot_token)
+    success = 0
+    failed = 0
+    try:
+        for uid in user_ids:
+            try:
+                await bot.send_message(uid, html_text, parse_mode="HTML")
+                success += 1
+            except Exception:
+                logger.warning("Broadcast failed for user {}", uid)
+                failed += 1
+            await asyncio.sleep(delay)
+    finally:
+        await bot.session.close()
+    return success, failed
+
+
+async def preview_broadcast(markdown_text: str) -> str:
+    """Convert Markdown to Telegram HTML and return a styled preview."""
+    if not markdown_text or not markdown_text.strip():
+        return "*Type a message to see the preview.*"
+
+    html = markdown_to_telegram_html(markdown_text)
+    if len(html) > TELEGRAM_MSG_MAX_LEN:
+        return (
+            f'<span class="health-alert">Message too long</span> '
+            f"({len(html)}/{TELEGRAM_MSG_MAX_LEN} chars). "
+            "Telegram will reject it — please shorten the message."
+        )
+
+    return (
+        f'<div class="broadcast-preview">{html}</div>\n\n'
+        f"*{len(html)}/{TELEGRAM_MSG_MAX_LEN} characters*"
+    )
+
+
+async def send_broadcast(
+    markdown_text: str,
+    audience: str,
+    single_user_id: int,
+    confirmed: bool,
+) -> str:
+    """Validate, resolve audience, and send the broadcast message."""
+    if not markdown_text or not markdown_text.strip():
+        return "**Error:** Message is empty."
+
+    html = markdown_to_telegram_html(markdown_text)
+    if len(html) > TELEGRAM_MSG_MAX_LEN:
+        return f"**Error:** Converted HTML is {len(html)} chars (max {TELEGRAM_MSG_MAX_LEN})."
+
+    # Resolve target user IDs
+    if audience == "Single user":
+        if not single_user_id or single_user_id <= 0:
+            return "**Error:** Enter a valid Telegram User ID."
+        user_ids = [int(single_user_id)]
+    else:
+        async with async_session_factory() as db:
+            users = await UserRepo.list_all(db, active_only=True)
+        if audience == "Free tier only":
+            user_ids = [u.telegram_id for u in users if u.tier == UserTier.FREE]
+        elif audience == "Premium tier only":
+            user_ids = [u.telegram_id for u in users if u.tier == UserTier.PREMIUM]
+        else:
+            user_ids = [u.telegram_id for u in users]
+
+    if not user_ids:
+        return "**Error:** No matching users found."
+
+    if not confirmed:
+        return (
+            f"**Ready to send to {len(user_ids)} user(s).** "
+            "Check the confirmation box and click Send again."
+        )
+
+    logger.info("Admin broadcast to {} users (audience: {})", len(user_ids), audience)
+    success, failed = await _broadcast(user_ids, html)
+
+    return f"""\
+<div class="stat-row">
+<div class="stat-card"><div class="stat-value">{success}</div><div class="stat-label">Sent</div></div>
+<div class="stat-card"><div class="stat-value">{failed}</div><div class="stat-label">Failed</div></div>
+<div class="stat-card"><div class="stat-value">{len(user_ids)}</div><div class="stat-label">Total</div></div>
+</div>"""
+
+
+async def send_direct_message(telegram_id: int, markdown_text: str) -> str:
+    """Send a single direct message to a user from the Users tab."""
+    if not markdown_text or not markdown_text.strip():
+        return "**Error:** Message is empty."
+    if not telegram_id or telegram_id <= 0:
+        return "**Error:** Enter a valid Telegram User ID."
+
+    html = markdown_to_telegram_html(markdown_text)
+    if len(html) > TELEGRAM_MSG_MAX_LEN:
+        return f"**Error:** Converted HTML is {len(html)} chars (max {TELEGRAM_MSG_MAX_LEN})."
+
+    success, failed = await _broadcast([int(telegram_id)], html)
+    if success:
+        return f"**Sent** to user {telegram_id}."
+    return f"**Failed** to send to user {telegram_id}."
 
 
 # ---------------------------------------------------------------------------
@@ -869,6 +1019,136 @@ async def get_health_alerts_display() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Analytics tab
+# ---------------------------------------------------------------------------
+
+async def get_analytics_summary() -> str:
+    """Summary stat cards for the analytics tab."""
+    async with async_session_factory() as db:
+        exercise_count = await ExerciseResultRepo.count_all(db, days=30)
+        score_summary = await ExerciseResultRepo.get_global_topic_stats(db, days=30, limit=1000)
+        vocab_summary = await VocabularyRepo.get_global_summary(db)
+        plan_count = await LearningPlanRepo.count_all(db)
+
+    total_exercises = exercise_count
+    avg_score = (
+        round(
+            sum(t["avg_score"] * t["exercise_count"] for t in score_summary if t["avg_score"])
+            / max(1, sum(t["exercise_count"] for t in score_summary if t["avg_score"])),
+            1,
+        )
+        if score_summary
+        else 0
+    )
+
+    return f"""\
+<div class="stat-row">
+<div class="stat-card"><div class="stat-value">{total_exercises}</div><div class="stat-label">Exercises (30d)</div></div>
+<div class="stat-card"><div class="stat-value">{avg_score}</div><div class="stat-label">Avg Score (30d)</div></div>
+<div class="stat-card"><div class="stat-value">{vocab_summary['total_words']}</div><div class="stat-label">Total Words</div></div>
+<div class="stat-card"><div class="stat-value">{vocab_summary['total_due']}</div><div class="stat-label">Due Cards</div></div>
+<div class="stat-card"><div class="stat-value">{plan_count}</div><div class="stat-label">Active Plans</div></div>
+</div>"""
+
+
+async def get_exercise_performance() -> list[list]:
+    """Global topic performance data for the analytics tab."""
+    async with async_session_factory() as db:
+        stats = await ExerciseResultRepo.get_global_topic_stats(db, days=30, limit=20)
+    return [
+        [
+            s["topic"],
+            s["exercise_count"],
+            s["avg_score"],
+            s["unique_users"],
+            s["last_practiced"] or "N/A",
+        ]
+        for s in stats
+    ]
+
+
+async def get_score_distribution() -> list[list]:
+    """Score distribution data (0-10) for the analytics tab."""
+    async with async_session_factory() as db:
+        dist = await ExerciseResultRepo.get_global_score_distribution(db, days=30)
+    total = sum(count for _, count in dist)
+    return [
+        [score, count, f"{count / total * 100:.0f}%" if total > 0 else "0%"]
+        for score, count in dist
+    ]
+
+
+async def get_vocab_overview() -> list[list]:
+    """Per-user vocabulary overview for the analytics tab."""
+    async with async_session_factory() as db:
+        data = await VocabularyRepo.get_per_user_summary(db, limit=20)
+    return [
+        [user_id, first_name, total, due]
+        for user_id, first_name, total, due in data
+    ]
+
+
+async def get_learning_plans_data() -> list[list]:
+    """All active learning plans for the analytics tab."""
+    async with async_session_factory() as db:
+        plans = await LearningPlanRepo.list_all_with_user(db)
+    return [
+        [
+            p.user.first_name if p.user else str(p.user_id),
+            f"{p.current_level} -> {p.target_level}",
+            p.start_date.isoformat() if p.start_date else "N/A",
+            p.target_end_date.isoformat() if p.target_end_date else "N/A",
+            p.total_weeks,
+            p.times_adapted,
+        ]
+        for p in plans
+    ]
+
+
+async def get_engagement_stats() -> str:
+    """User engagement statistics as Markdown stat cards."""
+    async with async_session_factory() as db:
+        dau = await SessionRepo.get_daily_active_users(db, days=1)
+        wau = await SessionRepo.get_daily_active_users(db, days=7)
+        avg_sessions = await SessionRepo.get_avg_sessions_per_user(db, days=7)
+        avg_duration_ms = await SessionRepo.get_avg_session_duration(db, days=7)
+
+    avg_duration_min = f"{avg_duration_ms / 60000:.1f}" if avg_duration_ms else "N/A"
+
+    return f"""\
+<div class="stat-row">
+<div class="stat-card"><div class="stat-value">{dau}</div><div class="stat-label">DAU</div></div>
+<div class="stat-card"><div class="stat-value">{wau}</div><div class="stat-label">WAU</div></div>
+<div class="stat-card"><div class="stat-value">{avg_sessions:.1f}</div><div class="stat-label">Avg Sessions / User (7d)</div></div>
+<div class="stat-card"><div class="stat-value">{avg_duration_min}m</div><div class="stat-label">Avg Duration (7d)</div></div>
+</div>"""
+
+
+# ---------------------------------------------------------------------------
+# System tab — tier limits
+# ---------------------------------------------------------------------------
+
+def get_tier_limits_display() -> str:
+    """Render TIER_LIMITS as a Markdown table."""
+    rows = []
+    for tier, limits in TIER_LIMITS.items():
+        rows.append(
+            f"| {str(tier).upper()} | {limits.model} | {limits.max_turns_per_session} "
+            f"| {limits.max_sessions_per_day} | ${limits.max_cost_per_day_usd:.2f} "
+            f"| ${limits.max_cost_per_session_usd:.2f} | {limits.session_idle_timeout_seconds}s "
+            f"| {limits.max_llm_notifications_per_day} | {limits.rate_limit_per_minute}/min |"
+        )
+    return (
+        "### Tier Limits\n\n"
+        "| Tier | Model | Max Turns | Sessions/Day | Cost/Day | Cost/Session "
+        "| Idle Timeout | LLM Notifs/Day | Rate Limit |\n"
+        "|------|-------|-----------|-------------|----------|-------------|"
+        "-------------|----------------|------------|\n"
+        + "\n".join(rows)
+    )
+
+
+# ---------------------------------------------------------------------------
 # Composite loaders for auto-load
 # ---------------------------------------------------------------------------
 
@@ -886,11 +1166,241 @@ async def _load_all_alerts() -> tuple[list[list], str]:
     return failures, notif_stats
 
 
-async def _load_system_data() -> tuple[str, str]:
+async def _load_system_data() -> tuple[str, str, str]:
     health, alerts = await asyncio.gather(
         get_system_health(), get_health_alerts_display(),
     )
-    return health, alerts
+    tier_limits = get_tier_limits_display()
+    return health, alerts, tier_limits
+
+
+async def _load_all_analytics() -> tuple[str, list[list], list[list], list[list], list[list], str]:
+    summary, exercises, scores, vocab, plans, engagement = await asyncio.gather(
+        get_analytics_summary(),
+        get_exercise_performance(),
+        get_score_distribution(),
+        get_vocab_overview(),
+        get_learning_plans_data(),
+        get_engagement_stats(),
+    )
+    return summary, exercises, scores, vocab, plans, engagement
+
+
+# ---------------------------------------------------------------------------
+# Whitelist helpers
+# ---------------------------------------------------------------------------
+
+_REQUEST_HEADERS = ["ID", "Name", "Username", "Telegram ID", "Language", "Status", "Requested"]
+
+
+def _format_request_rows(requests: list[AccessRequest]) -> list[list]:
+    return [
+        [
+            r.id,
+            r.first_name,
+            f"@{r.telegram_username}" if r.telegram_username else "—",
+            r.telegram_id,
+            r.language_code or "—",
+            r.status.upper(),
+            r.created_at.strftime("%Y-%m-%d %H:%M") if r.created_at else "—",
+        ]
+        for r in requests
+    ]
+
+
+async def get_whitelist_summary() -> str:
+    try:
+        async with async_session_factory() as db:
+            pending_count = await AccessRequestRepo.count_pending(db)
+            result = await db.execute(
+                select(func.count())
+                .select_from(User)
+                .where(User.whitelist_approved.is_(True)),
+            )
+            approved_count = result.scalar_one()
+    except SQLAlchemyError:
+        return "**Error loading whitelist data.**"
+
+    mode_badge = (
+        '<span class="badge badge-light">ENABLED</span>'
+        if settings.whitelist_mode
+        else '<span class="badge badge-dark">DISABLED</span>'
+    )
+    return (
+        '<div class="stat-row">'
+        f'<div class="stat-card"><div class="stat-value">{mode_badge}</div>'
+        '<div class="stat-label">Whitelist Mode</div></div>'
+        f'<div class="stat-card"><div class="stat-value">{pending_count}</div>'
+        '<div class="stat-label">Pending Requests</div></div>'
+        f'<div class="stat-card"><div class="stat-value">{approved_count}</div>'
+        '<div class="stat-label">Approved Users</div></div>'
+        "</div>"
+    )
+
+
+async def get_pending_requests_data() -> list[list]:
+    try:
+        async with async_session_factory() as db:
+            requests = await AccessRequestRepo.get_pending(db)
+        return _format_request_rows(requests)
+    except SQLAlchemyError:
+        return []
+
+
+async def get_access_requests_data() -> list[list]:
+    try:
+        async with async_session_factory() as db:
+            requests = await AccessRequestRepo.get_all(db, limit=100)
+        return _format_request_rows(requests)
+    except SQLAlchemyError:
+        return []
+
+
+def _admin_id() -> int:
+    """First configured admin ID, used for audit trail on whitelist actions."""
+    return settings.admin_telegram_ids[0] if settings.admin_telegram_ids else 0
+
+
+async def approve_request(request_id: int) -> str:
+    if not request_id or request_id <= 0:
+        return "**Error:** Enter a valid Request ID."
+    request_id = int(request_id)
+    admin_telegram_id = _admin_id()
+
+    try:
+        async with async_session_factory() as db:
+            result = await db.execute(
+                select(AccessRequest).where(AccessRequest.id == request_id),
+            )
+            req = result.scalar_one_or_none()
+            if req is None:
+                return f"**Error:** Request {request_id} not found."
+            if req.status != "pending":
+                return f"Request already **{req.status}**."
+
+            await AccessRequestRepo.update_status(db, request_id, "approved", admin_telegram_id)
+            await UserRepo.update_fields(
+                db, req.telegram_id,
+                whitelist_approved=True,
+                tier=UserTier.PREMIUM,
+            )
+            await db.commit()
+            telegram_id = req.telegram_id
+            first_name = req.first_name
+            lang_code = req.language_code
+
+        try:
+            bot = Bot(token=settings.telegram_bot_token)
+            await bot.send_message(
+                telegram_id,
+                t("whitelist.approved", lang_code or "en"),
+            )
+            await bot.session.close()
+        except Exception:
+            logger.warning("Failed to notify user {} about approval", telegram_id)
+
+        return f"**Approved** request from {first_name} (ID: {telegram_id}). User promoted to Premium."
+    except SQLAlchemyError as e:
+        return f"**Error:** {e}"
+
+
+async def reject_request(request_id: int) -> str:
+    if not request_id or request_id <= 0:
+        return "**Error:** Enter a valid Request ID."
+    request_id = int(request_id)
+    admin_telegram_id = _admin_id()
+
+    try:
+        async with async_session_factory() as db:
+            result = await db.execute(
+                select(AccessRequest).where(AccessRequest.id == request_id),
+            )
+            req = result.scalar_one_or_none()
+            if req is None:
+                return f"**Error:** Request {request_id} not found."
+            if req.status != "pending":
+                return f"Request already **{req.status}**."
+
+            await AccessRequestRepo.update_status(db, request_id, "rejected", admin_telegram_id)
+            await db.commit()
+            telegram_id = req.telegram_id
+            first_name = req.first_name
+            lang_code = req.language_code
+
+        try:
+            bot = Bot(token=settings.telegram_bot_token)
+            await bot.send_message(
+                telegram_id,
+                t("whitelist.rejected", lang_code or "en"),
+            )
+            await bot.session.close()
+        except Exception:
+            logger.warning("Failed to notify user {} about rejection", telegram_id)
+
+        return f"**Rejected** request from {first_name} (ID: {telegram_id})."
+    except SQLAlchemyError as e:
+        return f"**Error:** {e}"
+
+
+async def bulk_approve_all_pending() -> str:
+    admin_telegram_id = _admin_id()
+
+    try:
+        async with async_session_factory() as db:
+            requests = await AccessRequestRepo.get_pending(db)
+            if not requests:
+                return "No pending requests."
+            for req in requests:
+                await AccessRequestRepo.update_status(db, req.id, "approved", admin_telegram_id)
+                await UserRepo.update_fields(
+                    db, req.telegram_id,
+                    whitelist_approved=True,
+                    tier=UserTier.PREMIUM,
+                )
+            await db.commit()
+
+        bot = Bot(token=settings.telegram_bot_token)
+        try:
+            for req in requests:
+                try:
+                    await bot.send_message(
+                        req.telegram_id,
+                        t("whitelist.approved", req.language_code or "en"),
+                    )
+                except Exception:
+                    pass
+        finally:
+            await bot.session.close()
+
+        return f"**Approved** {len(requests)} pending request(s). All users promoted to Premium."
+    except SQLAlchemyError as e:
+        return f"**Error:** {e}"
+
+
+async def approve_all_existing_users() -> str:
+    """One-time action: approve all existing active users for whitelist mode."""
+    admin_telegram_id = _admin_id()  # noqa: F841 — for future audit logging
+    try:
+        async with async_session_factory() as db:
+            result = await db.execute(
+                update(User)
+                .where(User.is_active.is_(True), User.whitelist_approved.is_(False))
+                .values(whitelist_approved=True, tier=UserTier.PREMIUM),
+            )
+            await db.commit()
+            count = result.rowcount
+        return f"**Done:** {count} existing user(s) approved and promoted to Premium."
+    except SQLAlchemyError as e:
+        return f"**Error:** {e}"
+
+
+async def _load_whitelist_data() -> tuple[str, list[list], list[list]]:
+    summary, pending, all_reqs = await asyncio.gather(
+        get_whitelist_summary(),
+        get_pending_requests_data(),
+        get_access_requests_data(),
+    )
+    return summary, pending, all_reqs
 
 
 # ---------------------------------------------------------------------------
@@ -946,10 +1456,30 @@ def create_admin_app() -> gr.Blocks:
                 user_detail_md = gr.Markdown(
                     sanitize_html=False, elem_classes=["report-md"],
                 )
+                gr.Markdown("---")
+                gr.Markdown("### Send Direct Message")
+                dm_text = gr.Textbox(
+                    label="Message (Markdown)",
+                    lines=4,
+                    placeholder="Type a message to send to this user...",
+                )
+                dm_preview_md = gr.Markdown(
+                    sanitize_html=False, elem_classes=["report-md"],
+                )
+                with gr.Row():
+                    dm_preview_btn = gr.Button("Preview", variant="secondary", size="sm")
+                    dm_send_btn = gr.Button("Send Message", variant="primary", size="sm")
+                dm_status = gr.Markdown()
             tier_btn.click(toggle_user_tier, inputs=action_user_id, outputs=action_status)
             active_btn.click(toggle_user_active, inputs=action_user_id, outputs=action_status)
             admin_btn.click(toggle_user_admin, inputs=action_user_id, outputs=action_status)
             detail_btn.click(get_user_detail, inputs=action_user_id, outputs=user_detail_md)
+            dm_preview_btn.click(preview_broadcast, inputs=dm_text, outputs=dm_preview_md)
+            dm_send_btn.click(
+                send_direct_message,
+                inputs=[action_user_id, dm_text],
+                outputs=dm_status,
+            )
 
         # --- Sessions tab ---
         with gr.Tab("Sessions") as sessions_tab:
@@ -992,6 +1522,58 @@ def create_admin_app() -> gr.Blocks:
                 outputs=[cost_summary_md, costs_table, user_costs_table],
             )
 
+        # --- Analytics tab ---
+        with gr.Tab("Analytics") as analytics_tab:
+            analytics_summary_md = gr.Markdown(
+                sanitize_html=False, elem_classes=["report-md"],
+            )
+            with gr.Row(equal_height=True):
+                with gr.Column(scale=1):
+                    gr.Markdown("### Exercise Performance (30 days)")
+                    exercise_table = gr.Dataframe(
+                        headers=["Topic", "Exercises", "Avg Score", "Users", "Last Practiced"],
+                        label="Topic performance",
+                        max_height=400,
+                        interactive=False,
+                    )
+                with gr.Column(scale=1):
+                    gr.Markdown("### Score Distribution (30 days)")
+                    score_dist_table = gr.Dataframe(
+                        headers=["Score", "Count", "%"],
+                        label="Score distribution",
+                        max_height=400,
+                        interactive=False,
+                    )
+            with gr.Row(equal_height=True):
+                with gr.Column(scale=1):
+                    gr.Markdown("### Vocabulary Overview (top 20 users)")
+                    vocab_table = gr.Dataframe(
+                        headers=["User ID", "Name", "Total Words", "Due Cards"],
+                        label="Vocabulary by user",
+                        max_height=400,
+                        interactive=False,
+                    )
+                with gr.Column(scale=1):
+                    gr.Markdown("### Learning Plans")
+                    plans_table = gr.Dataframe(
+                        headers=["User", "Level Path", "Start", "Target End", "Weeks", "Adapted"],
+                        label="Active learning plans",
+                        max_height=400,
+                        interactive=False,
+                    )
+            gr.Markdown("### User Engagement (7 days)")
+            engagement_md = gr.Markdown(
+                sanitize_html=False, elem_classes=["report-md"],
+            )
+            refresh_analytics_btn = gr.Button("Refresh Analytics", variant="primary", size="sm")
+            refresh_analytics_btn.click(
+                _load_all_analytics,
+                outputs=[
+                    analytics_summary_md, exercise_table, score_dist_table,
+                    vocab_table, plans_table, engagement_md,
+                ],
+            )
+
         # --- Alerts tab ---
         with gr.Tab("Alerts") as alerts_tab:
             with gr.Row(equal_height=True):
@@ -1026,10 +1608,133 @@ def create_admin_app() -> gr.Blocks:
                     alerts_status_md = gr.Markdown(
                         sanitize_html=False, elem_classes=["report-md"],
                     )
+            tier_limits_md = gr.Markdown(
+                sanitize_html=False, elem_classes=["report-md"],
+            )
             refresh_system_btn = gr.Button("Refresh System Status", variant="primary", size="sm")
             refresh_system_btn.click(
                 _load_system_data,
-                outputs=[health_md, alerts_status_md],
+                outputs=[health_md, alerts_status_md, tier_limits_md],
+            )
+
+        # --- Broadcast tab ---
+        with gr.Tab("Broadcast") as broadcast_tab:
+            with gr.Row():
+                with gr.Column(scale=3):
+                    broadcast_text = gr.Textbox(
+                        label="Message (Markdown)",
+                        lines=10,
+                        placeholder=(
+                            "Write your message using Markdown:\n"
+                            "**bold**, *italic*, `code`, ```code blocks```\n"
+                            "The message will be converted to Telegram HTML."
+                        ),
+                    )
+                    with gr.Row():
+                        broadcast_audience = gr.Dropdown(
+                            label="Target Audience",
+                            choices=[
+                                "All active users",
+                                "Free tier only",
+                                "Premium tier only",
+                                "Single user",
+                            ],
+                            value="All active users",
+                            scale=2,
+                        )
+                        broadcast_user_id = gr.Number(
+                            label="User ID (for single user)",
+                            precision=0,
+                            scale=1,
+                        )
+                with gr.Column(scale=2):
+                    gr.Markdown("### Preview")
+                    broadcast_preview_md = gr.Markdown(
+                        sanitize_html=False, elem_classes=["report-md"],
+                    )
+            with gr.Row():
+                broadcast_preview_btn = gr.Button("Preview", variant="secondary")
+                broadcast_confirm = gr.Checkbox(
+                    label="I confirm I want to send this broadcast",
+                    value=False,
+                )
+                broadcast_send_btn = gr.Button("Send Broadcast", variant="primary")
+            broadcast_status_md = gr.Markdown(
+                sanitize_html=False, elem_classes=["report-md"],
+            )
+            broadcast_preview_btn.click(
+                preview_broadcast,
+                inputs=broadcast_text,
+                outputs=broadcast_preview_md,
+            )
+            broadcast_send_btn.click(
+                send_broadcast,
+                inputs=[broadcast_text, broadcast_audience, broadcast_user_id, broadcast_confirm],
+                outputs=broadcast_status_md,
+            )
+
+        # --- Whitelist tab ---
+        with gr.Tab("Whitelist") as whitelist_tab:
+            whitelist_summary_md = gr.Markdown(
+                sanitize_html=False, elem_classes=["report-md"],
+            )
+
+            gr.Markdown("### Pending Requests")
+            pending_table = gr.Dataframe(
+                headers=_REQUEST_HEADERS,
+                label="Pending Access Requests",
+                max_height=300,
+                interactive=False,
+            )
+
+            with gr.Accordion("Request Actions", open=True):
+                wl_req_id = gr.Number(label="Request ID", precision=0)
+                with gr.Row():
+                    wl_approve_btn = gr.Button("Approve", variant="primary", size="sm")
+                    wl_reject_btn = gr.Button("Reject", variant="secondary", size="sm")
+                    wl_approve_all_btn = gr.Button("Approve All Pending", variant="primary", size="sm")
+                wl_action_status = gr.Markdown()
+
+            with gr.Accordion("Bulk Actions", open=False):
+                gr.Markdown(
+                    "**Approve All Existing Users** — one-time action to approve all "
+                    "currently active users when enabling whitelist mode on an existing deployment.",
+                )
+                wl_approve_existing_btn = gr.Button(
+                    "Approve All Existing Users", variant="primary", size="sm",
+                )
+                wl_bulk_status = gr.Markdown()
+                wl_approve_existing_btn.click(
+                    approve_all_existing_users,
+                    outputs=wl_bulk_status,
+                )
+
+            gr.Markdown("### All Requests (last 100)")
+            all_requests_table = gr.Dataframe(
+                headers=_REQUEST_HEADERS,
+                label="All Access Requests",
+                max_height=400,
+                interactive=False,
+            )
+            wl_refresh_btn = gr.Button("Refresh", variant="secondary", size="sm")
+
+            wl_approve_btn.click(
+                approve_request,
+                inputs=wl_req_id,
+                outputs=wl_action_status,
+            )
+            wl_reject_btn.click(
+                reject_request,
+                inputs=wl_req_id,
+                outputs=wl_action_status,
+            )
+            wl_approve_all_btn.click(
+                bulk_approve_all_pending,
+                outputs=wl_action_status,
+            )
+            wl_refresh_btn.click(
+                _load_whitelist_data,
+                outputs=[whitelist_summary_md, pending_table, all_requests_table],
             )
 
         # --- Auto-load on tab selection ---
@@ -1039,13 +1744,24 @@ def create_admin_app() -> gr.Blocks:
             _load_all_costs,
             outputs=[cost_summary_md, costs_table, user_costs_table],
         )
+        analytics_tab.select(
+            _load_all_analytics,
+            outputs=[
+                analytics_summary_md, exercise_table, score_dist_table,
+                vocab_table, plans_table, engagement_md,
+            ],
+        )
         alerts_tab.select(
             _load_all_alerts,
             outputs=[failures_table, notif_stats_md],
         )
         system_tab.select(
             _load_system_data,
-            outputs=[health_md, alerts_status_md],
+            outputs=[health_md, alerts_status_md, tier_limits_md],
+        )
+        whitelist_tab.select(
+            _load_whitelist_data,
+            outputs=[whitelist_summary_md, pending_table, all_requests_table],
         )
 
         # Load default tab (Users) on app open

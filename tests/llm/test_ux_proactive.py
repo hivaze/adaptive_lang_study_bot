@@ -44,10 +44,8 @@ def _mock_user(**overrides):
 def _extract_notification_text(response_text: str) -> str:
     """Extract the meaningful notification text from the agent response.
 
-    The agent calls send_notification with the message, but the response
-    text includes the agent's reasoning too.  For length assertions, we
-    use the full response as a proxy — the notification text is always
-    a subset.
+    Proactive sessions generate text directly (no tool calls).
+    For length assertions, we use the full response as a proxy.
     """
     return response_text.strip()
 
@@ -73,13 +71,8 @@ class TestProactiveNudgeQuality:
         )
         await session.query_and_collect("Execute your proactive task now.")
 
-        assert "send_notification" in session.bare_tools, (
-            f"Nudge should call send_notification, got: {session.bare_tools}"
-        )
-        # Notification should be concise — the send_notification argument
-        # is embedded in the response. Full response under 800 chars is a
-        # reasonable proxy for a brief notification.
-        # (Agent response includes both reasoning and the notification.)
+        # Notification should be concise — proactive sessions generate text
+        # directly. Full response under 1500 chars is a reasonable proxy.
         assert len(session.response_text) < 1500, (
             f"Nudge should be concise, but response was {len(session.response_text)} chars: "
             f"{session.response_text[:400]}"
@@ -179,10 +172,6 @@ class TestProactiveReviewQuality:
         )
         await session.query_and_collect("Execute your proactive task now.")
 
-        assert "send_notification" in session.bare_tools, (
-            f"Review should call send_notification, got: {session.bare_tools}"
-        )
-
         lower = session.response_text.lower()
         # Should mention the count (12) or "cards"/"words" due
         count_signals = [
@@ -215,10 +204,6 @@ class TestProactiveQuizQuality:
             system_prompt_override=prompt,
         )
         await session.query_and_collect("Execute your proactive task now.")
-
-        assert "send_notification" in session.bare_tools, (
-            f"Quiz should call send_notification, got: {session.bare_tools}"
-        )
 
         # Should contain questions (question marks in notification)
         has_question_mark = "?" in session.response_text
@@ -261,10 +246,6 @@ class TestProactiveNativeLanguage:
         )
         await session.query_and_collect("Execute your proactive task now.")
 
-        assert "send_notification" in session.bare_tools, (
-            f"Should call send_notification, got: {session.bare_tools}"
-        )
-
         # Response should contain Cyrillic (Russian) text
         has_cyrillic = bool(re.search(r"[\u0400-\u04ff]", session.response_text))
         assert has_cyrillic, (
@@ -292,10 +273,6 @@ class TestProactiveNativeLanguage:
             system_prompt_override=prompt,
         )
         await session.query_and_collect("Execute your proactive task now.")
-
-        assert "send_notification" in session.bare_tools, (
-            f"Should call send_notification, got: {session.bare_tools}"
-        )
 
         lower = session.response_text.lower()
         # Should contain Spanish indicators

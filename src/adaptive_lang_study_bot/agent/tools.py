@@ -1,5 +1,4 @@
 import json
-import re
 import uuid as _uuid
 from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
@@ -32,19 +31,13 @@ from adaptive_lang_study_bot.enums import (
 )
 from adaptive_lang_study_bot.db.models import User
 from adaptive_lang_study_bot.fsrs_engine.scheduler import create_new_card, review_card
-from adaptive_lang_study_bot.utils import compute_next_trigger, safe_zoneinfo, strip_mcp_prefix
+from adaptive_lang_study_bot.utils import compute_next_trigger, safe_zoneinfo, stamp_field, strip_mcp_prefix
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 _USER_MUTABLE_FIELDS = {"interests", "learning_goals", "preferred_difficulty", "session_style", "topics_to_avoid", "notifications_paused", "additional_notes"}
-_LEVELS = CEFR_LEVELS
-_MAX_SCHEDULES_PER_USER = 10
-_MAX_SCHEDULES_PER_TYPE = 3
-_VOCAB_SEARCH_LIMIT = 20
-_EXERCISE_HISTORY_MAX = 50
-_DUE_VOCAB_MAX = 50
 
 # Base period in minutes for each dateutil frequency constant.
 # Uses private _freq / _interval attrs — stable across all dateutil versions.
@@ -146,7 +139,6 @@ TOOL_NAMES = [
     "mcp__langbot__add_vocabulary",
     "mcp__langbot__get_due_vocabulary",
     "mcp__langbot__manage_schedule",
-    "mcp__langbot__send_notification",
     "mcp__langbot__search_vocabulary",
     "mcp__langbot__get_exercise_history",
     "mcp__langbot__get_progress_summary",
@@ -165,29 +157,73 @@ _SESSION_TYPE_TOOLS: dict[SessionType, set[str]] = {
         "get_user_profile", "update_preference", "record_exercise_result",
         "add_vocabulary", "search_vocabulary", "manage_schedule",
     },
-    SessionType.PROACTIVE_REVIEW: {
-        "get_user_profile", "get_due_vocabulary",
-        "send_notification",
-    },
-    SessionType.PROACTIVE_QUIZ: {
-        "get_user_profile", "send_notification",
-    },
-    SessionType.PROACTIVE_SUMMARY: {
-        "get_user_profile", "get_exercise_history", "get_progress_summary",
-        "send_notification", "manage_learning_plan",
-    },
-    SessionType.PROACTIVE_NUDGE: {
-        "get_user_profile", "send_notification",
-    },
+    SessionType.PROACTIVE_REVIEW: set(),
+    SessionType.PROACTIVE_QUIZ: set(),
+    SessionType.PROACTIVE_SUMMARY: set(),
+    SessionType.PROACTIVE_NUDGE: set(),
     SessionType.ASSESSMENT: set(),
 }
 
 
-# Telegram-supported HTML tags (https://core.telegram.org/bots/api#html-style)
-_TELEGRAM_HTML_TAGS = frozenset({
-    "b", "i", "u", "s", "code", "pre", "a",
-    "tg-spoiler", "blockquote", "tg-emoji",
-})
+def _score_to_fsrs_rating(normalized_score: int) -> int:
+    """Map normalized exercise score (0-10) to FSRS rating (1=Again, 2=Hard, 3=Good, 4=Easy)."""
+    if normalized_score <= tuning.fsrs_rating_fail_threshold:
+        return 1
+    if normalized_score <= tuning.fsrs_rating_hard_threshold:
+        return 2
+    if normalized_score >= tuning.fsrs_rating_easy_threshold:
+        return 4
+    return 3
+
+
+def _validate_and_compute_rrule(
+    rrule_str: str, user_tz,
+) -> tuple[datetime | None, str | None]:
+    """Validate RRULE interval and compute next trigger.
+
+    Returns ``(next_trigger, None)`` on success, or ``(None, error_msg)`` on failure.
+    """
+    try:
+        interval = _rrule_interval_minutes(rrule_str)
+        if interval < tuning.min_schedule_interval_minutes:
+            return None, (
+                f"Schedule fires too frequently (~{int(interval)} min). "
+                f"Minimum interval is {tuning.min_schedule_interval_minutes} minutes. "
+                f"Use FREQ=HOURLY or less frequent."
+            )
+    except (ValueError, TypeError):
+        pass  # compute_next_trigger below provides the error
+
+    try:
+        next_trigger = compute_next_trigger(rrule_str, user_tz)
+    except (ValueError, TypeError) as e:
+        return None, f"Invalid RRULE: {e}"
+
+    if next_trigger is None:
+        return None, "RRULE produces no future occurrences"
+
+    return next_trigger, None
+
+
+def _estimate_daily_llm_notifications(
+    existing_schedules: list, new_rrule: str | None = None,
+) -> float:
+    """Estimate daily LLM notification count from existing schedules plus an optional new one."""
+    estimate = 0.0
+    for s in existing_schedules:
+        if s.notification_tier in (NotificationTier.LLM, NotificationTier.HYBRID):
+            try:
+                s_interval = _rrule_interval_minutes(s.rrule)
+                estimate += max(1, 1440 / s_interval)
+            except (ValueError, TypeError):
+                estimate += 1
+    if new_rrule:
+        try:
+            new_interval = _rrule_interval_minutes(new_rrule)
+            estimate += max(1, 1440 / new_interval)
+        except (ValueError, TypeError):
+            estimate += 1
+    return estimate
 
 
 def _parse_list_field(raw_value: Any, *, max_items: int, max_len: int) -> list[str]:
@@ -211,25 +247,6 @@ def _parse_list_field(raw_value: Any, *, max_items: int, max_len: int) -> list[s
     return [str(v).strip()[:max_len] for v in value[:max_items]]
 
 
-def _validate_telegram_html(text: str) -> str | None:
-    """Check for unbalanced Telegram HTML tags. Returns error message or None."""
-    stack: list[str] = []
-    for m in re.finditer(r"<(/?)([a-z][a-z0-9-]*)(?:\s[^>]*)?\s*/?>", text, re.IGNORECASE):
-        is_close, tag = m.group(1) == "/", m.group(2).lower()
-        if tag not in _TELEGRAM_HTML_TAGS:
-            continue  # ignore non-Telegram tags (may be literal text)
-        if is_close:
-            if not stack or stack[-1] != tag:
-                return f"Unbalanced HTML: unexpected </{tag}>"
-            stack.pop()
-        else:
-            stack.append(tag)
-    if stack:
-        unclosed = ", ".join(f"<{tag}>" for tag in stack)
-        return f"Unclosed HTML tags: {unclosed}. Close all tags properly."
-    return None
-
-
 # ---------------------------------------------------------------------------
 # Per-session tool factory
 # ---------------------------------------------------------------------------
@@ -240,7 +257,6 @@ def create_session_tools(
     session_id: str | None = None,
     session_type: SessionType = SessionType.INTERACTIVE,
     user_timezone: str = "UTC",
-    notification_sink: list[str] | None = None,
     user_tier: str = UserTier.FREE,
 ) -> tuple[list, Callable[[str], bool]]:
     """Create tool functions with per-session state captured via closures.
@@ -313,6 +329,7 @@ def create_session_tools(
                 "due_fraction": round(due_count / max(user.vocabulary_count, 1), 2),
                 "tier": user.tier,
                 "notifications_paused": user.notifications_paused,
+                "field_timestamps": user.field_timestamps or {},
             }
             return _ok(profile)
 
@@ -326,12 +343,15 @@ def create_session_tools(
         "additional_notes (list of up to 10 observations about the student's preferences "
         "and behavior, e.g. 'prefers vocab before exercises', 'enjoys role-play'). "
         "Use learning_goals to record what the student is working toward, e.g. "
-        "'Prepare for DELF B2 exam', 'Learn cooking vocabulary for trip to France'.",
-        {"field": str, "value": str},
+        "'Prepare for DELF B2 exam', 'Learn cooking vocabulary for trip to France'. "
+        "For list fields, set mode='append' (default) to add items to the existing "
+        "list, or mode='replace' to replace the entire list.",
+        {"field": str, "value": str, "mode": str},
     )
     async def update_preference(args: dict[str, Any]) -> dict[str, Any]:
         field = args["field"]
         raw_value = args["value"]
+        mode = args.get("mode", "append")
 
         if field not in _USER_MUTABLE_FIELDS:
             return _err(
@@ -339,11 +359,11 @@ def create_session_tools(
             )
 
         if field == "interests":
-            value = _parse_list_field(raw_value, max_items=tuning.max_interests, max_len=100)
+            value = _parse_list_field(raw_value, max_items=tuning.max_interests, max_len=tuning.max_interest_item_length)
         elif field == "topics_to_avoid":
-            value = _parse_list_field(raw_value, max_items=tuning.max_topics_to_avoid, max_len=100)
+            value = _parse_list_field(raw_value, max_items=tuning.max_topics_to_avoid, max_len=tuning.max_topic_to_avoid_item_length)
         elif field == "learning_goals":
-            value = _parse_list_field(raw_value, max_items=tuning.max_learning_goals, max_len=200)
+            value = _parse_list_field(raw_value, max_items=tuning.max_learning_goals, max_len=tuning.max_goal_item_length)
         elif field == "preferred_difficulty":
             value = raw_value.lower().strip()
             if value not in Difficulty:
@@ -353,7 +373,7 @@ def create_session_tools(
             if value not in SessionStyle:
                 return _err(f"Invalid style '{value}'. Use: {', '.join(SessionStyle)}")
         elif field == "additional_notes":
-            value = _parse_list_field(raw_value, max_items=tuning.max_additional_notes, max_len=200)
+            value = _parse_list_field(raw_value, max_items=tuning.max_additional_notes, max_len=tuning.max_note_item_length)
         elif field == "notifications_paused":
             if isinstance(raw_value, bool):
                 value = raw_value
@@ -366,7 +386,27 @@ def create_session_tools(
 
         async with session_factory() as db_session:
             try:
-                await UserRepo.update_fields(db_session, user_id, **{field: value})
+                user = await UserRepo.get(db_session, user_id)
+                if user is None:
+                    return _err("User not found")
+
+                # For list fields in append mode, merge with existing values
+                if isinstance(value, list) and mode == "append":
+                    existing = getattr(user, field, None) or []
+                    # Case-insensitive dedup preserving order (existing first)
+                    seen = {item.lower() for item in existing}
+                    merged = list(existing)
+                    for item in value:
+                        if item.lower() not in seen:
+                            merged.append(item)
+                            seen.add(item.lower())
+                    value = merged
+
+                date_str = datetime.now(_user_tz).strftime("%Y-%m-%d")
+                ts = stamp_field(user.field_timestamps, field, value, date_str)
+                await UserRepo.update_fields(
+                    db_session, user_id, field_timestamps=ts, **{field: value},
+                )
                 await db_session.commit()
             except SQLAlchemyError:
                 logger.exception("Failed to update preference for user {}", user_id)
@@ -397,8 +437,8 @@ def create_session_tools(
 
         # Normalize to 0-10 scale for consistent level/area thresholds
         normalized_score = round(score * 10 / max_score) if max_score != 10 else score
-        exercise_type = str(args["exercise_type"]).strip()[:50]
-        topic = str(args["topic"]).strip()[:100]
+        exercise_type = str(args["exercise_type"]).strip()[:tuning.max_exercise_type_length]
+        topic = str(args["topic"]).strip()[:tuning.max_topic_length]
 
         words_raw = args.get("words_involved", "[]")
         try:
@@ -407,7 +447,7 @@ def create_session_tools(
             words = [words_raw] if words_raw else []
         if not isinstance(words, list):
             words = [words]
-        words = [str(w).strip()[:100] for w in words[:20]]
+        words = [str(w).strip()[:tuning.max_word_length] for w in words[:tuning.max_exercise_words]]
 
         async with session_factory() as db_session:
             try:
@@ -430,21 +470,27 @@ def create_session_tools(
                 if user is None:
                     return _err("User not found")
 
+                # Running field_timestamps dict — updated progressively
+                ts = dict(user.field_timestamps or {})
+                date_str = datetime.now(_user_tz).strftime("%Y-%m-%d")
+
                 # Level adjustment based on recent scores
                 new_level: str | None = None
                 window = tuning.level_recent_window
                 if len(scores) >= window:
                     recent_n = scores[-window:]
                     avg = sum(recent_n) / len(recent_n)
-                    current_idx = _LEVELS.index(user.level) if user.level in _LEVELS else 0
+                    current_idx = CEFR_LEVELS.index(user.level) if user.level in CEFR_LEVELS else 0
 
-                    if avg >= tuning.level_up_avg and current_idx < len(_LEVELS) - 1:
-                        new_level = _LEVELS[current_idx + 1]
-                        await UserRepo.update_fields(db_session, user_id, level=new_level)
+                    if avg >= tuning.level_up_avg and current_idx < len(CEFR_LEVELS) - 1:
+                        new_level = CEFR_LEVELS[current_idx + 1]
+                        ts = stamp_field(ts, "level", new_level, date_str)
+                        await UserRepo.update_fields(db_session, user_id, level=new_level, field_timestamps=ts)
                         adjustments.append(f"Level UP: {user.level} → {new_level}")
                     elif avg <= tuning.level_down_avg and current_idx > 0:
-                        new_level = _LEVELS[current_idx - 1]
-                        await UserRepo.update_fields(db_session, user_id, level=new_level)
+                        new_level = CEFR_LEVELS[current_idx - 1]
+                        ts = stamp_field(ts, "level", new_level, date_str)
+                        await UserRepo.update_fields(db_session, user_id, level=new_level, field_timestamps=ts)
                         adjustments.append(f"Level DOWN: {user.level} → {new_level}")
 
                 # Check learning plan impact on level change
@@ -452,10 +498,10 @@ def create_session_tools(
                     try:
                         active_plan = await LearningPlanRepo.get_active(db_session, user_id)
                         if active_plan:
-                            new_idx = _LEVELS.index(new_level)
+                            new_idx = CEFR_LEVELS.index(new_level)
                             target_idx = (
-                                _LEVELS.index(active_plan.target_level)
-                                if active_plan.target_level in _LEVELS else 0
+                                CEFR_LEVELS.index(active_plan.target_level)
+                                if active_plan.target_level in CEFR_LEVELS else 0
                             )
                             if new_idx >= target_idx:
                                 await LearningPlanRepo.delete(db_session, user_id)
@@ -463,7 +509,7 @@ def create_session_tools(
                                     f"Learning plan COMPLETED: reached target level "
                                     f"{active_plan.target_level}. Consider creating a new plan."
                                 )
-                            elif new_idx < _LEVELS.index(active_plan.current_level):
+                            elif new_idx < CEFR_LEVELS.index(active_plan.current_level):
                                 adjustments.append(
                                     f"Level dropped below plan baseline. "
                                     f"Consider adapting your learning plan."
@@ -479,7 +525,7 @@ def create_session_tools(
                 strong = list(user.strong_areas or [])
 
                 recent_topic_results = await ExerciseResultRepo.get_recent(
-                    db_session, user_id, topic=topic, limit=5,
+                    db_session, user_id, topic=topic, limit=tuning.weak_strong_recent_limit,
                 )
                 recent_topic_scores = [r.score for r in recent_topic_results]
 
@@ -494,16 +540,18 @@ def create_session_tools(
                     weak.remove(topic)
                     if topic not in strong:
                         strong.append(topic)
-                    strong = strong[-10:]
-                    await UserRepo.update_fields(db_session, user_id, weak_areas=weak, strong_areas=strong)
+                    ts = stamp_field(ts, "weak_areas", weak, date_str)
+                    ts = stamp_field(ts, "strong_areas", strong, date_str)
+                    await UserRepo.update_fields(db_session, user_id, weak_areas=weak, strong_areas=strong, field_timestamps=ts)
                     adjustments.append(f"'{topic}' moved from weak to strong areas")
                     logger.info("User {}: '{}' moved from weak to strong ({} scores >= {})", user_id, topic, strong_count, tuning.strong_area_score)
                 elif weak_count >= tuning.weak_area_min_occurrences and topic not in weak:
                     weak.append(topic)
-                    weak = weak[-10:]
                     if topic in strong:
                         strong.remove(topic)
-                    await UserRepo.update_fields(db_session, user_id, weak_areas=weak, strong_areas=strong)
+                    ts = stamp_field(ts, "weak_areas", weak, date_str)
+                    ts = stamp_field(ts, "strong_areas", strong, date_str)
+                    await UserRepo.update_fields(db_session, user_id, weak_areas=weak, strong_areas=strong, field_timestamps=ts)
                     adjustments.append(f"'{topic}' added to weak areas")
                     logger.info("User {}: '{}' added to weak areas ({} scores <= {})", user_id, topic, weak_count, tuning.weak_area_score)
 
@@ -511,12 +559,7 @@ def create_session_tools(
                 # Map exercise score → FSRS rating so exercises count as reviews.
                 reviewed_words: list[str] = []
                 if words:
-                    fsrs_rating = (
-                        1 if normalized_score <= 3
-                        else 2 if normalized_score <= 5
-                        else 4 if normalized_score >= 9
-                        else 3
-                    )
+                    fsrs_rating = _score_to_fsrs_rating(normalized_score)
                     for w in words:
                         vocab = await VocabularyRepo.get_by_word_ci(db_session, user_id, w)
                         if vocab is None:
@@ -553,7 +596,7 @@ def create_session_tools(
             "status": "recorded",
             "score": score,
             "topic": topic,
-            "recent_scores": scores[-5:],
+            "recent_scores": scores[-tuning.recent_scores_display:],
         }
         if adjustments:
             result["adjustments"] = adjustments
@@ -569,7 +612,7 @@ def create_session_tools(
         {"word": str, "translation": str, "context_sentence": str, "topic": str},
     )
     async def add_vocabulary(args: dict[str, Any]) -> dict[str, Any]:
-        word = args["word"].strip()[:200]
+        word = args["word"].strip()[:tuning.max_word_length]
 
         async with session_factory() as db_session:
             # Case-insensitive dedup: "Bonjour" and "bonjour" are the same word
@@ -589,9 +632,9 @@ def create_session_tools(
                     db_session,
                     user_id=user_id,
                     word=word,
-                    translation=args.get("translation", "").strip()[:200] or None,
+                    translation=args.get("translation", "").strip()[:tuning.max_translation_length] or None,
                     context_sentence=args.get("context_sentence", "").strip() or None,
-                    topic=args.get("topic", "").strip()[:100] or None,
+                    topic=args.get("topic", "").strip()[:tuning.max_topic_length] or None,
                     fsrs_state=card_info["state"],
                     fsrs_stability=card_info["stability"],
                     fsrs_difficulty=card_info["difficulty"],
@@ -630,7 +673,7 @@ def create_session_tools(
         {"limit": int, "topic": str},
     )
     async def get_due_vocabulary(args: dict[str, Any]) -> dict[str, Any]:
-        limit = min(args.get("limit", 20), _DUE_VOCAB_MAX)
+        limit = min(args.get("limit", tuning.due_vocab_default_limit), tuning.due_vocab_max)
         topic = args.get("topic", "").strip() or None
 
         async with session_factory() as db_session:
@@ -683,8 +726,8 @@ def create_session_tools(
                 # Fetch all user schedules once (max 10 rows) for validation
                 existing = await ScheduleRepo.get_for_user(db_session, user_id)
 
-                if len(existing) >= _MAX_SCHEDULES_PER_USER:
-                    return _err(f"Maximum {_MAX_SCHEDULES_PER_USER} schedules per user. Delete one first.")
+                if len(existing) >= tuning.max_schedules_per_user:
+                    return _err(f"Maximum {tuning.max_schedules_per_user} schedules per user. Delete one first.")
 
                 rrule_str = args.get("rrule", "")
                 if not rrule_str:
@@ -706,33 +749,19 @@ def create_session_tools(
 
                 # Per-type duplicate limit
                 type_count = sum(1 for s in existing if s.schedule_type == schedule_type)
-                if type_count >= _MAX_SCHEDULES_PER_TYPE:
+                if type_count >= tuning.max_schedules_per_type:
                     return _err(
                         f"Already {type_count} '{schedule_type}' schedules "
-                        f"(max {_MAX_SCHEDULES_PER_TYPE} per type). "
+                        f"(max {tuning.max_schedules_per_type} per type). "
                         f"Delete one or use a different schedule type."
                     )
 
                 # LLM/hybrid schedule cap — estimate daily LLM notifications from
-                # existing schedules' recurrence + the new one. Prevents creating
-                # hourly LLM schedules that would blow the daily budget.
+                # existing schedules' recurrence + the new one.
                 if notification_tier in (NotificationTier.LLM, NotificationTier.HYBRID):
                     tier_limits = TIER_LIMITS.get(UserTier(user_tier))
                     if tier_limits:
-                        daily_llm_estimate = 0
-                        for s in existing:
-                            if s.notification_tier in (NotificationTier.LLM, NotificationTier.HYBRID):
-                                try:
-                                    s_interval = _rrule_interval_minutes(s.rrule)
-                                    daily_llm_estimate += max(1, 1440 / s_interval)
-                                except (ValueError, TypeError):
-                                    daily_llm_estimate += 1
-                        # Add estimate for the new schedule
-                        try:
-                            new_interval = _rrule_interval_minutes(rrule_str)
-                            daily_llm_estimate += max(1, 1440 / new_interval)
-                        except (ValueError, TypeError):
-                            daily_llm_estimate += 1
+                        daily_llm_estimate = _estimate_daily_llm_notifications(existing, rrule_str)
                         if daily_llm_estimate > tier_limits.max_llm_notifications_per_day:
                             return _err(
                                 f"Too many LLM notifications/day (~{int(daily_llm_estimate)}). "
@@ -740,28 +769,11 @@ def create_session_tools(
                                 f"Use notification_tier='template' or reduce schedule frequency."
                             )
 
-                # Minimum recurrence interval
-                try:
-                    interval = _rrule_interval_minutes(rrule_str)
-                    if interval < tuning.min_schedule_interval_minutes:
-                        return _err(
-                            f"Schedule fires too frequently (~{int(interval)} min). "
-                            f"Minimum interval is {tuning.min_schedule_interval_minutes} minutes. "
-                            f"Use FREQ=HOURLY or less frequent."
-                        )
-                except (ValueError, TypeError):
-                    pass  # Invalid RRULE — compute_next_trigger below provides the error
-
-                # Parse RRULE in the user's local timezone so BYHOUR values
-                # match what the user expects (e.g. "9am" = 9am local, not UTC).
+                # Validate RRULE and compute next trigger in user's local timezone
                 user_tz = safe_zoneinfo(user_timezone)
-                try:
-                    next_trigger = compute_next_trigger(rrule_str, user_tz)
-                except (ValueError, TypeError) as e:
-                    return _err(f"Invalid RRULE: {e}")
-
-                if next_trigger is None:
-                    return _err("RRULE produces no future occurrences")
+                next_trigger, rrule_error = _validate_and_compute_rrule(rrule_str, user_tz)
+                if rrule_error:
+                    return _err(rrule_error)
 
                 try:
                     schedule = await ScheduleRepo.create(
@@ -802,24 +814,10 @@ def create_session_tools(
 
                 updates: dict[str, Any] = {}
                 if args.get("rrule"):
-                    # Minimum recurrence interval
-                    try:
-                        interval = _rrule_interval_minutes(args["rrule"])
-                        if interval < tuning.min_schedule_interval_minutes:
-                            return _err(
-                                f"Schedule fires too frequently (~{int(interval)} min). "
-                                f"Minimum interval is {tuning.min_schedule_interval_minutes} minutes."
-                            )
-                    except (ValueError, TypeError):
-                        pass  # compute_next_trigger below provides the error
-
                     upd_tz = safe_zoneinfo(user_timezone)
-                    try:
-                        upd_next = compute_next_trigger(args["rrule"], upd_tz)
-                    except (ValueError, TypeError) as e:
-                        return _err(f"Invalid RRULE: {e}")
-                    if upd_next is None:
-                        return _err("RRULE produces no future occurrences")
+                    upd_next, rrule_error = _validate_and_compute_rrule(args["rrule"], upd_tz)
+                    if rrule_error:
+                        return _err(rrule_error)
                     updates["rrule"] = args["rrule"]
                     updates["next_trigger_at"] = upd_next
 
@@ -840,11 +838,8 @@ def create_session_tools(
                         tier_limits = TIER_LIMITS.get(UserTier(user_tier))
                         if tier_limits:
                             all_schedules = await ScheduleRepo.get_for_user(db_session, user_id)
-                            llm_count = sum(
-                                1 for s in all_schedules
-                                if s.notification_tier in (NotificationTier.LLM, NotificationTier.HYBRID)
-                            )
-                            if llm_count >= tier_limits.max_llm_notifications_per_day:
+                            daily_estimate = _estimate_daily_llm_notifications(all_schedules)
+                            if daily_estimate >= tier_limits.max_llm_notifications_per_day:
                                 return _err(
                                     f"LLM schedule limit reached ({tier_limits.max_llm_notifications_per_day}). "
                                     f"Delete an existing LLM schedule or keep template tier."
@@ -894,35 +889,9 @@ def create_session_tools(
             return _err(f"Unknown action '{action}'. Use: create, update, delete, list")
 
     @tool(
-        "send_notification",
-        "Send a message to the user via Telegram. Max 2000 characters. "
-        "Use for proactive sessions only.",
-        {"message": str},
-    )
-    async def send_notification(args: dict[str, Any]) -> dict[str, Any]:
-        message = args.get("message", "").strip()
-        if not message:
-            return _err("Notification message cannot be empty")
-        if len(message) > 2000:
-            return _err("Message too long (max 2000 characters)")
-        html_err = _validate_telegram_html(message)
-        if html_err:
-            return _err(f"Invalid HTML in notification: {html_err}")
-        if notification_sink is None:
-            return _err("send_notification is not available in this session type")
-        if notification_sink:
-            preview = notification_sink[0][:80]
-            return _err(
-                f"Notification already queued: '{preview}...'. "
-                "You must call send_notification exactly once per session."
-            )
-        notification_sink.append(message)
-        return _ok({"status": "queued", "message": message, "user_id": user_id})
-
-    @tool(
         "search_vocabulary",
         "Search the student's existing vocabulary by keyword or topic. "
-        "Case-insensitive, returns up to 20 results.",
+        f"Case-insensitive, returns up to {tuning.vocab_search_limit} results.",
         {"query": str},
     )
     async def search_vocabulary(args: dict[str, Any]) -> dict[str, Any]:
@@ -931,7 +900,7 @@ def create_session_tools(
             return _err("Search query cannot be empty")
 
         async with session_factory() as db_session:
-            results = await VocabularyRepo.search(db_session, user_id, query, limit=_VOCAB_SEARCH_LIMIT)
+            results = await VocabularyRepo.search(db_session, user_id, query, limit=tuning.vocab_search_limit)
             cards = [
                 {
                     "id": v.id,
@@ -952,7 +921,7 @@ def create_session_tools(
         {"limit": int, "topic": str},
     )
     async def get_exercise_history(args: dict[str, Any]) -> dict[str, Any]:
-        limit = min(args.get("limit", 10), _EXERCISE_HISTORY_MAX)
+        limit = min(args.get("limit", tuning.exercise_history_default_limit), tuning.exercise_history_max)
         topic = args.get("topic", "").strip() or None
 
         async with session_factory() as db_session:
@@ -982,7 +951,7 @@ def create_session_tools(
         {"days": int},
     )
     async def get_progress_summary(args: dict[str, Any]) -> dict[str, Any]:
-        days = min(max(args.get("days", 30), 1), 90)
+        days = min(max(args.get("days", tuning.progress_summary_default_days), 1), tuning.progress_summary_max_days)
 
         async with session_factory() as db_session:
             try:
@@ -1160,14 +1129,14 @@ def create_session_tools(
                             "week": i + 1,
                             "start_date": phase_start.isoformat(),
                             "end_date": phase_end.isoformat(),
-                            "focus": str(phase["focus"]).strip()[:200],
-                            "topics": [str(t).strip()[:100] for t in phase["topics"]],
+                            "focus": str(phase["focus"]).strip()[:tuning.plan_max_focus_length],
+                            "topics": [str(t).strip()[:tuning.plan_max_topic_length] for t in phase["topics"]],
                         }
                         if phase.get("vocabulary_theme"):
-                            enriched["vocabulary_theme"] = str(phase["vocabulary_theme"]).strip()[:100]
+                            enriched["vocabulary_theme"] = str(phase["vocabulary_theme"]).strip()[:tuning.plan_max_vocab_theme_length]
                         if phase.get("vocabulary_target"):
                             enriched["vocabulary_target"] = min(
-                                int(phase["vocabulary_target"]), 30,
+                                int(phase["vocabulary_target"]), tuning.plan_max_vocab_target_per_week,
                             )
                         if phase.get("assessment"):
                             enriched["assessment"] = phase["assessment"]
@@ -1178,16 +1147,16 @@ def create_session_tools(
                     if user is None:
                         return _err("User not found")
                     current_level = user.level
-                    current_idx = _LEVELS.index(current_level) if current_level in _LEVELS else 0
+                    current_idx = CEFR_LEVELS.index(current_level) if current_level in CEFR_LEVELS else 0
                     target_level = (
-                        _LEVELS[current_idx + 1]
-                        if current_idx < len(_LEVELS) - 1
+                        CEFR_LEVELS[current_idx + 1]
+                        if current_idx < len(CEFR_LEVELS) - 1
                         else current_level
                     )
 
                     plan_data = {
-                        "description": desc[:500],
-                        "weekly_sessions_target": int(args.get("weekly_sessions_target", 4)),
+                        "description": desc[:tuning.plan_max_description_length],
+                        "weekly_sessions_target": int(args.get("weekly_sessions_target", tuning.plan_default_weekly_sessions)),
                         "phases": enriched_phases,
                         "adaptation_log": [],
                     }
@@ -1262,6 +1231,13 @@ def create_session_tools(
 
                     # Enrich updated phases with dates
                     new_total_weeks = current_week + len(updated_phases)
+                    if new_total_weeks > tuning.plan_max_weeks:
+                        return _err(
+                            f"Adapted plan would be {new_total_weeks} weeks, "
+                            f"but maximum is {tuning.plan_max_weeks}. "
+                            f"Reduce the number of phases (currently {len(updated_phases)}) "
+                            f"or combine topics."
+                        )
                     new_end_date = plan.start_date + timedelta(weeks=new_total_weeks)
 
                     for i, phase in enumerate(updated_phases):
@@ -1272,13 +1248,13 @@ def create_session_tools(
                             "week": week_num,
                             "start_date": phase_start.isoformat(),
                             "end_date": phase_end.isoformat(),
-                            "focus": str(phase["focus"]).strip()[:200],
-                            "topics": [str(t).strip()[:100] for t in phase["topics"]],
+                            "focus": str(phase["focus"]).strip()[:tuning.plan_max_focus_length],
+                            "topics": [str(t).strip()[:tuning.plan_max_topic_length] for t in phase["topics"]],
                         }
                         if phase.get("vocabulary_theme"):
-                            enriched["vocabulary_theme"] = str(phase["vocabulary_theme"]).strip()[:100]
+                            enriched["vocabulary_theme"] = str(phase["vocabulary_theme"]).strip()[:tuning.plan_max_vocab_theme_length]
                         if phase.get("vocabulary_target"):
-                            enriched["vocabulary_target"] = min(int(phase["vocabulary_target"]), 30)
+                            enriched["vocabulary_target"] = min(int(phase["vocabulary_target"]), tuning.plan_max_vocab_target_per_week)
                         if phase.get("assessment"):
                             enriched["assessment"] = phase["assessment"]
                         kept_phases.append(enriched)
@@ -1289,7 +1265,7 @@ def create_session_tools(
                     log = plan_data.setdefault("adaptation_log", [])
                     log.append({
                         "date": today.isoformat(),
-                        "reason": reason[:300],
+                        "reason": reason[:tuning.plan_max_adaptation_reason_length],
                         "week": current_week,
                     })
 
@@ -1328,7 +1304,6 @@ def create_session_tools(
         add_vocabulary,
         get_due_vocabulary,
         manage_schedule,
-        send_notification,
         search_vocabulary,
         get_exercise_history,
         get_progress_summary,

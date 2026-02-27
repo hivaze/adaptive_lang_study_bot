@@ -1,5 +1,7 @@
+import hashlib
 from datetime import date, datetime, timezone
 from datetime import tzinfo as _tzinfo
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from dateutil.rrule import rrulestr
@@ -116,3 +118,59 @@ def is_user_admin(user: User) -> bool:
     if user.is_admin:
         return True
     return user.telegram_id in settings.admin_telegram_ids
+
+
+# ---------------------------------------------------------------------------
+# Field timestamps — track when profile fields were set/changed
+# ---------------------------------------------------------------------------
+
+def _item_key(text: str) -> str:
+    """Deterministic 8-char hex key for an array item.
+
+    Used as JSONB key in field_timestamps to avoid duplicating full item text.
+    Collision probability with ≤10 items per field is negligible (~1/4 billion).
+    """
+    return hashlib.sha256(text.strip().encode()).hexdigest()[:8]
+
+
+def stamp_field(current_ts: dict | None, field: str, value: Any, date_str: str) -> dict:
+    """Record when a field was set/changed.
+
+    For list values: uses _item_key() hash as JSONB key, only adds date
+    for items NOT already tracked (preserves original "since" date).
+    For scalar values: sets field → date_str (always overwrites).
+
+    Never mutates *current_ts*; returns a new dict.
+    """
+    ts = dict(current_ts or {})
+    if isinstance(value, list):
+        field_ts = dict(ts.get(field, {}))
+        for item in value:
+            key = _item_key(str(item))
+            if key not in field_ts:
+                field_ts[key] = date_str
+        ts[field] = field_ts
+    else:
+        ts[field] = date_str
+    return ts
+
+
+def stamp_fields(current_ts: dict | None, fields: dict[str, Any], date_str: str) -> dict:
+    """Batch version of stamp_field — stamps multiple fields at once."""
+    ts = dict(current_ts or {})
+    for field, value in fields.items():
+        ts = stamp_field(ts, field, value, date_str)
+    return ts
+
+
+def get_item_date(ts: dict | None, field: str, item: str) -> str | None:
+    """Look up the timestamp for an array item by computing its hash key.
+
+    Returns the ISO date string or None if not tracked.
+    """
+    if not ts:
+        return None
+    field_ts = ts.get(field)
+    if not isinstance(field_ts, dict):
+        return None
+    return field_ts.get(_item_key(item))

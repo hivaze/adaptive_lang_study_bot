@@ -120,6 +120,9 @@ class TestSanitizationInPrompt:
         user.onboarding_completed = True
         user.tier = "free"
         user.timezone = "UTC"
+        user.notifications_paused = False
+        user.additional_notes = []
+        user.field_timestamps = {}
         for k, v in overrides.items():
             setattr(user, k, v)
         return user

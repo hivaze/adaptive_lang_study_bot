@@ -5,6 +5,7 @@ from aiogram.types import CallbackQuery, Message, TelegramObject
 from loguru import logger
 from sqlalchemy.exc import IntegrityError
 
+from adaptive_lang_study_bot.config import settings
 from adaptive_lang_study_bot.db.repositories import UserRepo
 from adaptive_lang_study_bot.i18n import SUPPORTED_NATIVE_LANGUAGES as _SUPPORTED_LANGUAGES
 from adaptive_lang_study_bot.utils import is_user_admin
@@ -101,6 +102,25 @@ class AuthMiddleware(BaseMiddleware):
             if isinstance(event, CallbackQuery):
                 await event.answer()
             return
+
+        # Whitelist mode: block non-approved, non-admin users (only /start allowed)
+        if (
+            settings.whitelist_mode
+            and not user.whitelist_approved
+            and not is_user_admin(user)
+        ):
+            if isinstance(event, Message) and event.text and event.text.strip().startswith("/start"):
+                data["user"] = user
+                data["whitelist_blocked"] = True
+                return await handler(event, data)
+            if isinstance(event, CallbackQuery):
+                await event.answer()
+            return
+
+        # Auto-promote approved users to premium in whitelist mode
+        if settings.whitelist_mode and user.whitelist_approved and user.tier != "premium":
+            await UserRepo.update_fields(db_session, user.telegram_id, tier="premium")
+            user.tier = "premium"
 
         # Auto-promote admin users to premium tier
         if is_user_admin(user) and user.tier != "premium":

@@ -104,18 +104,18 @@ class TestStreakOptimisticGuard:
 
 class TestScoreAppendRollingWindow:
 
-    async def test_rolling_cap_at_20(self, db_session: AsyncSession, make_user):
-        """Appending more than 20 scores should keep only the last 20."""
+    async def test_rolling_cap_at_30(self, db_session: AsyncSession, make_user):
+        """Appending more than 30 scores should keep only the last 30 (default max_len)."""
         user = await make_user()
 
-        for i in range(25):
+        for i in range(35):
             scores = await UserRepo.append_score(
                 db_session, user.telegram_id, score=i,
             )
 
-        assert len(scores) == 20
-        # Should contain the last 20 scores (5-24)
-        assert scores == list(range(5, 25))
+        assert len(scores) == 30
+        # Should contain the last 30 scores (5-34)
+        assert scores == list(range(5, 35))
 
     async def test_append_preserves_existing(self, db_session: AsyncSession, make_user):
         """Appending a score should preserve existing scores."""

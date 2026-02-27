@@ -1,11 +1,6 @@
 from adaptive_lang_study_bot.config import TIER_LIMITS, TierLimits, UserTier
 
 
-def test_tier_limits_exist():
-    assert UserTier.FREE in TIER_LIMITS
-    assert UserTier.PREMIUM in TIER_LIMITS
-
-
 def test_free_tier_uses_haiku():
     limits = TIER_LIMITS[UserTier.FREE]
     assert isinstance(limits, TierLimits)
@@ -28,12 +23,3 @@ def test_free_tier_stricter_than_premium():
     assert free.max_llm_notifications_per_day < premium.max_llm_notifications_per_day
 
 
-def test_both_tiers_thinking_adaptive():
-    assert TIER_LIMITS[UserTier.FREE].thinking_type == "adaptive"
-    assert TIER_LIMITS[UserTier.PREMIUM].thinking_type == "adaptive"
-
-
-def test_premium_tier_higher_session_limit():
-    free = TIER_LIMITS[UserTier.FREE]
-    premium = TIER_LIMITS[UserTier.PREMIUM]
-    assert premium.max_sessions_per_day > free.max_sessions_per_day

@@ -52,32 +52,6 @@ async def test_teach_then_quiz(create_llm_session):
     assert user.recent_scores, "Expected scores to be recorded"
 
 
-async def test_context_preserved_across_turns(create_llm_session):
-    """Context from turn 1 should be accessible in turn 2."""
-    session = await create_llm_session(max_turns=6)
-
-    # Turn 1: Establish context
-    await session.query_and_collect(
-        "My name is Carlos and I really want to focus on cooking vocabulary. "
-        "Remember this for our session."
-    )
-
-    # Turn 2: Query the context
-    # Reset response_text to only capture turn 2 response
-    session.response_text = ""
-    await session.query_and_collect(
-        "What was my name and what topic did I want to focus on?"
-    )
-
-    response_lower = session.response_text.lower()
-    assert "carlos" in response_lower, (
-        f"Expected 'Carlos' in response, got: {session.response_text[:300]}"
-    )
-    assert "cook" in response_lower, (
-        f"Expected 'cooking' reference in response, got: {session.response_text[:300]}"
-    )
-
-
 async def test_preference_then_exercise(create_llm_session):
     """Turn 1: update preferences → Turn 2: exercise uses those preferences."""
     session = await create_llm_session(

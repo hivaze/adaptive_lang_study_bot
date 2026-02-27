@@ -193,6 +193,7 @@
   "settings.level_saved": "Level updated!",
   "settings.level_unchanged": "That's already your current level.",
   "settings.session_refreshed": "Your active session was ended to apply the new setting. Your progress is saved — send a message to start a new session.",
+  "settings.active_session": "You have an active session. Use /end to finish it first, then change settings.",
   "settings.cancelled": "Cancelled. Use /settings to manage your preferences.",
   "settings.btn_debug_log_on": "Debug logging: ON",
   "settings.btn_debug_log_off": "Debug logging: OFF",
@@ -229,6 +230,8 @@
   "review.text_during_review": "You're reviewing flashcards right now — use the buttons above to rate each card. Send /words to restart or just keep going!",
   "review.card_not_found": "Card not found.",
   "review.already_reviewed": "Already reviewed.",
+  "review.btn_done": "Done",
+  "review.ended_early": "Review ended. Your progress has been saved.\nUse /words to review more cards anytime!",
   "review.more_due": "You still have <b>{count}</b> more cards due for review.",
   "review.btn_review_more": "Review more cards",
   "review.invalid_data": "Invalid data.",
@@ -259,8 +262,8 @@
   "stats.sessions_unlimited": "  Sessions/day: unlimited",
   "stats.messages_per_session": "  Messages/session: {count}",
   "rate_limit.callback": "Please slow down.",
-  "rate_limit.message": "You're sending messages too fast. Please wait about a minute before trying again.",
-  "session.daily_limit": "You've reached your daily limit of {max_sessions} sessions ({tier} plan). The limit resets at midnight your time. In the meantime, you can use /words to practice your vocabulary!",
+  "rate_limit.message": "You're sending messages too fast ({limit} per minute). Please wait about a minute before trying again.",
+  "session.daily_limit": "You've used {used}/{max_sessions} sessions today ({tier} plan). The limit resets at midnight your time. In the meantime, you can use /words to practice your vocabulary!",
   "session.cost_limit": "You've reached today's session limit. It resets at midnight your time. You can still use /words to practice vocabulary!",
   "session.verify_error": "Couldn't verify your session limit. Please try again in a moment.",
   "session.cost_verify_error": "Couldn't verify your session limit. Please try again in a moment.",
@@ -331,7 +334,7 @@
   "notif.daily_review": [
     "Hey {name}! You have <b>{due_count}</b> vocabulary cards ready for review.",
     "{name}, time for your daily review! <b>{due_count}</b> cards are waiting.",
-    "Daily review time! Keep your <b>{streak}-day streak</b> going, {name}."
+    "Good time for a review, {name}! <b>{due_count}</b> cards are ready — consistency is key."
   ],
   "notif.progress_report": [
     "<b>Weekly Summary</b>\n\n<b>Level:</b> {level}\n<b>Streak:</b> {streak} days\n<b>Words learned:</b> {vocab_count}\n<b>Sessions this week:</b> {sessions_week}\n\nKeep it up, {name}!"
@@ -384,5 +387,16 @@
     "{name}, your {target_language} skills are waiting for you! Even a quick 5-minute session helps keep things fresh.",
     "Still thinking about learning {target_language}, {name}? Your progress is saved and your tutor is ready to pick up where you left off."
   ],
-  "pipeline.plan_completed": "You've completed your learning plan targeting {target_level}! Time to create a new plan for the next level."
+  "notif.progress_celebration": [
+    "You're doing great, {name}! Averaging <b>{avg_score}/10</b> on recent exercises. Keep it up!",
+    "Impressive, {name}! Your vocabulary has grown to <b>{vocab_count} words</b>. That's real dedication!",
+    "{name}, <b>{sessions_completed}</b> sessions completed! You're building a solid foundation.",
+    "Keep it going, {name}! Your <b>{streak}-day streak</b> shows real commitment."
+  ],
+  "pipeline.plan_completed": "You've completed your learning plan targeting {target_level}! Time to create a new plan for the next level.",
+
+  "whitelist.request_sent": "Your access request has been sent to the administrator. You'll be notified when it's approved.",
+  "whitelist.already_requested": "You already have a pending access request. Please wait for the administrator to review it.",
+  "whitelist.approved": "Your access has been approved! Send /start to begin your language learning journey.",
+  "whitelist.rejected": "Your access request was not approved. Contact the administrator if you believe this is a mistake."
 }

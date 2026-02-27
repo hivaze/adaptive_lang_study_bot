@@ -7,11 +7,7 @@ import json
 
 import pytest
 
-from adaptive_lang_study_bot.agent.hooks import (
-    TURN_LIMIT_WARN_FRACTION,
-    SessionHookState,
-    build_session_hooks,
-)
+from adaptive_lang_study_bot.agent.hooks import build_session_hooks
 
 
 # ---------------------------------------------------------------------------
@@ -207,14 +203,6 @@ class TestToolOutputParsing:
 
 class TestSessionHookState:
 
-    def test_initial_state(self):
-        state = SessionHookState(user_id=42)
-        assert state.user_id == 42
-        assert state.turn_count == 0
-        assert state.max_turns == 0
-        assert state.wrap_up_injected is False
-        assert state.exercise_scores == []
-
     @pytest.mark.asyncio
     async def test_stop_tracked(self):
         hooks, state = build_session_hooks(user_id=1)
@@ -281,5 +269,3 @@ class TestWrapUpInjection:
         result = await handler({"prompt": "test"}, "id1", None)
         assert "hookSpecificOutput" not in result
 
-    def test_warn_fraction_is_reasonable(self):
-        assert 0 < TURN_LIMIT_WARN_FRACTION < 0.5

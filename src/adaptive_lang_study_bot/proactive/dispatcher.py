@@ -23,10 +23,9 @@ from adaptive_lang_study_bot.db.engine import async_session_factory
 from adaptive_lang_study_bot.db.models import User
 from adaptive_lang_study_bot.db.repositories import NotificationRepo, UserRepo
 from adaptive_lang_study_bot.i18n import t
+from adaptive_lang_study_bot.bot.helpers import TELEGRAM_MSG_MAX_LEN
 from adaptive_lang_study_bot.proactive.triggers import Trigger
 from adaptive_lang_study_bot.utils import user_local_now
-
-TELEGRAM_MSG_MAX_LEN = 4096
 
 # ---------------------------------------------------------------------------
 # Notification type → proactive session type mappings
@@ -58,6 +57,7 @@ _TRIGGER_TO_SESSION_TYPE: dict[str, str] = {
     "lapsed_miss_you": SessionType.PROACTIVE_NUDGE,
     "post_onboarding_14d": SessionType.PROACTIVE_NUDGE,
     "dormant_weekly": SessionType.PROACTIVE_NUDGE,
+    "progress_celebration": SessionType.PROACTIVE_NUDGE,
 }
 
 
@@ -80,6 +80,11 @@ _TRIGGER_TO_NOTIF_CATEGORY: dict[str, str] = {
     "weak_area_persistent": "learning_nudges",
     "weak_area_drill_due": "learning_nudges",
     "incomplete_exercise": "learning_nudges",
+    "progress_celebration": "progress_reports",
+    # Schedule-driven types (so users can opt out via per-type preferences)
+    "quiz": "learning_nudges",
+    "practice_reminder": "streak_reminders",
+    "custom": "learning_nudges",
 }
 
 # CTA button mappings: notification_type → (i18n_key, callback_data).
@@ -106,6 +111,7 @@ _CTA_MAPPINGS: dict[str, tuple[str, str]] = {
     "quiz":                   ("cta.start_session", "cta:session"),
     "practice_reminder":      ("cta.start_session", "cta:session"),
     "custom":                 ("cta.start_session", "cta:session"),
+    "progress_celebration":   ("cta.start_session", "cta:session"),
 }
 
 

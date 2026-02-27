@@ -3,7 +3,7 @@ import re
 
 from aiogram import F, Router
 from aiogram.enums import ChatAction
-from aiogram.exceptions import TelegramBadRequest
+
 from aiogram.filters import Command
 from aiogram.types import Message
 from loguru import logger
@@ -16,15 +16,13 @@ from adaptive_lang_study_bot.agent.session_manager import (
     _log_task_exception,
     session_manager,
 )
-from adaptive_lang_study_bot.bot.helpers import split_agent_sections
+from adaptive_lang_study_bot.bot.helpers import TELEGRAM_MSG_MAX_LEN, markdown_to_telegram_html, send_html_safe, split_agent_sections
 from adaptive_lang_study_bot.bot.routers.debug import format_debug_info, is_debug_enabled
 from adaptive_lang_study_bot.bot.routers.review import is_in_review
 from adaptive_lang_study_bot.db.models import User
 from adaptive_lang_study_bot.enums import CloseReason
 from adaptive_lang_study_bot.i18n import DEFAULT_LANGUAGE, t
 
-# Telegram enforces a 4096-character limit on message text.
-TELEGRAM_MSG_MAX_LEN = 4096
 # Reserve bytes for closing HTML tags when splitting long messages.
 _HTML_TAG_RESERVE = 120
 
@@ -67,7 +65,7 @@ async def handle_text(message: Message, user: User, db_session: AsyncSession) ->
         await message.answer(t("chat.setup_first", lang))
         return
 
-    if not message.text:
+    if not message.text or not message.text.strip():
         return
 
     # If user is in flashcard review mode, remind them to use buttons
@@ -108,22 +106,15 @@ async def handle_text(message: Message, user: User, db_session: AsyncSession) ->
         await message.answer(t("session.no_response", lang))
         return
 
-    # Send response as HTML — the agent is prompted to use Telegram HTML tags.
-    # The agent may use === on its own line to split logically distinct sections
-    # (greeting, exercise, feedback) into separate Telegram messages.
-    # Fall back to plain text if Telegram rejects the markup.
+    # Split on --- delimiters first (raw Markdown), then convert each
+    # section to Telegram HTML.  Splitting must happen before HTML conversion
+    # because markdown_to_telegram_html removes --- (horizontal rules).
     for chunk in response_chunks:
-        sections = split_agent_sections(chunk)
+        sections = [markdown_to_telegram_html(s) for s in split_agent_sections(chunk)]
         for section in sections:
             parts = _split_message(section, max_len=TELEGRAM_MSG_MAX_LEN) if len(section) > TELEGRAM_MSG_MAX_LEN else [section]
             for part in parts:
-                try:
-                    await message.answer(part)  # bot default is ParseMode.HTML
-                except TelegramBadRequest:
-                    try:
-                        await message.answer(part, parse_mode=None)
-                    except Exception:
-                        logger.exception("Failed to send message to user {}", user.telegram_id)
+                await send_html_safe(message.answer, part, user_id=user.telegram_id)
 
     # Send debug info if enabled for this admin
     if is_debug_enabled(user.telegram_id):

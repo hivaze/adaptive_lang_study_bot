@@ -114,10 +114,3 @@ def test_render_lapsed_miss_you():
     assert "Alex" in result
 
 
-def test_render_with_lang():
-    """render_template passes lang through to t()."""
-    result = render_template(
-        "streak_risk", lang="en", name="Alex", streak=5, due_count=3,
-    )
-    assert isinstance(result, str)
-    assert len(result) > 10

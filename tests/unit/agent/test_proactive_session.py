@@ -6,7 +6,7 @@ All SDK and infrastructure calls are mocked — no DB, Redis, or Claude API need
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from claude_agent_sdk import ResultMessage
+from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
 
 from adaptive_lang_study_bot.agent.session_manager import run_proactive_llm_session
 
@@ -25,8 +25,10 @@ def _make_user(**overrides):
     user.weak_areas = []
     user.recent_scores = [7, 8]
     user.topics_to_avoid = []
+    user.additional_notes = []
     user.tier = "free"
     user.timezone = "UTC"
+    user.field_timestamps = {}
     for k, v in overrides.items():
         setattr(user, k, v)
     return user
@@ -64,13 +66,6 @@ def _patch_infrastructure():
             "adaptive_lang_study_bot.agent.session_manager.SessionRepo.update_end",
             new_callable=AsyncMock,
         ),
-        "create_tools": patch(
-            "adaptive_lang_study_bot.agent.session_manager.create_session_tools",
-        ),
-        "create_server": patch(
-            "adaptive_lang_study_bot.agent.session_manager.create_langbot_server",
-            return_value=MagicMock(),
-        ),
         "build_prompt": patch(
             "adaptive_lang_study_bot.agent.session_manager.build_proactive_prompt",
             return_value="System prompt",
@@ -82,22 +77,6 @@ def _patch_infrastructure():
             "os.environ.pop",
         ),
     }
-
-
-def _setup_tools_mock(mock_create_tools, notification_messages=None):
-    """Configure the create_session_tools mock to populate notification_sink."""
-    tool_a = MagicMock()
-    tool_a.name = "get_user_profile"
-    tool_b = MagicMock()
-    tool_b.name = "send_notification"
-
-    def side_effect(*, session_factory, user_id, session_id, session_type, user_timezone, notification_sink=None, **_kwargs):
-        if notification_sink is not None and notification_messages:
-            notification_sink.extend(notification_messages)
-        can_use = lambda name: True
-        return [tool_a, tool_b], can_use
-
-    mock_create_tools.side_effect = side_effect
 
 
 class _AsyncIterator:
@@ -118,29 +97,38 @@ class _AsyncIterator:
         return item
 
 
-def _setup_sdk_mock(mock_sdk_cls, cost=0.002):
-    """Configure the ClaudeSDKClient mock."""
+def _setup_sdk_mock(mock_sdk_cls, text_output="Hello Alex!", cost=0.002):
+    """Configure the ClaudeSDKClient mock with TextBlock output."""
     mock_client = AsyncMock()
     mock_sdk_cls.return_value = mock_client
 
-    # ResultMessage mock — spec= so isinstance() check passes
+    messages = []
+
+    if text_output is not None:
+        # AssistantMessage with TextBlock — spec= so isinstance() checks pass
+        text_block = MagicMock(spec=TextBlock)
+        text_block.text = text_output
+        assistant_msg = MagicMock(spec=AssistantMessage)
+        assistant_msg.content = [text_block]
+        messages.append(assistant_msg)
+
+    # ResultMessage mock
     result_msg = MagicMock(spec=ResultMessage)
     result_msg.total_cost_usd = cost
+    result_msg.num_turns = 1
+    messages.append(result_msg)
 
     # receive_response must be a plain MagicMock so calling it returns
     # the async iterator directly, not a coroutine wrapping it.
-    mock_client.receive_response = MagicMock(return_value=_AsyncIterator([result_msg]))
+    mock_client.receive_response = MagicMock(return_value=_AsyncIterator(messages))
     return mock_client
 
 
 def _setup_session_factory(mock_factory):
-    """Configure async_session_factory mock for both context manager and raw usage."""
+    """Configure async_session_factory mock for context manager usage."""
     mock_db = AsyncMock()
-    # Context manager usage (async with async_session_factory() as db)
     mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_db)
     mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
-    # Raw usage (tool_db_session = async_session_factory(); await tool_db_session.__aenter__())
-    mock_factory.return_value.rollback = AsyncMock()
     return mock_db
 
 
@@ -165,7 +153,7 @@ class TestRunProactiveLLMSession:
 
     @pytest.mark.asyncio
     async def test_successful_session_returns_message(self):
-        """Successful LLM session returns the notification message and cost."""
+        """Successful LLM session returns the notification text and cost."""
         user = _make_user()
         patches = _patch_infrastructure()
 
@@ -173,13 +161,11 @@ class TestRunProactiveLLMSession:
              patches["lock_acquire"], patches["lock_release"], \
              patches["session_factory"] as mock_factory, \
              patches["session_repo_create"], patches["session_repo_update"], \
-             patches["create_tools"] as mock_tools, \
-             patches["create_server"], patches["build_prompt"], \
+             patches["build_prompt"], \
              patches["sdk_client_cls"] as mock_sdk_cls, patches["pop_env"]:
 
             _setup_session_factory(mock_factory)
-            _setup_tools_mock(mock_tools, notification_messages=["Hello Alex!"])
-            _setup_sdk_mock(mock_sdk_cls, cost=0.002)
+            _setup_sdk_mock(mock_sdk_cls, text_output="Hello Alex!", cost=0.002)
 
             message, cost = await run_proactive_llm_session(
                 user, "proactive_nudge", {"streak": 12},
@@ -190,8 +176,8 @@ class TestRunProactiveLLMSession:
         mock_release.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_no_send_notification_returns_none(self):
-        """When send_notification is never called, returns (None, cost)."""
+    async def test_empty_response_returns_none(self):
+        """When LLM outputs no text, returns (None, cost)."""
         user = _make_user()
         patches = _patch_infrastructure()
 
@@ -199,13 +185,11 @@ class TestRunProactiveLLMSession:
              patches["lock_acquire"], patches["lock_release"], \
              patches["session_factory"] as mock_factory, \
              patches["session_repo_create"], patches["session_repo_update"], \
-             patches["create_tools"] as mock_tools, \
-             patches["create_server"], patches["build_prompt"], \
+             patches["build_prompt"], \
              patches["sdk_client_cls"] as mock_sdk_cls, patches["pop_env"]:
 
             _setup_session_factory(mock_factory)
-            _setup_tools_mock(mock_tools, notification_messages=None)
-            _setup_sdk_mock(mock_sdk_cls, cost=0.001)
+            _setup_sdk_mock(mock_sdk_cls, text_output=None, cost=0.001)
 
             message, cost = await run_proactive_llm_session(
                 user, "proactive_nudge", {},
@@ -224,12 +208,10 @@ class TestRunProactiveLLMSession:
              patches["lock_acquire"], patches["lock_release"], \
              patches["session_factory"] as mock_factory, \
              patches["session_repo_create"], patches["session_repo_update"], \
-             patches["create_tools"] as mock_tools, \
-             patches["create_server"], patches["build_prompt"], \
+             patches["build_prompt"], \
              patches["sdk_client_cls"] as mock_sdk_cls, patches["pop_env"]:
 
             _setup_session_factory(mock_factory)
-            _setup_tools_mock(mock_tools)
 
             mock_client = AsyncMock()
             mock_sdk_cls.return_value = mock_client
@@ -253,14 +235,82 @@ class TestRunProactiveLLMSession:
              patches["lock_acquire"], patches["lock_release"], \
              patches["session_factory"] as mock_factory, \
              patches["session_repo_create"], patches["session_repo_update"], \
-             patches["create_tools"] as mock_tools, \
-             patches["create_server"], patches["build_prompt"], \
+             patches["build_prompt"], \
              patches["sdk_client_cls"] as mock_sdk_cls, patches["pop_env"]:
 
             _setup_session_factory(mock_factory)
-            _setup_tools_mock(mock_tools, notification_messages=["msg"])
-            _setup_sdk_mock(mock_sdk_cls)
+            _setup_sdk_mock(mock_sdk_cls, text_output="Review time!")
 
             await run_proactive_llm_session(user, "proactive_review", {"due_count": 5})
 
         mock_release.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_markdown_converted_to_html(self):
+        """Markdown in LLM output is converted to Telegram HTML."""
+        user = _make_user()
+        patches = _patch_infrastructure()
+
+        with patches["pool_acquire"], patches["pool_release"], \
+             patches["lock_acquire"], patches["lock_release"], \
+             patches["session_factory"] as mock_factory, \
+             patches["session_repo_create"], patches["session_repo_update"], \
+             patches["build_prompt"], \
+             patches["sdk_client_cls"] as mock_sdk_cls, patches["pop_env"]:
+
+            _setup_session_factory(mock_factory)
+            _setup_sdk_mock(mock_sdk_cls, text_output="Hello **Alex**!", cost=0.001)
+
+            message, cost = await run_proactive_llm_session(
+                user, "proactive_nudge", {},
+            )
+
+        assert message == "Hello <b>Alex</b>!"
+        assert cost == 0.001
+
+    @pytest.mark.asyncio
+    async def test_long_message_truncated(self):
+        """Messages exceeding notification_max_length are truncated."""
+        user = _make_user()
+        patches = _patch_infrastructure()
+
+        with patches["pool_acquire"], patches["pool_release"], \
+             patches["lock_acquire"], patches["lock_release"], \
+             patches["session_factory"] as mock_factory, \
+             patches["session_repo_create"], patches["session_repo_update"], \
+             patches["build_prompt"], \
+             patches["sdk_client_cls"] as mock_sdk_cls, patches["pop_env"]:
+
+            _setup_session_factory(mock_factory)
+            long_text = "A" * 3000  # exceeds 2000 char limit
+            _setup_sdk_mock(mock_sdk_cls, text_output=long_text)
+
+            message, cost = await run_proactive_llm_session(
+                user, "proactive_nudge", {},
+            )
+
+        assert message is not None
+        assert message.endswith("...")
+        assert len(message) == 2000  # tuning.notification_max_length
+
+    @pytest.mark.asyncio
+    async def test_whitespace_only_response_returns_none(self):
+        """When LLM outputs only whitespace, returns (None, cost)."""
+        user = _make_user()
+        patches = _patch_infrastructure()
+
+        with patches["pool_acquire"], patches["pool_release"], \
+             patches["lock_acquire"], patches["lock_release"], \
+             patches["session_factory"] as mock_factory, \
+             patches["session_repo_create"], patches["session_repo_update"], \
+             patches["build_prompt"], \
+             patches["sdk_client_cls"] as mock_sdk_cls, patches["pop_env"]:
+
+            _setup_session_factory(mock_factory)
+            _setup_sdk_mock(mock_sdk_cls, text_output="   \n  ", cost=0.001)
+
+            message, cost = await run_proactive_llm_session(
+                user, "proactive_nudge", {},
+            )
+
+        assert message is None

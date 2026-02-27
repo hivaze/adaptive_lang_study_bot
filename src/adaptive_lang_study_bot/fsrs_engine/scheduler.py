@@ -1,11 +1,15 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fsrs import Card, Rating, Scheduler
 from loguru import logger
 
+from adaptive_lang_study_bot.config import tuning
 from adaptive_lang_study_bot.db.models import Vocabulary
 
-_scheduler = Scheduler()
+_scheduler = Scheduler(
+    learning_steps=tuple(timedelta(minutes=m) for m in tuning.fsrs_learning_steps_minutes),
+    relearning_steps=tuple(timedelta(minutes=m) for m in tuning.fsrs_relearning_steps_minutes),
+)
 
 # Map our rating ints to FSRS Rating enum
 _RATING_MAP: dict[int, Rating] = {

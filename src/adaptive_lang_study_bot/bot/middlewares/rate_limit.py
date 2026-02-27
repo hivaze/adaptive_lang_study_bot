@@ -49,7 +49,7 @@ class RateLimitMiddleware(BaseMiddleware):
 
             if count > rate_limit:
                 lang = user.native_language or DEFAULT_LANGUAGE
-                await event.answer(t("rate_limit.message", lang))
+                await event.answer(t("rate_limit.message", lang, limit=rate_limit))
                 return  # Don't call handler
         except RedisError:
             # Fail open: if Redis is unavailable, allow the event through

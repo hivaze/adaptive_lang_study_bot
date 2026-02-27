@@ -59,7 +59,11 @@ from adaptive_lang_study_bot.db.repositories import (
     UserRepo,
     VocabularyRepo,
 )
-from adaptive_lang_study_bot.bot.helpers import localize_value, split_agent_sections
+from adaptive_lang_study_bot.bot.helpers import (
+    localize_value,
+    markdown_to_telegram_html,
+    split_agent_sections,
+)
 from adaptive_lang_study_bot.i18n import DEFAULT_LANGUAGE, t
 from adaptive_lang_study_bot.metrics import (
     MESSAGE_COST_USD,
@@ -87,13 +91,13 @@ def _log_task_exception(task: asyncio.Task) -> None:
 async def _compute_stale_topics(
     db: AsyncSession, user_id: int,
 ) -> tuple[list[dict], dict[str, dict]]:
-    """Compute stale topics and 7-day topic performance from recent exercises.
+    """Compute stale topics and topic performance from recent exercises.
 
     Returns a tuple of:
-    - stale_topics: topics not practiced in 7+ days with low scores (up to 5)
+    - stale_topics: topics not practiced recently with low scores
     - topic_performance: all topics with ``{"avg_score": float, "count": int}``
     """
-    recent_results = await ExerciseResultRepo.get_recent(db, user_id, limit=50)
+    recent_results = await ExerciseResultRepo.get_recent(db, user_id, limit=tuning.stale_topic_exercise_window)
     if not recent_results:
         return [], {}
 
@@ -120,14 +124,14 @@ async def _compute_stale_topics(
             "count": len(scores),
         }
 
-    # Filter stale topics (7+ days old with avg score <= 7)
+    # Filter stale topics (not practiced recently + low avg score)
     now = datetime.now(timezone.utc)
     stale: list[dict] = []
     for data in topic_data.values():
         days_ago = (now - data["last_at"]).total_seconds() / 86400
-        if days_ago >= 7:
+        if days_ago >= tuning.stale_topic_days:
             avg_score = sum(data["scores"]) / len(data["scores"])
-            if avg_score <= 7:
+            if avg_score <= tuning.stale_topic_score:
                 stale.append({
                     "topic": data["topic"],
                     "days_ago": round(days_ago, 1),
@@ -135,7 +139,7 @@ async def _compute_stale_topics(
                 })
 
     stale.sort(key=lambda x: x["avg_score"])
-    return stale[:5], topic_performance
+    return stale, topic_performance
 
 
 async def run_proactive_llm_session(
@@ -146,7 +150,10 @@ async def run_proactive_llm_session(
     """Run a short-lived proactive LLM session to generate a notification.
 
     Returns ``(message_text, cost_usd)``.  *message_text* is ``None`` when
-    the session fails or the agent never calls ``send_notification``.
+    the session fails or the LLM returns no text.
+
+    Tool-less: all required data is pre-fetched and embedded in the prompt.
+    The LLM's text output is extracted directly (no MCP tools needed).
 
     This is a standalone function — proactive sessions are short-lived and
     do not go through :class:`SessionManager` (no idle cleanup, no user
@@ -170,18 +177,26 @@ async def run_proactive_llm_session(
 
     accumulated_cost = 0.0
     num_turns = 0
-    tools_called: list[str] = []
-    notification_sink: list[str] = []
+    text_parts: list[str] = []
     db_session_id = uuid.uuid4()
     client: ClaudeSDKClient | None = None
     sdk_started = False
 
     try:
-        # 2. Build proactive system prompt (with plan context for summaries)
+        # 3. Pre-fetch data for prompt embedding
         active_plan = None
         plan_progress = None
-        if session_type == SessionType.PROACTIVE_SUMMARY:
-            async with async_session_factory() as db:
+        prefetch: dict = {}
+
+        async with async_session_factory() as db:
+            if session_type == SessionType.PROACTIVE_REVIEW:
+                cards = await VocabularyRepo.get_due(db, user_id, limit=10)
+                prefetch["due_vocabulary"] = [
+                    {"word": c.word, "translation": c.translation, "topic": c.topic,
+                     "review_count": c.review_count}
+                    for c in cards
+                ]
+            elif session_type == SessionType.PROACTIVE_SUMMARY:
                 active_plan = await LearningPlanRepo.get_active(db, user_id)
                 if active_plan:
                     all_plan_topics = [
@@ -199,12 +214,32 @@ async def run_proactive_llm_session(
                         topic_stats,
                     )
 
+                score_7d = await ExerciseResultRepo.get_score_summary(db, user_id, days=7)
+                score_30d = await ExerciseResultRepo.get_score_summary(db, user_id, days=30)
+                topic_perf = await ExerciseResultRepo.get_topic_stats(db, user_id, days=30)
+                vocab_states = await VocabularyRepo.get_state_counts(db, user_id)
+                sessions_week = await SessionRepo.get_activity_stats(db, user_id, days=7)
+                prefetch["progress_summary"] = {
+                    "score_7d": score_7d,
+                    "score_30d": score_30d,
+                    "topic_performance": topic_perf,
+                    "vocabulary": {
+                        "new": vocab_states.get(0, 0),
+                        "learning": vocab_states.get(1, 0),
+                        "review": vocab_states.get(2, 0),
+                        "relearning": vocab_states.get(3, 0),
+                    },
+                    "sessions_this_week": sessions_week["session_count"],
+                }
+
+        # 4. Build proactive system prompt
         system_prompt = build_proactive_prompt(
             user, session_type, trigger_data,
             active_plan=active_plan, plan_progress=plan_progress,
+            prefetch=prefetch,
         )
 
-        # 3. Create DB session record
+        # 5. Create DB session record
         async with async_session_factory() as db:
             await SessionRepo.create(
                 db,
@@ -214,45 +249,30 @@ async def run_proactive_llm_session(
             )
             await db.commit()
 
-        # 4. Create per-session tools with notification sink
-        all_tools, can_use_tool = create_session_tools(
-            session_factory=async_session_factory,
-            user_id=user_id,
-            session_id=str(db_session_id),
-            session_type=session_type,
-            user_timezone=user.timezone or "UTC",
-            notification_sink=notification_sink,
-            user_tier=user.tier,
-        )
-
-        # 6. Filter tools and create MCP server
-        tools = [tool for tool in all_tools if can_use_tool(tool.name)]
-        allowed_tool_names = [f"mcp__langbot__{tool.name}" for tool in tools]
-        server = create_langbot_server(tools)
-
-        # 7. Create SDK client (haiku, no hooks)
+        # 6. Create SDK client (haiku, no hooks, no tools)
         options = ClaudeAgentOptions(
             model=tuning.proactive_model,
             max_turns=tuning.proactive_max_turns,
             thinking={"type": tuning.proactive_thinking},
             effort=tuning.proactive_effort,
-            mcp_servers={"langbot": server},
-            allowed_tools=allowed_tool_names,
             permission_mode="bypassPermissions",
             system_prompt=system_prompt,
         )
         client = ClaudeSDKClient(options)
 
-        # 8. Run with timeout
+        # 7. Run with timeout — extract TextBlock output directly
         async with asyncio.timeout(tuning.proactive_session_timeout_seconds):
             await client.__aenter__()
             sdk_started = True
-            await client.query("Execute your proactive task now.")
+            await client.query(
+                "Generate the notification message now. Write it directly as your response. "
+                "Use Telegram HTML formatting (not Markdown). Do NOT call any tools."
+            )
             async for msg in client.receive_response():
                 if isinstance(msg, AssistantMessage):
                     for block in msg.content:
-                        if isinstance(block, ToolUseBlock):
-                            tools_called.append(block.name)
+                        if isinstance(block, TextBlock):
+                            text_parts.append(block.text)
                 elif isinstance(msg, ResultMessage):
                     accumulated_cost += msg.total_cost_usd or 0
                     if msg.num_turns is not None:
@@ -294,7 +314,7 @@ async def run_proactive_llm_session(
                     db_session_id,
                     cost_usd=accumulated_cost,
                     num_turns=num_turns,
-                    tool_calls_count=len(tools_called),
+                    tool_calls_count=0,
                 )
                 await db.execute(
                     update(Session)
@@ -310,11 +330,19 @@ async def run_proactive_llm_session(
     if accumulated_cost > 0:
         SESSION_COST_USD.labels(tier=tier.value, session_type=session_type).observe(accumulated_cost)
 
-    message_text = (notification_sink[0].strip() or None) if notification_sink else None
+    # Extract message from LLM text output
+    message_text = "\n".join(text_parts).strip() or None
+
+    # Convert any Markdown in LLM output to Telegram HTML, enforce length limit
+    if message_text:
+        message_text = markdown_to_telegram_html(message_text)
+        if len(message_text) > tuning.notification_max_length:
+            message_text = message_text[:tuning.notification_max_length - 3] + "..."
+
     if message_text is None:
         logger.warning(
-            "Proactive LLM session for user {} (type={}) never called send_notification "
-            "(cost=${:.4f} wasted, falling back to template)",
+            "Proactive LLM session for user {} (type={}) produced no valid message "
+            "(cost=${:.4f}, falling back to template)",
             user_id, session_type, accumulated_cost,
         )
     else:
@@ -382,8 +410,7 @@ async def run_summary_llm_session(
             sdk_started = True
             await client.query(
                 "Generate the session summary now using ONLY the session data "
-                "provided above. Use Telegram HTML formatting (not Markdown). "
-                "Do NOT ask for additional information."
+                "provided above. Do NOT ask for additional information."
             )
             async for msg in client.receive_response():
                 if isinstance(msg, AssistantMessage):
@@ -435,18 +462,21 @@ def _collect_session_data(managed: "ManagedSession") -> dict:
         "words_added": list(hook.words_added) if hook else [],
         "words_reviewed": hook.words_reviewed if hook else 0,
         "vocab_count": tool_names.count("add_vocabulary"),
-        "review_count": 0,  # Legacy field; vocab reviews now tracked via words_reviewed
         "turn_count": managed.turn_count,
         "duration_minutes": int((time.time() - managed.started_at) / 60),
     }
 
 
-def _build_summary_cta_keyboard(lang: str) -> InlineKeyboardMarkup:
+def _build_summary_cta_keyboard(lang: str, *, has_vocabulary: bool = True) -> InlineKeyboardMarkup:
     """Build CTA keyboard for session summaries where user didn't make progress."""
-    return InlineKeyboardMarkup(inline_keyboard=[
+    rows = [
         [InlineKeyboardButton(text=t("cta.start_session", lang), callback_data="cta:session")],
-        [InlineKeyboardButton(text=t("cta.start_review", lang), callback_data="cta:words")],
-    ])
+    ]
+    if has_vocabulary:
+        rows.append(
+            [InlineKeyboardButton(text=t("cta.start_review", lang), callback_data="cta:words")],
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 # Close reasons that should use AI-generated summaries.
@@ -541,10 +571,15 @@ async def _generate_and_send_summary(
             return
 
         # Attach CTA keyboard for no-progress sessions
-        reply_markup = _build_summary_cta_keyboard(lang) if not has_progress else None
+        total_vocab = managed.user_vocabulary_count + session_data.get("vocab_count", 0)
+        reply_markup = (
+            _build_summary_cta_keyboard(lang, has_vocabulary=total_vocab > 0)
+            if not has_progress
+            else None
+        )
 
-        # Send to user — split on === delimiters if the AI used them
-        sections = split_agent_sections(summary_text)
+        # Split on --- delimiters first, then convert each section to HTML
+        sections = [markdown_to_telegram_html(s) for s in split_agent_sections(summary_text)]
         for i, section in enumerate(sections):
             # Attach CTA keyboard only to the last section
             markup = reply_markup if i == len(sections) - 1 else None
@@ -587,6 +622,10 @@ def _build_template_summary(managed: "ManagedSession", session_data: dict | None
     # Minimum turns = 1 (initial) + 1 per exercise answered. If turns are too low,
     # the agent likely scored exercises in the same turn it presented them.
     if exercise_count and turn_count < exercise_count + 1:
+        logger.debug(
+            "Template summary sanity: {} exercises but only {} turns — suppressing exercise count",
+            exercise_count, turn_count,
+        )
         exercise_count = 0
 
     if exercise_count:
@@ -636,6 +675,7 @@ class ManagedSession:
     first_name: str = ""  # For personalized summaries
     user_level: str = "A1"  # For summary prompt context
     user_streak: int = 0  # For summary prompt context
+    user_vocabulary_count: int = 0  # For CTA keyboard (suppress review when 0)
     session_type: str = SessionType.INTERACTIVE  # For metrics labels
     lock_token: str = ""  # Redis session lock owner token
     is_proactive: bool = False
@@ -763,6 +803,69 @@ class SessionManager:
                 await self._close_session(user_id, reason=CloseReason.SHUTDOWN)
         logger.info("SessionManager stopped")
 
+    async def _check_daily_limits(
+        self,
+        user_id: int,
+        user_timezone: str,
+        lang: str,
+        tier: UserTier,
+        limits: "TierLimits",
+    ) -> str | None:
+        """Check daily session and cost limits. Returns error message or None."""
+        # Enforce daily session limit (0 = unlimited)
+        if limits.max_sessions_per_day > 0:
+            try:
+                async with async_session_factory() as db:
+                    today_count = await SessionRepo.count_today(
+                        db, user_id, user_timezone=user_timezone,
+                    )
+                if today_count >= limits.max_sessions_per_day:
+                    return t("session.daily_limit", lang,
+                             used=today_count,
+                             max_sessions=limits.max_sessions_per_day,
+                             tier=localize_value(tier.value, lang))
+            except SQLAlchemyError:
+                logger.warning("Failed to check daily session count for user {}", user_id)
+                return t("session.verify_error", lang)
+
+        # Enforce daily cost limit
+        try:
+            async with async_session_factory() as db:
+                today_cost = await SessionRepo.get_total_cost_today(
+                    db, user_id, user_timezone=user_timezone,
+                )
+            if today_cost >= limits.max_cost_per_day_usd:
+                return t("session.cost_limit", lang)
+        except SQLAlchemyError:
+            logger.warning("Failed to check daily cost for user {}", user_id)
+            return t("session.cost_verify_error", lang)
+
+        return None
+
+    def _inject_limit_warnings(
+        self,
+        managed: "ManagedSession",
+        limits: "TierLimits",
+        lang: str,
+        response_chunks: list[str],
+    ) -> None:
+        """Append turn/cost limit warnings to response if thresholds are reached."""
+        user_id = managed.user_id
+        # Warn when approaching turn limit
+        if self._sessions.get(user_id) is managed and not managed.limit_warned:
+            remaining = limits.max_turns_per_session - managed.turn_count
+            threshold = max(2, int(limits.max_turns_per_session * TURN_LIMIT_WARN_FRACTION))
+            if 0 < remaining <= threshold:
+                managed.limit_warned = True
+                response_chunks.append(t("session.turn_limit_warn", lang))
+
+        # Warn when approaching per-session cost limit (80% threshold)
+        if self._sessions.get(user_id) is managed and not managed.cost_warned:
+            cost_threshold = limits.max_cost_per_session_usd * 0.8
+            if managed.accumulated_cost >= cost_threshold:
+                managed.cost_warned = True
+                response_chunks.append(t("session.cost_warn", lang))
+
     async def handle_message(
         self,
         user: User,
@@ -781,63 +884,33 @@ class SessionManager:
         summary_task: asyncio.Task | None = None
 
         if managed is not None:
-            # Check turn limit
+            # Close session if turn or cost limit reached, and schedule summary
+            close_reason: CloseReason | None = None
             if managed.turn_count >= limits.max_turns_per_session:
-                session_data = _collect_session_data(managed)
-                await self._close_session(user_id, reason=CloseReason.TURN_LIMIT)
-                need_new_session = True
-                if self._bot:
-                    summary_task = asyncio.create_task(
-                        _generate_and_send_summary(
-                            self._bot, user_id, lang, session_data,
-                            CloseReason.TURN_LIMIT, managed,
-                            managed.first_name, managed.user_streak,
-                            managed.user_level, managed.target_language,
-                        )
-                    )
-
-            # Check cost limit
+                close_reason = CloseReason.TURN_LIMIT
             elif managed.accumulated_cost >= limits.max_cost_per_session_usd:
+                close_reason = CloseReason.COST_LIMIT
+
+            if close_reason is not None:
                 session_data = _collect_session_data(managed)
-                await self._close_session(user_id, reason=CloseReason.COST_LIMIT)
+                await self._close_session(user_id, reason=close_reason)
                 need_new_session = True
                 if self._bot:
                     summary_task = asyncio.create_task(
                         _generate_and_send_summary(
                             self._bot, user_id, lang, session_data,
-                            CloseReason.COST_LIMIT, managed,
+                            close_reason, managed,
                             managed.first_name, managed.user_streak,
                             managed.user_level, managed.target_language,
                         )
                     )
 
         if need_new_session:
-            # Enforce daily session limit (0 = unlimited)
-            if limits.max_sessions_per_day > 0:
-                try:
-                    async with async_session_factory() as db:
-                        today_count = await SessionRepo.count_today(
-                            db, user_id, user_timezone=user.timezone or "UTC",
-                        )
-                    if today_count >= limits.max_sessions_per_day:
-                        return [t("session.daily_limit", lang,
-                                  max_sessions=limits.max_sessions_per_day,
-                                  tier=localize_value(tier.value, lang))]
-                except SQLAlchemyError:
-                    logger.warning("Failed to check daily session count for user {}", user_id)
-                    return [t("session.verify_error", lang)]
-
-            # Enforce daily cost limit
-            try:
-                async with async_session_factory() as db:
-                    today_cost = await SessionRepo.get_total_cost_today(
-                        db, user_id, user_timezone=user.timezone or "UTC",
-                    )
-                if today_cost >= limits.max_cost_per_day_usd:
-                    return [t("session.cost_limit", lang)]
-            except SQLAlchemyError:
-                logger.warning("Failed to check daily cost for user {}", user_id)
-                return [t("session.cost_verify_error", lang)]
+            limit_error = await self._check_daily_limits(
+                user_id, user.timezone or "UTC", lang, tier, limits,
+            )
+            if limit_error:
+                return [limit_error]
 
             managed = await self._create_session(user, tier)
             if managed is None:
@@ -862,33 +935,13 @@ class SessionManager:
             return [t("session.busy", lang)]
 
         # Ensure AI summary task completes (it sends its own message).
-        # Give it a generous grace period — it runs in parallel with
-        # message processing so it's likely already done.
         if summary_task is not None:
             try:
                 await asyncio.wait_for(asyncio.shield(summary_task), timeout=20.0)
             except (asyncio.TimeoutError, Exception):
-                # Summary is fire-and-forget — don't block the response
                 summary_task.add_done_callback(_log_task_exception)
 
-        # Warn when approaching turn limit (after processing, so turn_count is updated).
-        # Only if the session is still active (not closed due to error).
-        if self._sessions.get(user_id) is managed and not managed.limit_warned:
-            remaining = limits.max_turns_per_session - managed.turn_count
-            threshold = max(2, int(limits.max_turns_per_session * TURN_LIMIT_WARN_FRACTION))
-            if 0 < remaining <= threshold:
-                managed.limit_warned = True
-                response_chunks.append(
-                    t("session.turn_limit_warn", lang)
-                )
-
-        # Warn when approaching per-session cost limit (80% threshold).
-        if self._sessions.get(user_id) is managed and not managed.cost_warned:
-            cost_threshold = limits.max_cost_per_session_usd * 0.8
-            if managed.accumulated_cost >= cost_threshold:
-                managed.cost_warned = True
-                response_chunks.append(t("session.cost_warn", lang))
-
+        self._inject_limit_warnings(managed, limits, lang, response_chunks)
         return response_chunks
 
     async def _create_session(
@@ -1066,6 +1119,7 @@ class SessionManager:
                 first_name=user.first_name or "",
                 user_level=user.level or "A1",
                 user_streak=user.streak_days or 0,
+                user_vocabulary_count=user.vocabulary_count or 0,
                 session_type=session_type,
                 lock_token=lock_token,
                 exit_stack=exit_stack,

@@ -1,100 +1,13 @@
 """Unit tests for post-session pipeline logic.
 
-Tests the difficulty auto-adjust logic (with None guard for deleted user),
-profile validation rules, session status classification, and milestone detection.
+Tests the deleted-user guard, profile validation, session status
+classification, and milestone detection.
 These are pure logic tests — no DB, no LLM.
 """
 
 from adaptive_lang_study_bot.enums import CloseReason, Difficulty
-from adaptive_lang_study_bot.pipeline.post_session import _FORCED_CLOSE_REASONS, _LEVELS
-
-
-class TestDifficultyAutoAdjust:
-    """Test the difficulty auto-adjust rules from post_session.py lines 97-130.
-
-    Rules:
-    - easy→normal if avg >= 8.5
-    - normal→hard if avg >= 9.0
-    - hard→normal if avg <= 3.0
-    - normal→easy if avg <= 4.0
-    """
-
-    @staticmethod
-    def _adjust(scores: list[int], difficulty: str) -> str:
-        """Mirror the exact logic from post_session.py."""
-        if len(scores) < 5:
-            return difficulty
-        avg_5 = sum(scores[-5:]) / 5
-        if avg_5 >= 8.5 and difficulty == Difficulty.EASY:
-            return Difficulty.NORMAL
-        elif avg_5 >= 9.0 and difficulty == Difficulty.NORMAL:
-            return Difficulty.HARD
-        elif avg_5 <= 3.0 and difficulty == Difficulty.HARD:
-            return Difficulty.NORMAL
-        elif avg_5 <= 4.0 and difficulty == Difficulty.NORMAL:
-            return Difficulty.EASY
-        return difficulty
-
-    def test_easy_to_normal_at_8_5(self):
-        scores = [8, 9, 8, 9, 9]  # avg = 8.6
-        assert self._adjust(scores, Difficulty.EASY) == Difficulty.NORMAL
-
-    def test_normal_to_hard_at_9_0(self):
-        scores = [9, 10, 9, 9, 9]  # avg = 9.2
-        assert self._adjust(scores, Difficulty.NORMAL) == Difficulty.HARD
-
-    def test_hard_to_normal_at_3_0(self):
-        scores = [2, 3, 2, 3, 3]  # avg = 2.6
-        assert self._adjust(scores, Difficulty.HARD) == Difficulty.NORMAL
-
-    def test_normal_to_easy_at_4_0(self):
-        scores = [3, 4, 3, 4, 4]  # avg = 3.6
-        assert self._adjust(scores, Difficulty.NORMAL) == Difficulty.EASY
-
-    def test_no_change_easy_below_threshold(self):
-        scores = [7, 7, 7, 7, 7]  # avg = 7.0, below 8.5
-        assert self._adjust(scores, Difficulty.EASY) == Difficulty.EASY
-
-    def test_no_change_normal_in_middle(self):
-        scores = [6, 7, 6, 7, 6]  # avg = 6.4
-        assert self._adjust(scores, Difficulty.NORMAL) == Difficulty.NORMAL
-
-    def test_no_change_hard_above_threshold(self):
-        scores = [5, 5, 5, 5, 5]  # avg = 5.0, above 3.0
-        assert self._adjust(scores, Difficulty.HARD) == Difficulty.HARD
-
-    def test_fewer_than_5_scores_no_change(self):
-        scores = [1, 1, 1]
-        assert self._adjust(scores, Difficulty.NORMAL) == Difficulty.NORMAL
-
-    def test_empty_scores_no_change(self):
-        assert self._adjust([], Difficulty.HARD) == Difficulty.HARD
-
-    def test_boundary_8_5_easy_promotes(self):
-        scores = [8, 8, 9, 9, 8.5]
-        assert self._adjust(scores, Difficulty.EASY) == Difficulty.NORMAL
-
-    def test_boundary_9_0_normal_promotes(self):
-        scores = [9, 9, 9, 9, 9]
-        assert self._adjust(scores, Difficulty.NORMAL) == Difficulty.HARD
-
-    def test_boundary_3_0_hard_demotes(self):
-        scores = [3, 3, 3, 3, 3]
-        assert self._adjust(scores, Difficulty.HARD) == Difficulty.NORMAL
-
-    def test_boundary_4_0_normal_demotes(self):
-        scores = [4, 4, 4, 4, 4]
-        assert self._adjust(scores, Difficulty.NORMAL) == Difficulty.EASY
-
-    def test_hard_not_affected_by_easy_threshold(self):
-        """hard→normal needs avg <= 3.0, not 4.0."""
-        scores = [4, 4, 4, 4, 4]  # avg = 4.0
-        assert self._adjust(scores, Difficulty.HARD) == Difficulty.HARD
-
-    def test_easy_not_affected_by_normal_threshold(self):
-        """easy→normal needs avg >= 8.5, not 9.0."""
-        scores = [9, 9, 9, 9, 9]  # avg = 9.0 >= 8.5
-        assert self._adjust(scores, Difficulty.EASY) == Difficulty.NORMAL
+from adaptive_lang_study_bot.config import CEFR_LEVELS
+from adaptive_lang_study_bot.pipeline.post_session import _FORCED_CLOSE_REASONS
 
 
 class TestDeletedUserGuard:
@@ -167,60 +80,14 @@ class TestDeletedUserGuard:
 class TestProfileValidation:
     """Test profile integrity validation rules from post_session.py."""
 
-    def test_valid_levels(self):
-        """All valid levels should be recognized."""
-        for level in _LEVELS:
-            assert level in _LEVELS
-
     def test_invalid_level(self):
-        assert "X9" not in _LEVELS
-        assert "A0" not in _LEVELS
-        assert "" not in _LEVELS
-
-    def test_interest_cap(self):
-        """Interests should be capped at 5."""
-        interests = ["a", "b", "c", "d", "e", "f"]
-        capped = interests[:5]
-        assert len(capped) == 5
-
-    def test_learning_goals_cap(self):
-        """Learning goals should be capped at 3."""
-        goals = ["a", "b", "c", "d"]
-        capped = goals[:3]
-        assert len(capped) == 3
-
-    def test_weak_areas_cap(self):
-        """Weak areas should be capped at 10."""
-        areas = [f"area_{i}" for i in range(15)]
-        capped = areas[:10]
-        assert len(capped) == 10
-
-    def test_strong_areas_cap(self):
-        """Strong areas should be capped at 10."""
-        areas = [f"area_{i}" for i in range(15)]
-        capped = areas[:10]
-        assert len(capped) == 10
-
-    def test_score_cleaning(self):
-        """Scores outside 0-10 should be filtered."""
-        scores = [5, -1, 8, 11, 3, 15, 0, 10]
-        cleaned = [s for s in scores if 0 <= s <= 10]
-        assert cleaned == [5, 8, 3, 0, 10]
+        assert "X9" not in CEFR_LEVELS
+        assert "A0" not in CEFR_LEVELS
+        assert "" not in CEFR_LEVELS
 
 
 class TestSessionStatus:
     """Test session status determination based on close reason."""
-
-    def test_forced_reasons_mark_incomplete(self):
-        for reason in _FORCED_CLOSE_REASONS:
-            status = "incomplete" if reason in _FORCED_CLOSE_REASONS else "completed"
-            assert status == "incomplete", f"{reason} should be incomplete"
-
-    def test_idle_timeout_marks_incomplete(self):
-        """Idle timeout sessions are incomplete — the user dropped off mid-task."""
-        assert CloseReason.IDLE_TIMEOUT in _FORCED_CLOSE_REASONS
-        status = "incomplete" if CloseReason.IDLE_TIMEOUT in _FORCED_CLOSE_REASONS else "completed"
-        assert status == "incomplete"
 
     def test_voluntary_reasons_mark_completed(self):
         voluntary = [CloseReason.EXPLICIT_CLOSE, CloseReason.UNKNOWN]

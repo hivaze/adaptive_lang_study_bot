@@ -5,13 +5,7 @@ from adaptive_lang_study_bot.config import CEFR_LEVELS, tuning
 from adaptive_lang_study_bot.db.models import User
 from adaptive_lang_study_bot.enums import Difficulty, SessionStyle
 from adaptive_lang_study_bot.i18n import render_goal, render_interest
-from adaptive_lang_study_bot.utils import get_language_name as _get_language_name, safe_zoneinfo, user_local_now
-
-# How recently a notification must be to include it in session context
-# (Now driven by tuning.notification_lookback_hours; kept as module-level alias for tests.)
-NOTIFICATION_LOOKBACK_HOURS = tuning.notification_lookback_hours
-
-_LEVELS = CEFR_LEVELS
+from adaptive_lang_study_bot.utils import get_item_date, get_language_name as _get_language_name, safe_zoneinfo, user_local_now
 
 
 class SessionContext(TypedDict):
@@ -30,14 +24,105 @@ class SessionContext(TypedDict):
     is_first_session: bool
 
 
-def _sanitize(text: str, max_len: int = 200) -> str:
+# ---------------------------------------------------------------------------
+# Prompt instruction constants — kept at module level to avoid re-creating
+# per session and for testability.
+# ---------------------------------------------------------------------------
+
+_STYLE_INSTRUCTIONS: dict[str, str] = {
+    SessionStyle.CASUAL: (
+        "SESSION STYLE: Casual. Use a relaxed pace, conversational tone, "
+        "and informal corrections. Let the conversation flow naturally. "
+        "Include fun examples, humor, and cultural tidbits. "
+        "Don't force a rigid exercise structure."
+    ),
+    SessionStyle.STRUCTURED: (
+        "SESSION STYLE: Structured. Organize the session into clear segments: "
+        "warm-up, main exercise, review. Provide grammar explanations with examples. "
+        "Follow systematic topic progression. Use numbered exercises."
+    ),
+    SessionStyle.INTENSIVE: (
+        "SESSION STYLE: Intensive. Maximize exercise density. Minimal chitchat. "
+        "Move rapidly between exercises. Present multiple exercise types in sequence. "
+        "Push for faster responses. Focus on volume and efficiency."
+    ),
+}
+
+_DIFFICULTY_INSTRUCTIONS: dict[str, str] = {
+    Difficulty.EASY: (
+        "DIFFICULTY: Easy. Use simpler vocabulary and shorter sentences. "
+        "Provide more hints and scaffolding. Be patient with corrections, "
+        "explain errors gently. Offer multiple-choice where possible."
+    ),
+    Difficulty.NORMAL: (
+        "DIFFICULTY: Normal. Balanced challenge level. Mix guided and "
+        "open-ended exercises. Standard correction style."
+    ),
+    Difficulty.HARD: (
+        "DIFFICULTY: Hard. Use complex sentence structures and advanced vocabulary. "
+        "Provide minimal hints. Expect detailed answers. Include nuanced grammar "
+        "points and idiomatic expressions. Challenge the student to think critically."
+    ),
+}
+
+_LEVEL_GUIDANCE: dict[str, str] = {
+    "A1": (
+        "Level A1 (Beginner): Use basic vocabulary (greetings, numbers, colors, everyday objects). "
+        "Teach present tense only. Short, simple sentences (subject-verb-object). "
+        "Prefer multiple-choice and matching exercises. Introduce articles, gender, basic pronouns. "
+        "Maximum 5-8 new words per session."
+    ),
+    "A2": (
+        "Level A2 (Elementary): Introduce past tense, basic future, common irregular verbs. "
+        "Expand vocabulary to daily life (shopping, travel, family). Use short paragraphs. "
+        "Mix fill-in-the-blank with simple translation. Introduce adjective agreement, prepositions. "
+        "Maximum 8-10 new words per session."
+    ),
+    "B1": (
+        "Level B1 (Intermediate): Teach conditional, subjunctive basics, relative clauses. "
+        "Vocabulary for opinions, work, health, culture. Encourage full-sentence responses. "
+        "Use open-ended exercises alongside guided ones. Introduce idiomatic expressions. "
+        "Maximum 10-12 new words per session."
+    ),
+    "B2": (
+        "Level B2 (Upper-Intermediate): Complex grammar (subjunctive moods, passive voice, reported speech). "
+        "Abstract vocabulary, nuance, register variation. Use conversation simulations and debate topics. "
+        "Expect paragraph-length answers. Introduce formal vs informal register. "
+        "Maximum 12-15 new words per session."
+    ),
+    "C1": (
+        "Level C1 (Advanced): Focus on style, nuance, idiomatic fluency, and precision. "
+        "Teach advanced connectors, discourse markers, subtle tense distinctions. "
+        "Use text analysis, paraphrasing, and essay-style exercises. "
+        "Push for native-like expression. 10-15 specialized words per session."
+    ),
+    "C2": (
+        "Level C2 (Mastery): Focus on literary style, humor, wordplay, cultural references. "
+        "Fine-tune register, colloquialisms, and regional variation. "
+        "Use creative writing, argumentation, and translation of complex texts. "
+        "Emphasize precision and elegance over quantity."
+    ),
+}
+
+
+def _sanitize(text: str, max_len: int = tuning.prompt_sanitize_default_len) -> str:
     """Collapse whitespace/newlines and truncate user-controlled text for prompt safety."""
     return " ".join(text.split())[:max_len]
 
 
-def _sanitize_list(items: list[str], max_len: int = 200) -> list[str]:
+def _sanitize_list(items: list[str], max_len: int = tuning.prompt_sanitize_default_len) -> list[str]:
     """Sanitize each item in a list of user-controlled strings."""
     return [_sanitize(item, max_len) for item in items]
+
+
+def _dated(text: str, date_str: str | None) -> str:
+    """Append '(since DATE)' if date_str is available."""
+    return f"{text} (since {date_str})" if date_str else text
+
+
+def _dated_item(text: str, ts: dict | None, field: str, raw_item: str) -> str:
+    """Render text with date looked up via item hash."""
+    return _dated(text, get_item_date(ts, field, raw_item))
 
 
 def compute_session_context(user: User) -> SessionContext:
@@ -68,16 +153,16 @@ def compute_session_context(user: User) -> SessionContext:
             "This is the student's VERY FIRST session. Follow the FIRST SESSION GUIDE "
             "section below. Do NOT treat this as a comeback or returning user."
         )
-    elif gap_hours < 1:
+    elif gap_hours < tuning.greeting_continuation_hours:
         greeting_style = "continuation"
         greeting_note = "User returned within the same hour. Treat as continuation, no greeting needed."
-    elif gap_hours < 4:
+    elif gap_hours < tuning.greeting_short_break_hours:
         greeting_style = "short_break"
         greeting_note = "Short break. Brief acknowledgment, then dive in."
-    elif gap_hours < 10:
+    elif gap_hours < tuning.greeting_normal_return_hours:
         greeting_style = "normal_return"
         greeting_note = "Normal return. Quick hello, mention what they did last time."
-    elif gap_hours < 24:
+    elif gap_hours < tuning.greeting_long_break_hours:
         greeting_style = "long_break"
         greeting_note = (
             "Been away 10+ hours. Warm greeting, acknowledge their streak, "
@@ -125,8 +210,8 @@ def compute_session_context(user: User) -> SessionContext:
         "notification_text": notification_text,
         "notification_hours_ago": round(notif_gap, 1) if notification_text else None,
         "time_of_day": (
-            "morning" if local_hour < 12
-            else "afternoon" if local_hour < 17
+            "morning" if local_hour < tuning.time_of_day_morning_end
+            else "afternoon" if local_hour < tuning.time_of_day_afternoon_end
             else "evening"
         ),
         "day_of_week": local_now.strftime("%A"),
@@ -155,13 +240,13 @@ def _build_comeback_section(
 
     gap_days = gap_hours / 24
     scores = user.recent_scores or []
-    recent_5 = scores[-5:] if scores else []
-    avg_score = sum(recent_5) / len(recent_5) if recent_5 else None
+    recent_n = scores[-tuning.recent_scores_display:] if scores else []
+    avg_score = sum(recent_n) / len(recent_n) if recent_n else None
     last_activity = user.last_activity or {}
     weak_areas = user.weak_areas or []
 
-    # --- Short comeback (threshold .. 72 h) — lighter block ---------------
-    if gap_hours < 72:
+    # --- Short comeback (threshold .. short_max h) — lighter block ---------
+    if gap_hours < tuning.comeback_short_max_hours:
         return (
             "## COMEBACK ADAPTATION\n"
             f"Absence duration: {round(gap_days, 1)} days\n\n"
@@ -171,9 +256,9 @@ def _build_comeback_section(
 
     # --- Full comeback (72 h+) --------------------------------------------
     # Classify absence severity
-    if gap_days < 7:
+    if gap_days < tuning.comeback_short_absence_days:
         absence_label = "short (3-7 days)"
-    elif gap_days < 21:
+    elif gap_days < tuning.comeback_medium_absence_days:
         absence_label = "medium (1-3 weeks)"
     else:
         absence_label = "long (3+ weeks)"
@@ -197,7 +282,7 @@ def _build_comeback_section(
             "for translation). Reassure the student that catching up is gradual."
         )
         priority += 1
-    elif due_count >= 3:
+    elif due_count >= tuning.comeback_min_due_for_review:
         lines.append(
             f"{priority}. VOCABULARY REVIEW: The student has {due_count} overdue vocabulary "
             "cards. Start the session with a quick review of 5-10 of the most overdue "
@@ -211,7 +296,7 @@ def _build_comeback_section(
     if struggling and isinstance(struggling, list):
         topics_str = ", ".join(
             f"{_sanitize(str(s.get('topic', '')))} (avg {s.get('avg_score', '?')}/10)"
-            for s in struggling[:3]
+            for s in struggling
             if isinstance(s, dict)
         )
         lines.append(
@@ -221,7 +306,7 @@ def _build_comeback_section(
         )
         priority += 1
     elif weak_areas:
-        topics_str = ", ".join(_sanitize_list(weak_areas[:3]))
+        topics_str = ", ".join(_sanitize_list(weak_areas))
         lines.append(
             f"{priority}. REVIEW WEAK AREAS: The student has known weak areas: "
             f"{topics_str}. Include a warm-up exercise on one of these topics "
@@ -233,7 +318,7 @@ def _build_comeback_section(
     if stale_topics:
         stale_str = ", ".join(
             f"{st['topic']} ({st['days_ago']} days ago, avg {st['avg_score']:.1f})"
-            for st in stale_topics[:3]
+            for st in stale_topics
         )
         lines.append(
             f"{priority}. STALE TOPICS: These topics haven't been practiced in "
@@ -243,10 +328,10 @@ def _build_comeback_section(
         priority += 1
 
     # Priority: Difficulty guidance scaled by absence length and scores
-    if gap_days >= 21:
+    if gap_days >= tuning.comeback_difficulty_full_override_days:
         # Advanced users (B2+) with a solid vocabulary base don't need a
         # full-session EASY override — they retain more and recover faster.
-        is_advanced = user.level in ("B2", "C1", "C2") and user.vocabulary_count >= 100
+        is_advanced = user.level in ("B2", "C1", "C2") and user.vocabulary_count >= tuning.comeback_advanced_vocab_threshold
         if is_advanced:
             lines.append(
                 f"{priority}. DIFFICULTY ADJUSTMENT: The student has been away for "
@@ -265,8 +350,8 @@ def _build_comeback_section(
                 "Start with foundational exercises appropriate for their level."
             )
         priority += 1
-    elif gap_days >= 7:
-        if avg_score is not None and avg_score < 5:
+    elif gap_days >= tuning.comeback_difficulty_adjust_days:
+        if avg_score is not None and avg_score < tuning.comeback_struggling_avg:
             lines.append(
                 f"{priority}. DIFFICULTY ADJUSTMENT: The student was struggling "
                 f"before leaving (avg score {avg_score:.1f}/10) and has been away "
@@ -286,14 +371,14 @@ def _build_comeback_section(
         priority += 1
     else:
         # 3-7 days
-        if avg_score is not None and avg_score < 5:
+        if avg_score is not None and avg_score < tuning.comeback_struggling_avg:
             lines.append(
                 f"{priority}. WARM-UP: The student was struggling before leaving "
                 f"(avg {avg_score:.1f}/10). Start with a gentle warm-up exercise "
                 "below their level. One or two easy questions to rebuild confidence "
                 "before returning to their regular difficulty."
             )
-        elif avg_score is not None and avg_score >= 7 and gap_days >= 5:
+        elif avg_score is not None and avg_score >= tuning.comeback_good_avg and gap_days >= tuning.comeback_stale_gap_days:
             lines.append(
                 f"{priority}. WARM-UP: The student had good scores ({avg_score:.1f}/10) "
                 f"but has been away {round(gap_days)} days. Start with a quick warm-up "
@@ -308,8 +393,10 @@ def _build_comeback_section(
             )
         priority += 1
 
-    # Special case: zero engagement (onboarding-only user returning after 3+ days)
-    if user.vocabulary_count == 0 and not scores and user.sessions_completed == 0:
+    # Special case: zero engagement (onboarding-only user returning after 3+ days).
+    # Require `not last_session_at` to avoid false-firing after a language switch
+    # (which resets sessions_completed to 0 but preserves last_session_at).
+    if user.vocabulary_count == 0 and not scores and user.sessions_completed == 0 and not user.last_session_at:
         lines.append(
             f"{priority}. NOTE: This student has never completed a lesson. Treat this "
             "as their very first session. Introduce yourself briefly, ask what they "
@@ -326,6 +413,464 @@ def _build_comeback_section(
     )
 
     return "## COMEBACK ADAPTATION\n" + "\n".join(lines)
+
+
+def _build_teaching_approach_section(
+    user: User,
+    is_first_session: bool,
+    recent_n: list[int],
+) -> str:
+    """Build the TEACHING APPROACH section of the system prompt."""
+    target_lang = _get_language_name(user.target_language)
+    adaptive_lines: list[str] = []
+
+    # Session flow (skip for first session — FIRST SESSION GUIDE provides the flow)
+    if not is_first_session:
+        adaptive_lines.append(
+            "SESSION FLOW:\n"
+            "- At the start of a session (after greeting), ask what the student wants to "
+            "focus on today — unless their learning goals, recent context, or additional "
+            "notes already suggest a clear direction. If you already know what they need, "
+            "lead with it directly instead of asking.\n"
+            "- Teach new vocabulary at the BEGINNING of the session (after greeting and "
+            "optional review). This gives the student time to practice new words in exercises "
+            "during the same session. You may also introduce additional words at the END if "
+            "exercises revealed gaps — words the student had trouble with or didn't know.\n"
+            "- NEVER repeat content you already presented in this session. If you taught words, "
+            "do not re-introduce them. If you gave an exercise, do not re-ask it.\n"
+            "- Be a leader: teach proactively instead of asking permission for every action. "
+            "Present exercises and vocabulary directly rather than offering menus of choices."
+        )
+
+    # Score adaptation
+    score_lines = [
+        "SCORE ADAPTATION:",
+        "- If recent scores trend downward, simplify exercises and offer more guidance.",
+        "- If recent scores trend upward, increase challenge gradually.",
+    ]
+    if recent_n:
+        avg = sum(recent_n) / len(recent_n)
+        if avg >= tuning.prompt_score_high_avg:
+            score_lines.append(
+                f"- Student is performing well (avg {avg:.1f}/10). Consider harder exercises or new topics."
+            )
+        elif avg <= tuning.prompt_score_low_avg:
+            score_lines.append(
+                f"- Student is struggling (avg {avg:.1f}/10). Simplify, encourage, and review basics."
+            )
+    adaptive_lines.append("\n".join(score_lines))
+
+    # Content selection
+    adaptive_lines.append(
+        "CONTENT SELECTION:\n"
+        "- Always incorporate the student's interests when possible.\n"
+        "- Focus exercises on weak areas, but periodically review strong areas.\n"
+        "- When choosing exercise topics, prefer topics the student hasn't practiced recently, "
+        "especially those where they scored low previously."
+    )
+
+    # Goals
+    goal_lines = [
+        "GOALS:",
+        "- Align exercises with the student's learning goals when set.",
+        "- When learning goals exist, periodically ask about progress toward them.",
+        "- Suggest vocabulary and topics directly relevant to the student's goals.",
+        "- If no learning goals are set, gently encourage setting one early in the session.",
+    ]
+    adaptive_lines.append("\n".join(goal_lines))
+
+    # Knowledge gap hint for early sessions
+    if not is_first_session and user.sessions_completed <= tuning.knowledge_gap_max_sessions:
+        gaps: list[str] = []
+        if user.preferred_difficulty == Difficulty.NORMAL and not user.recent_scores:
+            gaps.append("preferred difficulty (easy/normal/hard)")
+        if user.session_style == SessionStyle.CASUAL and user.sessions_completed <= tuning.knowledge_gap_style_max_sessions:
+            gaps.append("session style (casual/structured/intensive)")
+        if not user.topics_to_avoid:
+            gaps.append("topics to avoid")
+        if not user.learning_goals:
+            gaps.append("learning goals")
+        if gaps:
+            adaptive_lines.append(
+                f"KNOWLEDGE GAP: The student hasn't explicitly set: {', '.join(gaps)}. "
+                "Naturally ask about one of these early in the session and save via update_preference."
+            )
+
+    # Session style
+    style_line = _STYLE_INSTRUCTIONS.get(user.session_style)
+    if style_line:
+        adaptive_lines.append(style_line)
+
+    # Difficulty
+    diff_line = _DIFFICULTY_INSTRUCTIONS.get(user.preferred_difficulty)
+    if diff_line:
+        adaptive_lines.append(diff_line)
+
+    return "## TEACHING APPROACH\n" + "\n\n".join(adaptive_lines)
+
+
+def _build_session_context_section(
+    user: User,
+    session_ctx: SessionContext,
+    *,
+    stale_topics: list[dict] | None = None,
+    topic_performance: dict[str, dict] | None = None,
+    active_schedules: list[dict] | None = None,
+) -> str:
+    """Build the SESSION CONTEXT section of the system prompt."""
+    last_activity = user.last_activity or {}
+    ctx_lines = [
+        f"Date: {session_ctx['date_str']}",
+        f"Time: {session_ctx['time_of_day']} ({session_ctx['day_of_week']}), {session_ctx['local_time']}",
+    ]
+
+    # Greeting note
+    ctx_lines.append(f"\nGreeting style: {session_ctx['greeting_style']}")
+    ctx_lines.append(session_ctx["greeting_note"])
+
+    # Last activity
+    if last_activity:
+        gap_h = session_ctx["gap_hours"]
+        if gap_h >= tuning.comeback_threshold_hours:
+            ctx_lines.append(
+                f"\nLast session ({round(gap_h / 24, 1)} days ago — context is stale):"
+            )
+            ctx_lines.append(f"  Summary: {last_activity.get('session_summary', 'N/A')}")
+            if last_activity.get("status") == "incomplete":
+                ctx_lines.append(
+                    f"  Status: incomplete ({last_activity.get('close_reason', 'unknown')})"
+                )
+        else:
+            ctx_lines.append(f"\nLast session summary: {last_activity.get('session_summary', 'N/A')}")
+            if last_activity.get("topic"):
+                ctx_lines.append(f"Last topic: {last_activity['topic']}")
+            if last_activity.get("last_exercise"):
+                ctx_lines.append(f"Last exercise: {last_activity['last_exercise']}")
+            if last_activity.get("score") is not None:
+                ctx_lines.append(f"Last score: {last_activity['score']}/10")
+            if last_activity.get("topics_covered"):
+                ctx_lines.append(
+                    f"Topics covered last time: {', '.join(last_activity['topics_covered'])}"
+                )
+            if last_activity.get("status") == "incomplete" and gap_h < 24:
+                prev_close = last_activity.get("close_reason", "")
+                topic_info = f" on '{last_activity['topic']}'" if last_activity.get("topic") else ""
+                prev_exercises = last_activity.get("exercise_count", 0)
+
+                if prev_close == "idle_timeout" and (
+                    prev_exercises >= 2
+                    or last_activity.get("agent_stopped")
+                ):
+                    note = (
+                        f"NOTE: Last session{topic_info} ended normally (idle timeout after wrapping up). "
+                        "Do NOT tease about leaving. Offer to continue or start something new."
+                    )
+                elif prev_close == "idle_timeout" and last_activity.get("pending_context"):
+                    pending = last_activity["pending_context"]
+                    note = (
+                        f"NOTE: Last session{topic_info} was abandoned mid-task "
+                        f"(tutor was {pending}). Light playful teasing is fine — "
+                        "warm, not passive-aggressive. Offer to continue or start fresh."
+                    )
+                elif prev_close == "idle_timeout":
+                    note = (
+                        f"NOTE: Last session{topic_info} had low engagement. "
+                        "Welcome warmly, suggest a concrete activity."
+                    )
+                elif prev_close in ("turn_limit", "cost_limit"):
+                    note = (
+                        f"NOTE: Last session{topic_info} was cut short by a system limit. "
+                        "Do NOT tease — the bot ended it. Offer to continue or start fresh."
+                    )
+                elif prev_close in ("shutdown", "error"):
+                    note = (
+                        f"NOTE: Last session{topic_info} ended due to a technical issue. "
+                        "Do NOT blame the student. Offer to continue or start fresh."
+                    )
+                else:
+                    note = (
+                        f"NOTE: Last session ended mid-conversation{topic_info}. "
+                        "Offer to continue or start fresh."
+                    )
+                struggling = last_activity.get("struggling_topics")
+                if struggling:
+                    topics_str = ", ".join(
+                        f"{s['topic']} ({s['avg_score']}/10)" for s in struggling
+                    )
+                    note += f" Struggled with: {topics_str} — revisit with simpler exercises."
+                ctx_lines.append(note)
+            if last_activity.get("words_practiced"):
+                ctx_lines.append(
+                    f"Words practiced last time: {', '.join(_sanitize(w, tuning.prompt_word_max_len) for w in last_activity['words_practiced'])}"
+                )
+            if last_activity.get("exercise_type_scores"):
+                scores_str = ", ".join(
+                    f"{t}: {s}/10" for t, s in last_activity["exercise_type_scores"].items()
+                )
+                ctx_lines.append(f"Exercise performance last time: {scores_str}")
+            if last_activity.get("struggling_topics") and last_activity.get("status") != "incomplete":
+                struggling = last_activity["struggling_topics"]
+                topics_str = ", ".join(
+                    f"{s['topic']} ({s['avg_score']}/10)" for s in struggling
+                )
+                ctx_lines.append(f"Topics that need extra practice: {topics_str}")
+
+    # Session history
+    session_history = user.session_history or []
+    if session_history:
+        ctx_lines.append("\nRecent session history:")
+        for entry in session_history:
+            parts = [entry.get("date", "?")]
+            if entry.get("summary"):
+                parts.append(entry["summary"])
+            if entry.get("score") is not None:
+                parts.append(f"score: {entry['score']}/10")
+            if entry.get("status") == "incomplete":
+                entry_reason = entry.get("close_reason", "")
+                if entry_reason in ("idle_timeout", "turn_limit", "cost_limit"):
+                    parts.append(f"({entry_reason.replace('_', ' ')})")
+                else:
+                    parts.append("(incomplete)")
+            if entry.get("exercise_count"):
+                parts.append(f"{entry['exercise_count']} exercises")
+            ctx_lines.append(f"  - {' | '.join(parts)}")
+
+    # Additional notes
+    if user.additional_notes:
+        ctx_lines.append("\nAdditional notes about this student:")
+        for note in _sanitize_list(user.additional_notes):
+            ctx_lines.append(f"  - {note}")
+
+    # 7-day topic performance
+    if topic_performance:
+        ctx_lines.append("\nTopic performance (last 7 days):")
+        sorted_topics = sorted(
+            topic_performance.items(),
+            key=lambda kv: (kv[1]["avg_score"], -kv[1]["count"]),
+        )
+        for topic, stats in sorted_topics:
+            ctx_lines.append(
+                f"  - {topic}: avg {stats['avg_score']}/10 ({stats['count']} exercises)"
+            )
+
+    # Topics needing review
+    if stale_topics:
+        ctx_lines.append("\nTopics needing review (not practiced in 7+ days with low scores):")
+        for st in stale_topics:
+            ctx_lines.append(
+                f"  - {st['topic']} (last practiced: {st['days_ago']} days ago, "
+                f"avg score: {st['avg_score']:.1f})"
+            )
+
+    if active_schedules:
+        active = [s for s in active_schedules if s.get("status") == "active"]
+        paused = [s for s in active_schedules if s.get("status") == "paused"]
+        if active or paused:
+            ctx_lines.append("\nActive schedules:")
+            for s in active:
+                ctx_lines.append(f"  - {s['description']} ({s['type']})")
+            for s in paused:
+                ctx_lines.append(f"  - {s['description']} ({s['type']}) [paused]")
+            ctx_lines.append(
+                "Check existing schedules before creating new ones to avoid duplicates."
+            )
+
+    # Celebrations
+    if session_ctx["celebrations"]:
+        ctx_lines.append("\nCelebrations pending:")
+        for c in session_ctx["celebrations"]:
+            ctx_lines.append(f"  - {c}")
+
+    # Proactive notification context
+    if session_ctx.get("notification_text"):
+        hours_ago = session_ctx.get("notification_hours_ago")
+        time_note = f" ({hours_ago:.0f}h ago)" if hours_ago else ""
+        ctx_lines.append(
+            "\n## CONTEXT: USER IS RESPONDING TO A NOTIFICATION\n"
+            f'You recently sent{time_note}: "{session_ctx["notification_text"]}"\n'
+            "The user's response below is likely a reply to this. "
+            "Continue naturally — don't repeat the notification."
+        )
+
+    return "## SESSION CONTEXT\n" + "\n".join(ctx_lines)
+
+
+def _build_learning_plan_section(
+    user: User,
+    active_plan: "LearningPlan | None",
+    plan_progress: dict | None,
+) -> str | None:
+    """Build the LEARNING PLAN section of the system prompt.
+
+    Returns None when no plan section is needed (e.g. onboarding incomplete).
+    """
+    if active_plan and plan_progress and user.onboarding_completed:
+        # Case A: active plan
+        local_now = user_local_now(user)
+        today = local_now.date()
+        elapsed_days = (today - active_plan.start_date).days
+        current_week = max(1, min(active_plan.total_weeks, elapsed_days // 7 + 1))
+        days_remaining = max(0, (active_plan.target_end_date - today).days)
+
+        plan_lines = [
+            f"Goal: {active_plan.current_level} → {active_plan.target_level} | "
+            f"Timeline: {active_plan.start_date} to {active_plan.target_end_date} "
+            f"({days_remaining} days remaining)",
+            f"Overall progress: {plan_progress['progress_pct']}% "
+            f"({plan_progress['completed_topics']}/{plan_progress['total_topics']} "
+            f"topics completed)",
+        ]
+
+        # Current phase details
+        progress_phases = plan_progress.get("phases", [])
+        if 0 < current_week <= len(progress_phases):
+            phase = progress_phases[current_week - 1]
+            plan_lines.append(
+                f"\nCurrent phase (Week {current_week}): \"{phase.get('focus', 'N/A')}\""
+            )
+            for t in phase.get("topics", []):
+                status_mark = {
+                    "completed": "[completed]",
+                    "in_progress": "[in_progress]",
+                    "pending": "[pending]",
+                }.get(t["status"], "[?]")
+                detail_parts = [f"{status_mark} {t['name']}"]
+                if t.get("exercises"):
+                    detail_parts.append(f"({t['exercises']} exercises")
+                    if t.get("avg_score") is not None:
+                        detail_parts[-1] += f", avg {t['avg_score']}"
+                    detail_parts[-1] += ")"
+                plan_lines.append(f"  {' '.join(detail_parts)}")
+
+        # Next phase preview
+        if current_week < len(progress_phases):
+            next_phase = progress_phases[current_week]
+            plan_lines.append(
+                f"\nNext phase (Week {current_week + 1}): "
+                f"\"{next_phase.get('focus', 'N/A')}\""
+            )
+
+        # Pace assessment
+        if plan_progress["total_topics"] > 0:
+            elapsed_days = max(1, (today - active_plan.start_date).days)
+            total_days = max(1, (active_plan.target_end_date - active_plan.start_date).days)
+            expected_pct = (elapsed_days / total_days) * 100
+            actual_pct = plan_progress["progress_pct"]
+            gap = expected_pct - actual_pct
+            if gap >= tuning.plan_behind_schedule_pct:
+                plan_lines.append(
+                    f"\nPace: BEHIND schedule ({actual_pct}% done, "
+                    f"expected ~{int(expected_pct)}%). "
+                    "Focus on completing pending topics. Consider simplifying exercises. "
+                    "ACTION: Proactively offer to adapt the plan by calling "
+                    "manage_learning_plan(action='adapt') to make remaining phases more achievable."
+                )
+            elif gap <= -tuning.plan_ahead_schedule_pct:
+                plan_lines.append(
+                    f"\nPace: AHEAD of schedule ({actual_pct}% done, "
+                    f"expected ~{int(expected_pct)}%). "
+                    "Great progress! Consider adding depth to current topics "
+                    "or previewing next phase content. "
+                    "ACTION: You may offer to adapt the plan by calling "
+                    "manage_learning_plan(action='adapt') to add more advanced topics."
+                )
+
+        # Vocabulary target for current phase
+        if 0 < current_week <= len((active_plan.plan_data or {}).get("phases", [])):
+            raw_phase = (active_plan.plan_data or {}).get("phases", [])[current_week - 1]
+            vocab_target = raw_phase.get("vocabulary_target")
+            vocab_theme = raw_phase.get("vocabulary_theme")
+            if vocab_target or vocab_theme:
+                vocab_note = "Vocabulary this week:"
+                if vocab_theme:
+                    vocab_note += f" theme \"{vocab_theme}\""
+                if vocab_target:
+                    vocab_note += f", target {vocab_target} new words"
+                plan_lines.append(vocab_note)
+
+            assessment = raw_phase.get("assessment")
+            if assessment and not assessment.get("completed"):
+                plan_lines.append(
+                    f"Assessment planned: {assessment.get('type', 'checkpoint')} "
+                    f"on {assessment.get('date', 'end of week')} — "
+                    "run a comprehensive review exercise covering this phase's topics."
+                )
+
+        plan_lines.append(
+            "\nGuidelines:"
+            "\n- Align today's exercises with the current phase topics."
+            "\n- When recording exercises for plan topics, use the exact plan "
+            "topic names in the `topic` field of record_exercise_result. "
+            "If an exercise covers a sub-aspect, use the parent plan topic name "
+            "(e.g. plan has 'Past Tense Verbs' and you drill irregular past tense "
+            "→ record as 'Past Tense Verbs')."
+            "\n- If the pace assessment above shows BEHIND or AHEAD, follow the ACTION directive."
+            "\n- Level auto-adjustments happen via exercise scores. If a level "
+            "change occurs, the plan may become outdated — proactively suggest adapting it."
+            "\n- When a plan phase is fully completed, briefly celebrate and "
+            "preview the next phase to keep the student motivated."
+            "\n- This plan snapshot is from session start. Use "
+            "manage_learning_plan(action='get') for up-to-date progress during the session."
+        )
+        return "## LEARNING PLAN\n" + "\n".join(plan_lines)
+
+    if not user.onboarding_completed:
+        return None
+
+    # No plan — suggest creating one
+    current_idx = CEFR_LEVELS.index(user.level) if user.level in CEFR_LEVELS else 0
+    if current_idx < len(CEFR_LEVELS) - 1:
+        next_level = CEFR_LEVELS[current_idx + 1]
+        plan_goal = (
+            f"targeting progression from {user.level} to {next_level}"
+        )
+    else:
+        next_level = user.level
+        plan_goal = (
+            f"covering advanced {user.level}-level topics "
+            "(literary style, colloquialisms, specialized vocabulary, creative expression)"
+        )
+    _plan_guidelines = (
+        "When creating a plan, include:\n"
+        "- Weekly phases with 2-5 topics each, tailored to the student's interests\n"
+        "- Vocabulary themes and targets per week\n"
+        "- At least one assessment (mid-plan or end-of-plan)\n"
+        "- Realistic expectations based on their session frequency"
+    )
+    _plan_staleness = (
+        "Once a plan is created during this session, use "
+        "manage_learning_plan(action='get') to check its progress rather than "
+        "relying on this section."
+    )
+
+    if user.sessions_completed <= tuning.plan_auto_create_after_sessions:
+        return (
+            "## LEARNING PLAN\n"
+            "The student does not have an active learning plan. Propose creating "
+            "one early in the session using manage_learning_plan(action='create'). "
+            f"Explain the plan will cover approximately {tuning.plan_default_weeks} weeks, "
+            f"{plan_goal}. "
+            "Ask about their available study time (sessions per week) before creating. "
+            "If the student declines, respect that and proceed without a plan.\n"
+            f"{_plan_guidelines}\n"
+            f"{_plan_staleness}"
+        )
+    return (
+        "## LEARNING PLAN\n"
+        "The student does not have an active learning plan. "
+        "Silently create one at the very start of the session by calling "
+        "manage_learning_plan(action='create') BEFORE your first greeting. "
+        f"Use approximately {tuning.plan_default_weeks} weeks, "
+        f"{plan_goal}. "
+        "Base the plan on the student's profile: interests, learning goals, "
+        "weak areas, strong areas, and current level. "
+        "Use their session frequency (from session history) for realistic pacing.\n"
+        "After creating the plan, briefly mention it in your greeting — "
+        "e.g. 'I set up a learning plan for you based on your progress.' "
+        "Keep it to one sentence, then proceed with the session normally.\n"
+        f"{_plan_guidelines}\n"
+        f"{_plan_staleness}"
+    )
 
 
 def build_system_prompt(
@@ -357,9 +902,8 @@ def build_system_prompt(
     13. LEARNING PLAN — (conditional) plan structure and progress
     14. BOT CAPABILITIES — what agent can/cannot do vs /settings
     """
-    last_activity = user.last_activity or {}
     scores = user.recent_scores or []
-    recent_5 = scores[-5:] if scores else []
+    recent_n = scores[-tuning.recent_scores_display:] if scores else []
 
     native_lang = _get_language_name(user.native_language)
     target_lang = _get_language_name(user.target_language)
@@ -407,17 +951,22 @@ def build_system_prompt(
         "8. When the student wants to end the session (e.g. 'let's stop', 'bye', "
         "'that's enough for today'), give a brief warm closing message and remind "
         "them to tap /end to finish the session and see their summary. "
-        "Do NOT just say goodbye — the session stays open until /end is used."
+        "Do NOT just say goodbye — the session stays open until /end is used.\n"
+        "9. Use an informal, friendly tone — like a helpful friend, not a formal teacher. "
+        "Keep it warm and casual."
     )
 
     # --- 3. Output format ---
     sections.append(
         "## OUTPUT FORMAT\n"
-        "1. Telegram HTML only: <b>bold</b>, <i>italic</i>, <code>code</code>, <pre>code block</pre>.\n"
-        "   NEVER use Markdown (## headers, **bold**, `backticks`) — it displays as raw text.\n"
-        "   For lists use numbered lines (1. 2. 3.) or plain text with line breaks.\n"
-        "2. Keep responses concise. Short paragraphs, clear formatting.\n"
-        "3. Use === on its own line to split into separate messages ONLY for truly independent "
+        "1. Use **bold**, *italic*, `code` for formatting.\n"
+        "   For lists use numbered lines (1. 2. 3.) or plain dashes.\n"
+        "2. NEVER use markdown tables (| ... | syntax). They render as broken text. "
+        "Instead present tabular data as a simple list, e.g.:\n"
+        "   - **un appartement** — квартира\n"
+        "   - **un salon** — гостиная\n"
+        "3. Keep responses concise. Short paragraphs, clear formatting.\n"
+        "4. Use --- on its own line to split into separate messages ONLY for truly independent "
         "parts (e.g. feedback on completed exercise, then a new exercise). Never split "
         "mid-thought, greeting from content, or feedback from follow-up. When in doubt, don't split."
     )
@@ -431,9 +980,15 @@ def build_system_prompt(
         "(c) ONLY THEN you call record_exercise_result with the score. "
         "If the student ignores an exercise or changes topic without answering, "
         "do NOT record a score for that exercise.\n"
-        "2. Use search_vocabulary before teaching new words to avoid duplicates. "
-        "Call add_vocabulary for every new word taught. Always list vocabulary words "
-        "used in each exercise in the words_involved parameter of record_exercise_result.\n"
+        "   CRITICAL: EVERY exercise you present MUST be scored via record_exercise_result "
+        "after the student answers — including diagnostic exercises, warm-ups, and "
+        "informal quizzes. If it has a right/wrong answer, it gets scored.\n"
+        "2. VOCABULARY RULE: You MUST call add_vocabulary for every new word you teach, "
+        "AT THE MOMENT you present it — not later. Never show vocabulary to the student "
+        "without saving it via add_vocabulary first. This includes words in word lists, "
+        "example sentences, and exercise material. Use search_vocabulary before teaching "
+        "to avoid duplicates. Always list vocabulary words used in each exercise in the "
+        "words_involved parameter of record_exercise_result.\n"
         "3. Save student preferences via update_preference whenever you learn something "
         "important: learning goals (field='learning_goals'), interests broadly defined — "
         "not just hobbies, but context like 'trip to Paris in March', 'works in healthcare' "
@@ -450,25 +1005,26 @@ def build_system_prompt(
     )
 
     # --- 5. Student profile ---
+    ts = user.field_timestamps or {}
     profile_lines = [
-        f"Name: {_sanitize(user.first_name, 50)}",
-        f"Native language: {native_lang} ({user.native_language})",
-        f"Target language: {target_lang} ({user.target_language})"
+        f"Name: {_sanitize(user.first_name, tuning.prompt_name_max_len)}",
+        f"Native language: {_dated(f'{native_lang} ({user.native_language})', ts.get('native_language'))}",
+        f"Target language: {_dated(f'{target_lang} ({user.target_language})', ts.get('target_language'))}"
         + (" (strengthening mode)" if is_same_language else ""),
-        f"Level: {user.level}",
+        f"Level: {_dated(user.level, ts.get('level'))}",
         f"Streak: {user.streak_days} days",
         f"Vocabulary: {user.vocabulary_count} words",
         f"Sessions completed: {user.sessions_completed}",
-        f"Interests: {', '.join(render_interest(i) for i in _sanitize_list(user.interests)) if user.interests else 'not set'}",
-        f"Learning goals: {'; '.join(render_goal(g, target_language=target_lang) for g in _sanitize_list(user.learning_goals)) if user.learning_goals else 'none set yet — encourage the student to set goals'}",
-        f"Preferred difficulty: {user.preferred_difficulty}",
-        f"Session style: {user.session_style}",
-        f"Topics to avoid: {', '.join(_sanitize_list(user.topics_to_avoid)) if user.topics_to_avoid else 'none'}",
-        f"Additional notes: {'; '.join(_sanitize_list(user.additional_notes)) if user.additional_notes else 'none yet'}",
-        f"Weak areas: {', '.join(_sanitize_list(user.weak_areas)) if user.weak_areas else 'none identified yet'}",
-        f"Strong areas: {', '.join(_sanitize_list(user.strong_areas)) if user.strong_areas else 'none identified yet'}",
-        f"Recent scores (last 5): {recent_5 if recent_5 else 'no scores yet'}",
-        f"Notifications: {'paused' if user.notifications_paused else 'active'}",
+        f"Interests: {', '.join(_dated_item(render_interest(_sanitize(i)), ts, 'interests', i) for i in user.interests) if user.interests else 'not set'}",
+        f"Learning goals: {'; '.join(_dated_item(render_goal(_sanitize(g), target_language=target_lang), ts, 'learning_goals', g) for g in user.learning_goals) if user.learning_goals else 'none set yet — encourage the student to set goals'}",
+        f"Preferred difficulty: {_dated(user.preferred_difficulty, ts.get('preferred_difficulty'))}",
+        f"Session style: {_dated(user.session_style, ts.get('session_style'))}",
+        f"Topics to avoid: {', '.join(_dated_item(_sanitize(i), ts, 'topics_to_avoid', i) for i in user.topics_to_avoid) if user.topics_to_avoid else 'none'}",
+        f"Additional notes: {'; '.join(_dated_item(_sanitize(i), ts, 'additional_notes', i) for i in user.additional_notes) if user.additional_notes else 'none yet'}",
+        f"Weak areas: {', '.join(_dated_item(_sanitize(i), ts, 'weak_areas', i) for i in user.weak_areas) if user.weak_areas else 'none identified yet'}",
+        f"Strong areas: {', '.join(_dated_item(_sanitize(i), ts, 'strong_areas', i) for i in user.strong_areas) if user.strong_areas else 'none identified yet'}",
+        f"Recent scores (last {tuning.recent_scores_display}): {recent_n if recent_n else 'no scores yet'}",
+        f"Notifications: {_dated('paused' if user.notifications_paused else 'active', ts.get('notifications_paused'))}",
     ]
     # Level progress visibility (Issue #13)
     window = tuning.level_recent_window
@@ -513,170 +1069,17 @@ def build_system_prompt(
             "a questionnaire. Start with welcome + goal question, flow into the exercise,\n"
             "then gather remaining preferences based on how they responded.\n"
             "You don't need to cover all 8 points if the conversation flows elsewhere —\n"
-            "the most critical ones are goals (2), exercise (5), and style (4)."
+            "the most critical ones are goals (2), exercise (5), and style (4).\n\n"
+            "VOCABULARY RULE: When you teach new words during ANY part of this session "
+            "(word lists, examples, exercises), you MUST call add_vocabulary for each word "
+            "AT THE MOMENT you present it. Never show vocabulary without saving it first."
         )
 
-    # --- 6. Teaching approach (restructured into labeled subsections) ---
-    adaptive_lines: list[str] = []
-
-    # -- Session flow (skip for first session — FIRST SESSION GUIDE provides the flow) --
-    if not is_first_session:
-        adaptive_lines.append(
-            "SESSION FLOW:\n"
-            "- At the start of a session (after greeting), ask what the student wants to "
-            "focus on today — unless their learning goals, recent context, or additional "
-            "notes already suggest a clear direction. If you already know what they need, "
-            "lead with it directly instead of asking.\n"
-            "- Teach new vocabulary at the BEGINNING of the session (after greeting and "
-            "optional review). This gives the student time to practice new words in exercises "
-            "during the same session. You may also introduce additional words at the END if "
-            "exercises revealed gaps — words the student had trouble with or didn't know.\n"
-            "- NEVER repeat content you already presented in this session. If you taught words, "
-            "do not re-introduce them. If you gave an exercise, do not re-ask it.\n"
-            "- Be a leader: teach proactively instead of asking permission for every action. "
-            "Present exercises and vocabulary directly rather than offering menus of choices."
-        )
-
-    # -- Score adaptation --
-    score_lines = [
-        "SCORE ADAPTATION:",
-        "- If recent scores trend downward, simplify exercises and offer more guidance.",
-        "- If recent scores trend upward, increase challenge gradually.",
-    ]
-    if recent_5:
-        avg = sum(recent_5) / len(recent_5)
-        if avg >= 8:
-            score_lines.append(
-                f"- Student is performing well (avg {avg:.1f}/10). Consider harder exercises or new topics."
-            )
-        elif avg <= 4:
-            score_lines.append(
-                f"- Student is struggling (avg {avg:.1f}/10). Simplify, encourage, and review basics."
-            )
-    adaptive_lines.append("\n".join(score_lines))
-
-    # -- Content selection --
-    adaptive_lines.append(
-        "CONTENT SELECTION:\n"
-        "- Always incorporate the student's interests when possible.\n"
-        "- Focus exercises on weak areas, but periodically review strong areas.\n"
-        "- When choosing exercise topics, prefer topics the student hasn't practiced recently, "
-        "especially those where they scored low previously."
-    )
-
-    # -- Goals --
-    goal_lines = [
-        "GOALS:",
-        "- Align exercises with the student's learning goals when set.",
-        "- When learning goals exist, periodically ask about progress toward them.",
-        "- Suggest vocabulary and topics directly relevant to the student's goals.",
-        "- If no learning goals are set, gently encourage setting one early in the session.",
-    ]
-    adaptive_lines.append("\n".join(goal_lines))
-
-    # -- Knowledge gap hint for early sessions --
-    if not is_first_session and user.sessions_completed <= 5:
-        gaps: list[str] = []
-        if user.preferred_difficulty == Difficulty.NORMAL and not user.recent_scores:
-            gaps.append("preferred difficulty (easy/normal/hard)")
-        if user.session_style == SessionStyle.CASUAL and user.sessions_completed <= 2:
-            gaps.append("session style (casual/structured/intensive)")
-        if not user.topics_to_avoid:
-            gaps.append("topics to avoid")
-        if not user.learning_goals:
-            gaps.append("learning goals")
-        if gaps:
-            adaptive_lines.append(
-                f"KNOWLEDGE GAP: The student hasn't explicitly set: {', '.join(gaps)}. "
-                "Naturally ask about one of these early in the session and save via update_preference."
-            )
-
-    # -- Session style --
-    _style_instructions = {
-        SessionStyle.CASUAL: (
-            "SESSION STYLE: Casual. Use a relaxed pace, conversational tone, "
-            "and informal corrections. Let the conversation flow naturally. "
-            "Include fun examples, humor, and cultural tidbits. "
-            "Don't force a rigid exercise structure."
-        ),
-        SessionStyle.STRUCTURED: (
-            "SESSION STYLE: Structured. Organize the session into clear segments: "
-            "warm-up, main exercise, review. Provide grammar explanations with examples. "
-            "Follow systematic topic progression. Use numbered exercises."
-        ),
-        SessionStyle.INTENSIVE: (
-            "SESSION STYLE: Intensive. Maximize exercise density. Minimal chitchat. "
-            "Move rapidly between exercises. Present multiple exercise types in sequence. "
-            "Push for faster responses. Focus on volume and efficiency."
-        ),
-    }
-    style_line = _style_instructions.get(user.session_style)
-    if style_line:
-        adaptive_lines.append(style_line)
-
-    # -- Difficulty --
-    _difficulty_instructions = {
-        Difficulty.EASY: (
-            "DIFFICULTY: Easy. Use simpler vocabulary and shorter sentences. "
-            "Provide more hints and scaffolding. Be patient with corrections, "
-            "explain errors gently. Offer multiple-choice where possible."
-        ),
-        Difficulty.NORMAL: (
-            "DIFFICULTY: Normal. Balanced challenge level. Mix guided and "
-            "open-ended exercises. Standard correction style."
-        ),
-        Difficulty.HARD: (
-            "DIFFICULTY: Hard. Use complex sentence structures and advanced vocabulary. "
-            "Provide minimal hints. Expect detailed answers. Include nuanced grammar "
-            "points and idiomatic expressions. Challenge the student to think critically."
-        ),
-    }
-    diff_line = _difficulty_instructions.get(user.preferred_difficulty)
-    if diff_line:
-        adaptive_lines.append(diff_line)
-
-    sections.append("## TEACHING APPROACH\n" + "\n\n".join(adaptive_lines))
+    # --- 6. Teaching approach ---
+    sections.append(_build_teaching_approach_section(user, is_first_session, recent_n))
 
     # --- 7. Level-specific teaching guidance ---
-    _level_guidance = {
-        "A1": (
-            "Level A1 (Beginner): Use basic vocabulary (greetings, numbers, colors, everyday objects). "
-            "Teach present tense only. Short, simple sentences (subject-verb-object). "
-            "Prefer multiple-choice and matching exercises. Introduce articles, gender, basic pronouns. "
-            "Maximum 5-8 new words per session."
-        ),
-        "A2": (
-            "Level A2 (Elementary): Introduce past tense, basic future, common irregular verbs. "
-            "Expand vocabulary to daily life (shopping, travel, family). Use short paragraphs. "
-            "Mix fill-in-the-blank with simple translation. Introduce adjective agreement, prepositions. "
-            "Maximum 8-10 new words per session."
-        ),
-        "B1": (
-            "Level B1 (Intermediate): Teach conditional, subjunctive basics, relative clauses. "
-            "Vocabulary for opinions, work, health, culture. Encourage full-sentence responses. "
-            "Use open-ended exercises alongside guided ones. Introduce idiomatic expressions. "
-            "Maximum 10-12 new words per session."
-        ),
-        "B2": (
-            "Level B2 (Upper-Intermediate): Complex grammar (subjunctive moods, passive voice, reported speech). "
-            "Abstract vocabulary, nuance, register variation. Use conversation simulations and debate topics. "
-            "Expect paragraph-length answers. Introduce formal vs informal register. "
-            "Maximum 12-15 new words per session."
-        ),
-        "C1": (
-            "Level C1 (Advanced): Focus on style, nuance, idiomatic fluency, and precision. "
-            "Teach advanced connectors, discourse markers, subtle tense distinctions. "
-            "Use text analysis, paraphrasing, and essay-style exercises. "
-            "Push for native-like expression. 10-15 specialized words per session."
-        ),
-        "C2": (
-            "Level C2 (Mastery): Focus on literary style, humor, wordplay, cultural references. "
-            "Fine-tune register, colloquialisms, and regional variation. "
-            "Use creative writing, argumentation, and translation of complex texts. "
-            "Emphasize precision and elegance over quantity."
-        ),
-    }
-    level_guide = _level_guidance.get(user.level)
+    level_guide = _LEVEL_GUIDANCE.get(user.level)
     if level_guide:
         sections.append(f"## LEVEL GUIDANCE\n{level_guide}")
 
@@ -736,8 +1139,7 @@ def build_system_prompt(
             "After adding vocabulary, immediately create a practice exercise using those words.",
         ]
         # Nudge harder when vocabulary is thin for the student's level
-        _level_vocab_floor = {"A1": 20, "A2": 60, "B1": 120, "B2": 200, "C1": 300, "C2": 400}
-        floor = _level_vocab_floor.get(user.level, 0)
+        floor = tuning.level_vocab_floor.get(user.level, 0)
         if user.vocabulary_count < floor:
             vocab_suggestion_lines.append(
                 f"- NOTE: The student knows only {user.vocabulary_count} words, which is "
@@ -747,190 +1149,12 @@ def build_system_prompt(
         sections.append("## VOCABULARY STRATEGY\n" + "\n".join(vocab_suggestion_lines))
 
     # --- 10. Session context ---
-    ctx_lines = [
-        f"Date: {session_ctx['date_str']}",
-        f"Time: {session_ctx['time_of_day']} ({session_ctx['day_of_week']}), {session_ctx['local_time']}",
-    ]
-
-    # Greeting note
-    ctx_lines.append(f"\nGreeting style: {session_ctx['greeting_style']}")
-    ctx_lines.append(session_ctx["greeting_note"])
-
-    # Last activity
-    if last_activity:
-        gap_h = session_ctx["gap_hours"]
-        if gap_h >= tuning.comeback_threshold_hours:
-            # Stale context: show only the summary. The COMEBACK ADAPTATION
-            # section provides structured priorities for returning users;
-            # detailed stale data would send contradictory signals.
-            ctx_lines.append(
-                f"\nLast session ({round(gap_h / 24, 1)} days ago — context is stale):"
-            )
-            ctx_lines.append(f"  Summary: {last_activity.get('session_summary', 'N/A')}")
-            if last_activity.get("status") == "incomplete":
-                ctx_lines.append(
-                    f"  Status: incomplete ({last_activity.get('close_reason', 'unknown')})"
-                )
-        else:
-            # Recent context: show full details
-            ctx_lines.append(f"\nLast session summary: {last_activity.get('session_summary', 'N/A')}")
-            if last_activity.get("topic"):
-                ctx_lines.append(f"Last topic: {last_activity['topic']}")
-            if last_activity.get("last_exercise"):
-                ctx_lines.append(f"Last exercise: {last_activity['last_exercise']}")
-            if last_activity.get("score") is not None:
-                ctx_lines.append(f"Last score: {last_activity['score']}/10")
-            if last_activity.get("topics_covered"):
-                ctx_lines.append(
-                    f"Topics covered last time: {', '.join(last_activity['topics_covered'][:10])}"
-                )
-            if last_activity.get("status") == "incomplete" and gap_h < 24:
-                prev_close = last_activity.get("close_reason", "")
-                topic_info = f" on '{last_activity['topic']}'" if last_activity.get("topic") else ""
-                prev_exercises = last_activity.get("exercise_count", 0)
-
-                if prev_close == "idle_timeout" and (
-                    prev_exercises >= 2
-                    or last_activity.get("agent_stopped")
-                ):
-                    note = (
-                        f"NOTE: Last session{topic_info} ended normally (idle timeout after wrapping up). "
-                        "Do NOT tease about leaving. Offer to continue or start something new."
-                    )
-                elif prev_close == "idle_timeout" and last_activity.get("pending_context"):
-                    pending = last_activity["pending_context"]
-                    note = (
-                        f"NOTE: Last session{topic_info} was abandoned mid-task "
-                        f"(tutor was {pending}). Light playful teasing is fine — "
-                        "warm, not passive-aggressive. Offer to continue or start fresh."
-                    )
-                elif prev_close == "idle_timeout":
-                    note = (
-                        f"NOTE: Last session{topic_info} had low engagement. "
-                        "Welcome warmly, suggest a concrete activity."
-                    )
-                elif prev_close in ("turn_limit", "cost_limit"):
-                    note = (
-                        f"NOTE: Last session{topic_info} was cut short by a system limit. "
-                        "Do NOT tease — the bot ended it. Offer to continue or start fresh."
-                    )
-                elif prev_close in ("shutdown", "error"):
-                    note = (
-                        f"NOTE: Last session{topic_info} ended due to a technical issue. "
-                        "Do NOT blame the student. Offer to continue or start fresh."
-                    )
-                else:
-                    note = (
-                        f"NOTE: Last session ended mid-conversation{topic_info}. "
-                        "Offer to continue or start fresh."
-                    )
-                struggling = last_activity.get("struggling_topics")
-                if struggling:
-                    topics_str = ", ".join(
-                        f"{s['topic']} ({s['avg_score']}/10)" for s in struggling[:3]
-                    )
-                    note += f" Struggled with: {topics_str} — revisit with simpler exercises."
-                ctx_lines.append(note)
-            if last_activity.get("words_practiced"):
-                ctx_lines.append(
-                    f"Words practiced last time: {', '.join(_sanitize(w, 50) for w in last_activity['words_practiced'][:10])}"
-                )
-            if last_activity.get("exercise_type_scores"):
-                scores_str = ", ".join(
-                    f"{t}: {s}/10" for t, s in last_activity["exercise_type_scores"].items()
-                )
-                ctx_lines.append(f"Exercise performance last time: {scores_str}")
-            if last_activity.get("struggling_topics") and last_activity.get("status") != "incomplete":
-                # For completed sessions, still note struggling topics for follow-up
-                struggling = last_activity["struggling_topics"]
-                topics_str = ", ".join(
-                    f"{s['topic']} ({s['avg_score']}/10)" for s in struggling[:3]
-                )
-                ctx_lines.append(f"Topics that need extra practice: {topics_str}")
-
-    # Session history (previous sessions beyond last_activity)
-    session_history = user.session_history or []
-    if session_history:
-        ctx_lines.append("\nRecent session history:")
-        for entry in session_history[-5:]:
-            parts = [entry.get("date", "?")]
-            if entry.get("summary"):
-                parts.append(entry["summary"])
-            if entry.get("score") is not None:
-                parts.append(f"score: {entry['score']}/10")
-            if entry.get("status") == "incomplete":
-                entry_reason = entry.get("close_reason", "")
-                if entry_reason in ("idle_timeout", "turn_limit", "cost_limit"):
-                    parts.append(f"({entry_reason.replace('_', ' ')})")
-                else:
-                    parts.append("(incomplete)")
-            if entry.get("exercise_count"):
-                parts.append(f"{entry['exercise_count']} exercises")
-            ctx_lines.append(f"  - {' | '.join(parts)}")
-
-    # Additional notes about the student
-    if user.additional_notes:
-        ctx_lines.append("\nAdditional notes about this student:")
-        for note in _sanitize_list(user.additional_notes):
-            ctx_lines.append(f"  - {note}")
-
-    # 7-day topic performance snapshot
-    if topic_performance:
-        ctx_lines.append("\nTopic performance (last 7 days):")
-        # Sort by avg score ascending (struggling topics first), then by count descending
-        sorted_topics = sorted(
-            topic_performance.items(),
-            key=lambda kv: (kv[1]["avg_score"], -kv[1]["count"]),
-        )
-        for topic, stats in sorted_topics[:10]:
-            ctx_lines.append(
-                f"  - {topic}: avg {stats['avg_score']}/10 ({stats['count']} exercises)"
-            )
-
-    # Topics needing review (spaced repetition for exercise topics)
-    if stale_topics:
-        ctx_lines.append("\nTopics needing review (not practiced in 7+ days with low scores):")
-        for st in stale_topics[:5]:
-            ctx_lines.append(
-                f"  - {st['topic']} (last practiced: {st['days_ago']} days ago, "
-                f"avg score: {st['avg_score']:.1f})"
-            )
-
-    # Active schedules (capped to avoid prompt bloat)
-    if active_schedules:
-        active = [s for s in active_schedules if s.get("status") == "active"]
-        paused = [s for s in active_schedules if s.get("status") == "paused"]
-        if active or paused:
-            ctx_lines.append("\nActive schedules:")
-            for s in active[:10]:
-                ctx_lines.append(f"  - {s['description']} ({s['type']})")
-            for s in paused[:5]:
-                ctx_lines.append(f"  - {s['description']} ({s['type']}) [paused]")
-            overflow = len(active) + len(paused) - 15
-            if overflow > 0:
-                ctx_lines.append(f"  ... and {overflow} more")
-            ctx_lines.append(
-                "Check existing schedules before creating new ones to avoid duplicates."
-            )
-
-    # Celebrations
-    if session_ctx["celebrations"]:
-        ctx_lines.append("\nCelebrations pending:")
-        for c in session_ctx["celebrations"]:
-            ctx_lines.append(f"  - {c}")
-
-    # Proactive notification context
-    if session_ctx.get("notification_text"):
-        hours_ago = session_ctx.get("notification_hours_ago")
-        time_note = f" ({hours_ago:.0f}h ago)" if hours_ago else ""
-        ctx_lines.append(
-            "\n## CONTEXT: USER IS RESPONDING TO A NOTIFICATION\n"
-            f'You recently sent{time_note}: "{session_ctx["notification_text"]}"\n'
-            "The user's response below is likely a reply to this. "
-            "Continue naturally — don't repeat the notification."
-        )
-
-    sections.append("## SESSION CONTEXT\n" + "\n".join(ctx_lines))
+    sections.append(_build_session_context_section(
+        user, session_ctx,
+        stale_topics=stale_topics,
+        topic_performance=topic_performance,
+        active_schedules=active_schedules,
+    ))
 
     # --- 11. Comeback adaptation (long absence only, skip for first session) ---
     if not is_first_session:
@@ -960,156 +1184,9 @@ def build_system_prompt(
     )
 
     # --- 13. Learning plan (conditional) ---
-    if active_plan and plan_progress and user.onboarding_completed:
-        # Case A: active plan — always show, even on first post-onboarding session
-        local_now = user_local_now(user)
-        today = local_now.date()
-        elapsed_days = (today - active_plan.start_date).days
-        current_week = max(1, min(active_plan.total_weeks, elapsed_days // 7 + 1))
-        days_remaining = max(0, (active_plan.target_end_date - today).days)
-
-        plan_lines = [
-            f"Goal: {active_plan.current_level} → {active_plan.target_level} | "
-            f"Timeline: {active_plan.start_date} to {active_plan.target_end_date} "
-            f"({days_remaining} days remaining)",
-            f"Overall progress: {plan_progress['progress_pct']}% "
-            f"({plan_progress['completed_topics']}/{plan_progress['total_topics']} "
-            f"topics completed)",
-        ]
-
-        # Show current phase details
-        progress_phases = plan_progress.get("phases", [])
-        if 0 < current_week <= len(progress_phases):
-            phase = progress_phases[current_week - 1]
-            plan_lines.append(
-                f"\nCurrent phase (Week {current_week}): \"{phase.get('focus', 'N/A')}\""
-            )
-            for t in phase.get("topics", []):
-                status_mark = {
-                    "completed": "[completed]",
-                    "in_progress": "[in_progress]",
-                    "pending": "[pending]",
-                }.get(t["status"], "[?]")
-                detail_parts = [f"{status_mark} {t['name']}"]
-                if t.get("exercises"):
-                    detail_parts.append(f"({t['exercises']} exercises")
-                    if t.get("avg_score") is not None:
-                        detail_parts[-1] += f", avg {t['avg_score']}"
-                    detail_parts[-1] += ")"
-                plan_lines.append(f"  {' '.join(detail_parts)}")
-
-        # Show next phase preview
-        if current_week < len(progress_phases):
-            next_phase = progress_phases[current_week]
-            plan_lines.append(
-                f"\nNext phase (Week {current_week + 1}): "
-                f"\"{next_phase.get('focus', 'N/A')}\""
-            )
-
-        # Pace assessment
-        if plan_progress["total_topics"] > 0:
-            elapsed_days = max(1, (today - active_plan.start_date).days)
-            total_days = max(1, (active_plan.target_end_date - active_plan.start_date).days)
-            expected_pct = (elapsed_days / total_days) * 100
-            actual_pct = plan_progress["progress_pct"]
-            gap = expected_pct - actual_pct
-            if gap >= tuning.plan_behind_schedule_pct:
-                plan_lines.append(
-                    f"\nPace: BEHIND schedule ({actual_pct}% done, "
-                    f"expected ~{int(expected_pct)}%). "
-                    "Focus on completing pending topics. Consider simplifying exercises "
-                    "or adapting the plan to be more achievable."
-                )
-            elif gap <= -15:
-                plan_lines.append(
-                    f"\nPace: AHEAD of schedule ({actual_pct}% done, "
-                    f"expected ~{int(expected_pct)}%). "
-                    "Great progress! Consider adding depth to current topics "
-                    "or previewing next phase content."
-                )
-
-        # Vocabulary target for current phase
-        if 0 < current_week <= len((active_plan.plan_data or {}).get("phases", [])):
-            raw_phase = (active_plan.plan_data or {}).get("phases", [])[current_week - 1]
-            vocab_target = raw_phase.get("vocabulary_target")
-            vocab_theme = raw_phase.get("vocabulary_theme")
-            if vocab_target or vocab_theme:
-                vocab_note = "Vocabulary this week:"
-                if vocab_theme:
-                    vocab_note += f" theme \"{vocab_theme}\""
-                if vocab_target:
-                    vocab_note += f", target {vocab_target} new words"
-                plan_lines.append(vocab_note)
-
-            # Assessment reminder
-            assessment = raw_phase.get("assessment")
-            if assessment and not assessment.get("completed"):
-                plan_lines.append(
-                    f"Assessment planned: {assessment.get('type', 'checkpoint')} "
-                    f"on {assessment.get('date', 'end of week')} — "
-                    "run a comprehensive review exercise covering this phase's topics."
-                )
-
-        plan_lines.append(
-            "\nGuidelines:"
-            "\n- Align today's exercises with the current phase topics."
-            "\n- When recording exercises for plan topics, use the exact plan "
-            "topic names in the `topic` field of record_exercise_result. "
-            "If an exercise covers a sub-aspect, use the parent plan topic name "
-            "(e.g. plan has 'Past Tense Verbs' and you drill irregular past tense "
-            "→ record as 'Past Tense Verbs')."
-            "\n- If the student is significantly ahead or behind schedule, "
-            "call manage_learning_plan(action='adapt') to adjust remaining phases."
-            "\n- Level auto-adjustments happen via exercise scores. If a level "
-            "change occurs, the plan may become outdated — proactively suggest adapting it."
-            "\n- When a plan phase is fully completed, briefly celebrate and "
-            "preview the next phase to keep the student motivated."
-        )
-        sections.append("## LEARNING PLAN\n" + "\n".join(plan_lines))
-
-    elif (
-        not is_first_session
-        and user.onboarding_completed
-        and (user.sessions_completed or 0) >= tuning.plan_min_sessions_before_suggest
-    ):
-            # No plan — suggest creating one
-            current_idx = _LEVELS.index(user.level) if user.level in _LEVELS else 0
-            if current_idx < len(_LEVELS) - 1:
-                next_level = _LEVELS[current_idx + 1]
-                plan_goal = (
-                    f"targeting progression from {user.level} to {next_level}"
-                )
-            else:
-                next_level = user.level
-                plan_goal = (
-                    f"covering advanced {user.level}-level topics "
-                    "(literary style, colloquialisms, specialized vocabulary, creative expression)"
-                )
-            sections.append(
-                "## LEARNING PLAN\n"
-                "The student does not have an active learning plan. Propose creating "
-                "one early in the session using manage_learning_plan(action='create'). "
-                f"Explain the plan will cover approximately {tuning.plan_default_weeks} weeks, "
-                f"{plan_goal}. "
-                "Ask about their available study time (sessions per week) before creating. "
-                "If the student declines, respect that and proceed without a plan.\n"
-                "When creating a plan, include:\n"
-                "- Weekly phases with 2-5 topics each, tailored to the student's interests\n"
-                "- Vocabulary themes and targets per week\n"
-                "- At least one assessment (mid-plan or end-of-plan)\n"
-                "- Realistic expectations based on their session frequency"
-            )
-
-    elif not is_first_session and user.onboarding_completed:
-        # Early sessions (before plan_min_sessions_before_suggest threshold)
-        sections.append(
-            "## LEARNING PLAN\n"
-            "No active plan. Don't suggest creating one yet — focus on teaching.\n"
-            "If the student explicitly asks for a plan, create one using "
-            "manage_learning_plan(action='create'). Ask about their available study "
-            "time first. Include weekly phases with 2-5 topics, vocabulary themes, "
-            "and an assessment."
-        )
+    plan_section = _build_learning_plan_section(user, active_plan, plan_progress)
+    if plan_section:
+        sections.append(plan_section)
 
     # --- 14. Bot capabilities (agent ↔ UI boundary) ---
     sections.append(
@@ -1148,8 +1225,8 @@ _PROACTIVE_TASK_INSTRUCTIONS: dict[str, str] = {
         "The student has {due_count} vocabulary cards due for review. "
         "Generate an encouraging message that motivates them to start a review session. "
         "Mention the number of due cards. "
-        "You may call get_due_vocabulary first to see which specific words are due "
-        "and personalize the message with 2-3 example words."
+        "See the DUE VOCABULARY section below for specific words to mention — "
+        "personalize the message with 2-3 example words from the list."
     ),
     "proactive_quiz": (
         "Create a short quiz (2-3 questions) based on the student's level, "
@@ -1161,9 +1238,8 @@ _PROACTIVE_TASK_INSTRUCTIONS: dict[str, str] = {
     ),
     "proactive_summary": (
         "Generate a personalized progress summary for the student. "
-        "Call get_progress_summary first to get comprehensive stats (score trends, "
-        "topic performance, vocabulary progress, session activity). "
-        "You may also call get_exercise_history for recent exercise details. "
+        "See the PROGRESS DATA section below for comprehensive stats "
+        "(score trends, topic performance, vocabulary progress, session activity). "
         "Include specific metrics: weekly trends, topics practiced, streak status. "
         "Highlight achievements and suggest areas for improvement."
     ),
@@ -1182,15 +1258,16 @@ def build_proactive_prompt(
     *,
     active_plan: "LearningPlan | None" = None,
     plan_progress: dict | None = None,
+    prefetch: dict | None = None,
 ) -> str:
     """Build a focused system prompt for proactive notification sessions.
 
     Much smaller than the interactive prompt — proactive sessions have a single
-    task: generate one notification message via send_notification.
+    task: generate one notification message as direct text output.
     """
     native_lang = _get_language_name(user.native_language)
     target_lang = _get_language_name(user.target_language)
-    recent_5 = (user.recent_scores or [])[-5:]
+    recent_n = (user.recent_scores or [])[-tuning.recent_scores_display:]
 
     sections: list[str] = []
 
@@ -1201,28 +1278,28 @@ def build_proactive_prompt(
         "## RULES\n"
         f"1. Communicate in {native_lang} (the student's native language).\n"
         f"2. Use {target_lang} only for teaching content (vocabulary, examples).\n"
-        "3. Format using Telegram HTML only: <b>bold</b>, <i>italic</i>, <code>code</code>. "
-        "NEVER use Markdown (##, **, *, `, ---) — it displays as raw text in Telegram.\n"
-        "4. You MUST call send_notification exactly once with your final message.\n"
+        "3. Use **bold**, *italic*, `code` for formatting. NEVER use markdown tables.\n"
+        "4. Write the notification message directly as your response. Do NOT call any tools.\n"
         "5. Do NOT start a conversation — the student may not see this for hours.\n"
         "6. Keep the message concise and self-contained.\n"
         "7. Respect topics_to_avoid — never mention them."
     )
 
     # --- 2. Student profile (compact) ---
+    ts = user.field_timestamps or {}
     profile_lines = [
-        f"Name: {_sanitize(user.first_name, 50)}",
-        f"Native language: {native_lang}",
-        f"Target language: {target_lang}",
-        f"Level: {user.level}",
+        f"Name: {_sanitize(user.first_name, tuning.prompt_name_max_len)}",
+        f"Native language: {_dated(native_lang, ts.get('native_language'))}",
+        f"Target language: {_dated(target_lang, ts.get('target_language'))}",
+        f"Level: {_dated(user.level, ts.get('level'))}",
         f"Streak: {user.streak_days} days",
         f"Vocabulary: {user.vocabulary_count} words",
-        f"Interests: {', '.join(render_interest(i) for i in _sanitize_list(user.interests)) if user.interests else 'not set'}",
-        f"Learning goals: {'; '.join(render_goal(g, target_language=target_lang) for g in _sanitize_list(user.learning_goals)) if user.learning_goals else 'none set'}",
-        f"Weak areas: {', '.join(_sanitize_list(user.weak_areas)) if user.weak_areas else 'none identified'}",
-        f"Recent scores (last 5): {recent_5 if recent_5 else 'no scores yet'}",
-        f"Topics to avoid: {', '.join(_sanitize_list(user.topics_to_avoid)) if user.topics_to_avoid else 'none'}",
-        f"Additional notes: {'; '.join(_sanitize_list(user.additional_notes)) if user.additional_notes else 'none'}",
+        f"Interests: {', '.join(_dated_item(render_interest(_sanitize(i)), ts, 'interests', i) for i in user.interests) if user.interests else 'not set'}",
+        f"Learning goals: {'; '.join(_dated_item(render_goal(_sanitize(g), target_language=target_lang), ts, 'learning_goals', g) for g in user.learning_goals) if user.learning_goals else 'none set'}",
+        f"Weak areas: {', '.join(_dated_item(_sanitize(i), ts, 'weak_areas', i) for i in user.weak_areas) if user.weak_areas else 'none identified'}",
+        f"Recent scores (last {tuning.recent_scores_display}): {recent_n if recent_n else 'no scores yet'}",
+        f"Topics to avoid: {', '.join(_dated_item(_sanitize(i), ts, 'topics_to_avoid', i) for i in user.topics_to_avoid) if user.topics_to_avoid else 'none'}",
+        f"Additional notes: {'; '.join(_dated_item(_sanitize(i), ts, 'additional_notes', i) for i in user.additional_notes) if user.additional_notes else 'none'}",
     ]
     sections.append("## STUDENT PROFILE\n" + "\n".join(profile_lines))
 
@@ -1230,8 +1307,8 @@ def build_proactive_prompt(
     local_now = user_local_now(user)
     local_hour = local_now.hour
     time_of_day = (
-        "morning" if local_hour < 12
-        else "afternoon" if local_hour < 17
+        "morning" if local_hour < tuning.time_of_day_morning_end
+        else "afternoon" if local_hour < tuning.time_of_day_afternoon_end
         else "evening"
     )
     sections.append(
@@ -1259,6 +1336,69 @@ def build_proactive_prompt(
     if safe_data:
         ctx_lines = [f"- {k}: {_sanitize(str(v))}" for k, v in safe_data.items()]
         sections.append("## TRIGGER CONTEXT\n" + "\n".join(ctx_lines))
+
+    # --- 4b. Pre-fetched data sections ---
+    pf = prefetch or {}
+
+    if pf.get("due_vocabulary"):
+        vocab_lines = []
+        for i, card in enumerate(pf["due_vocabulary"], 1):
+            word = _sanitize(str(card.get("word", "")), 50)
+            translation = _sanitize(str(card.get("translation", "")), 50)
+            topic = _sanitize(str(card.get("topic", "")), 50)
+            reviews = card.get("review_count", 0)
+            vocab_lines.append(f"{i}. **{word}** — {translation} (topic: {topic}, reviewed {reviews} times)")
+        sections.append(
+            "## DUE VOCABULARY\n"
+            "The following cards are due for review (most overdue first):\n"
+            + "\n".join(vocab_lines)
+            + "\n\nUse 2-3 of these words to personalize your message."
+        )
+
+    if pf.get("progress_summary"):
+        ps = pf["progress_summary"]
+        lines = ["## PROGRESS DATA"]
+
+        # Score trends
+        lines.append("### Score Trends")
+        s7 = ps.get("score_7d", {})
+        s30 = ps.get("score_30d", {})
+        if s7.get("count", 0) > 0:
+            lines.append(f"- Last 7 days: avg {s7.get('avg', 0):.1f}/10, {s7['count']} exercises")
+        else:
+            lines.append("- Last 7 days: no exercises")
+        if s30.get("count", 0) > 0:
+            lines.append(f"- Last 30 days: avg {s30.get('avg', 0):.1f}/10, {s30['count']} exercises")
+        else:
+            lines.append("- Last 30 days: no exercises")
+
+        # Topic performance
+        topic_perf = ps.get("topic_performance", [])
+        if topic_perf:
+            lines.append("### Topic Performance")
+            for tp in topic_perf[:10]:
+                avg = tp.get("avg_score") or 0
+                lines.append(
+                    f"- {_sanitize(str(tp.get('topic', '?')), 50)}: "
+                    f"avg {avg:.1f}/10 ({tp.get('exercise_count', 0)} exercises)"
+                )
+
+        # Vocabulary
+        vocab = ps.get("vocabulary", {})
+        total_vocab = sum(vocab.get(k, 0) for k in ("new", "learning", "review", "relearning"))
+        lines.append("### Vocabulary")
+        lines.append(
+            f"- Total: {total_vocab} "
+            f"(new: {vocab.get('new', 0)}, learning: {vocab.get('learning', 0)}, "
+            f"review: {vocab.get('review', 0)}, relearning: {vocab.get('relearning', 0)})"
+        )
+
+        # Session activity
+        sw = ps.get("sessions_this_week", 0)
+        lines.append("### Session Activity")
+        lines.append(f"- This week: {sw} sessions")
+
+        sections.append("\n".join(lines))
 
     # --- 5. Learning plan context (compact, for proactive_summary) ---
     if active_plan and plan_progress and session_type == "proactive_summary":
@@ -1338,10 +1478,7 @@ def build_summary_prompt(
         f"1. Write ENTIRELY in {native_lang} (the student's native language).\n"
         f"2. You may include {target_lang} words only when referencing specific "
         "vocabulary the student practiced.\n"
-        "3. Format using Telegram HTML tags ONLY: <b>bold</b>, <i>italic</i>, "
-        "<code>code</code>. NEVER use Markdown syntax — no asterisks (*bold*), "
-        "no underscores (_italic_), no backticks (`code`), no bullet dashes (- item). "
-        "Use plain text or HTML tags exclusively.\n"
+        "3. Use **bold**, *italic*, `code` for formatting. NEVER use markdown tables.\n"
         "4. Keep the summary concise: 2-4 sentences maximum.\n"
         "5. Be honest and constructive. Acknowledge what was accomplished. "
         "If little was done, say so directly and provide specific recommendations. "
@@ -1355,7 +1492,7 @@ def build_summary_prompt(
         "language. The very first word must be part of the actual message to the student "
         "(e.g. start with praise, a greeting, or a comment about their work).\n"
         "8. If your summary has distinct parts (achievements vs encouragement), "
-        "you may separate them with === on its own line to send as separate messages.\n"
+        "you may separate them with --- on its own line to send as separate messages.\n"
         "9. Do NOT comment on session duration or how long the student spent. "
         "Only mention exercises the student actually completed and scored. "
         "If an exercise was posed but never answered, you may note it was "
@@ -1384,13 +1521,13 @@ def build_summary_prompt(
     local_now = datetime.now(timezone.utc).astimezone(safe_zoneinfo(user_timezone))
     local_hour = local_now.hour
     time_of_day = (
-        "morning" if local_hour < 12
-        else "afternoon" if local_hour < 17
+        "morning" if local_hour < tuning.time_of_day_morning_end
+        else "afternoon" if local_hour < tuning.time_of_day_afternoon_end
         else "evening"
     )
 
     data_lines = [
-        f"Student: {_sanitize(user_name, 50)} (level {user_level}, streak {user_streak} days)",
+        f"Student: {_sanitize(user_name, tuning.prompt_name_max_len)} (level {user_level}, streak {user_streak} days)",
         f"Current time: {local_now.strftime('%Y-%m-%d %H:%M')} ({time_of_day}, {local_now.strftime('%A')})",
         f"Messages exchanged: {turn_count}",
     ]
@@ -1400,16 +1537,15 @@ def build_summary_prompt(
             "may include exercises the student did not fully complete)"
         )
     if exercise_topics:
-        unique_topics = list(dict.fromkeys(exercise_topics))[:5]
+        unique_topics = list(dict.fromkeys(exercise_topics))
         data_lines.append(f"Topics covered: {', '.join(unique_topics)}")
     if exercise_types:
-        unique_types = list(dict.fromkeys(exercise_types))[:5]
+        unique_types = list(dict.fromkeys(exercise_types))
         data_lines.append(f"Exercise types: {', '.join(unique_types)}")
     if vocab_count:
         data_lines.append(f"New vocabulary added: {vocab_count} word(s)")
     if words_added:
-        sample = words_added[:5]
-        data_lines.append(f"Words learned: {', '.join(sample)}")
+        data_lines.append(f"Words learned: {', '.join(words_added)}")
     if words_reviewed:
         data_lines.append(f"Vocabulary words reviewed via exercises: {words_reviewed}")
     if plan_summary:
