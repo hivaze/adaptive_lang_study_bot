@@ -10,6 +10,26 @@ from adaptive_lang_study_bot.config import settings, tuning
 from adaptive_lang_study_bot.db.models import User
 
 
+def score_label(score: float | int | None) -> str:
+    """Convert a numeric 0-10 score to a qualitative label.
+
+    Used across prompt_builder and tools to prevent leaking raw scores
+    to the agent (Rule #7: never show numeric scores to the student).
+    """
+    if score is None:
+        return "unknown"
+    s = float(score)
+    if s <= 3:
+        return "poor"
+    if s <= 5:
+        return "needs work"
+    if s <= 7:
+        return "good"
+    if s <= 9:
+        return "very good"
+    return "excellent"
+
+
 def safe_zoneinfo(tz_str: str | None) -> _tzinfo:
     """Resolve timezone string to ZoneInfo, falling back to UTC."""
     if not tz_str:

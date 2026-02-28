@@ -280,7 +280,9 @@ async def run_post_session(
             # but the agent was clearly preparing something (called prep tools).
             # This helps the next session know what was "in progress" when the
             # user dropped off.
-            if not exercises and close_reason == CloseReason.IDLE_TIMEOUT and tool_names:
+            if not exercises and close_reason in (
+                CloseReason.IDLE_TIMEOUT, CloseReason.TURN_LIMIT, CloseReason.COST_LIMIT,
+            ) and tool_names:
                 hints = [
                     _PREP_TOOL_HINTS[tc] for tc in tool_names
                     if tc in _PREP_TOOL_HINTS

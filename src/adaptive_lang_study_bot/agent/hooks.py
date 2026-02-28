@@ -169,9 +169,9 @@ def build_session_hooks(user_id: int) -> tuple[dict[str, list[HookMatcher]], Ses
                     hint = _HINT_STRUGGLING
                 elif avg >= tuning.hook_excelling_threshold and count >= 2:
                     hint = _HINT_EXCELLING
-                elif score <= 4:
+                elif score <= tuning.hook_single_struggling_threshold:
                     hint = _HINT_SINGLE_STRUGGLE
-                elif score >= 9:
+                elif score >= tuning.hook_single_excellent_threshold:
                     hint = _HINT_SINGLE_EXCELLENT
                 else:
                     hint = _HINT_MODERATE

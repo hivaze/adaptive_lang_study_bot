@@ -31,7 +31,7 @@ from adaptive_lang_study_bot.enums import (
 )
 from adaptive_lang_study_bot.db.models import User
 from adaptive_lang_study_bot.fsrs_engine.scheduler import create_new_card, review_card
-from adaptive_lang_study_bot.utils import compute_next_trigger, safe_zoneinfo, stamp_field, strip_mcp_prefix
+from adaptive_lang_study_bot.utils import compute_next_trigger, safe_zoneinfo, score_label, stamp_field, strip_mcp_prefix
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -440,6 +440,11 @@ def create_session_tools(
         exercise_type = str(args["exercise_type"]).strip()[:tuning.max_exercise_type_length]
         topic = str(args["topic"]).strip()[:tuning.max_topic_length]
 
+        if not exercise_type:
+            return _err("exercise_type must not be empty")
+        if not topic:
+            return _err("topic must not be empty")
+
         words_raw = args.get("words_involved", "[]")
         try:
             words = json.loads(words_raw) if isinstance(words_raw, str) else words_raw
@@ -447,7 +452,7 @@ def create_session_tools(
             words = [words_raw] if words_raw else []
         if not isinstance(words, list):
             words = [words]
-        words = [str(w).strip()[:tuning.max_word_length] for w in words[:tuning.max_exercise_words]]
+        words = [w for w in (str(w).strip()[:tuning.max_word_length] for w in words[:tuning.max_exercise_words]) if w]
 
         async with session_factory() as db_session:
             try:
@@ -594,9 +599,11 @@ def create_session_tools(
 
         result = {
             "status": "recorded",
-            "score": score,
+            "performance": score_label(normalized_score),
             "topic": topic,
-            "recent_scores": scores[-tuning.recent_scores_display:],
+            "recent_trend": score_label(
+                sum(scores[-tuning.recent_scores_display:]) / len(scores[-tuning.recent_scores_display:])
+            ) if scores else "unknown",
         }
         if adjustments:
             result["adjustments"] = adjustments
@@ -1056,6 +1063,12 @@ def create_session_tools(
                     elapsed_days = (today - plan.start_date).days
                     current_week = max(1, min(plan.total_weeks, elapsed_days // 7 + 1))
                     days_remaining = max(0, (plan.target_end_date - today).days)
+
+                    # Replace raw avg_score with qualitative label (Rule #7)
+                    for phase in progress["phases"]:
+                        for topic in phase.get("topics", []):
+                            if "avg_score" in topic:
+                                topic["avg_score"] = score_label(topic["avg_score"])
 
                     return _ok({
                         "has_plan": True,

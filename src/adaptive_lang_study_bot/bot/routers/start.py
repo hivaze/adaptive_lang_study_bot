@@ -738,13 +738,17 @@ async def on_schedule_pref_selected(
             daily_local += timedelta(days=1)
         daily_trigger_utc = daily_local.astimezone(timezone.utc)
 
-        # Weekly report: Sunday at chosen_hour + 1
-        report_hour = min(hour + 1, 23)
+        # Weekly report: Sunday at chosen_hour + 1 (wraps to Monday 0:00 if hour=23)
+        report_hour = (hour + 1) % 24
+        wraps_day = hour >= 23  # report lands on next day
+        report_day = "MO" if wraps_day else "SU"
+        # Target weekday index: Sunday=6, Monday=0
+        target_weekday = 0 if wraps_day else 6
         weekly_local = now_local.replace(hour=report_hour, minute=0, second=0, microsecond=0)
-        days_until_sunday = (6 - now_local.weekday()) % 7
-        if days_until_sunday == 0 and weekly_local <= now_local:
-            days_until_sunday = 7
-        weekly_local += timedelta(days=days_until_sunday)
+        days_until_target = (target_weekday - now_local.weekday()) % 7
+        if days_until_target == 0 and weekly_local <= now_local:
+            days_until_target = 7
+        weekly_local += timedelta(days=days_until_target)
         weekly_trigger_utc = weekly_local.astimezone(timezone.utc)
 
         await ScheduleRepo.create(
@@ -762,7 +766,7 @@ async def on_schedule_pref_selected(
             db_session,
             user_id=user.telegram_id,
             schedule_type=ScheduleType.PROGRESS_REPORT,
-            rrule=f"FREQ=WEEKLY;BYDAY=SU;BYHOUR={report_hour};BYMINUTE=0",
+            rrule=f"FREQ=WEEKLY;BYDAY={report_day};BYHOUR={report_hour};BYMINUTE=0",
             next_trigger_at=weekly_trigger_utc,
             description=t("start.sched_desc_weekly", lang, time=f"{report_hour}:00"),
             notification_tier=NotificationTier.LLM,

@@ -118,6 +118,8 @@ class BotTuning:
     hook_rolling_avg_window: int = 3
     hook_struggling_threshold: float = 4.0
     hook_excelling_threshold: float = 8.5
+    hook_single_struggling_threshold: int = 4
+    hook_single_excellent_threshold: int = 9
 
     # -- Trigger thresholds (proactive/triggers.py) --
     inactivity_hours_threshold: int = 48

@@ -5,7 +5,7 @@ from adaptive_lang_study_bot.config import CEFR_LEVELS, tuning
 from adaptive_lang_study_bot.db.models import User
 from adaptive_lang_study_bot.enums import Difficulty, SessionStyle
 from adaptive_lang_study_bot.i18n import render_goal, render_interest
-from adaptive_lang_study_bot.utils import get_item_date, get_language_name as _get_language_name, safe_zoneinfo, user_local_now
+from adaptive_lang_study_bot.utils import get_item_date, get_language_name as _get_language_name, safe_zoneinfo, score_label as _score_label, user_local_now
 
 
 class SessionContext(TypedDict):
@@ -103,26 +103,6 @@ _LEVEL_GUIDANCE: dict[str, str] = {
         "Emphasize precision and elegance over quantity."
     ),
 }
-
-
-def _score_label(score: float | int | None) -> str:
-    """Convert a numeric 0-10 score to a qualitative label.
-
-    Rule #7 forbids the agent from showing numeric scores to the student.
-    Replacing numbers with labels in the prompt prevents accidental leakage.
-    """
-    if score is None:
-        return "unknown"
-    s = float(score)
-    if s <= 3:
-        return "poor"
-    if s <= 5:
-        return "needs work"
-    if s <= 7:
-        return "good"
-    if s <= 9:
-        return "very good"
-    return "excellent"
 
 
 def _sanitize(text: str, max_len: int = tuning.prompt_sanitize_default_len) -> str:
@@ -758,7 +738,7 @@ def _build_learning_plan_section(
                 if t.get("exercises"):
                     detail_parts.append(f"({t['exercises']} exercises")
                     if t.get("avg_score") is not None:
-                        detail_parts[-1] += f", avg {t['avg_score']}"
+                        detail_parts[-1] += f", {_score_label(t['avg_score'])}"
                     detail_parts[-1] += ")"
                 plan_lines.append(f"  {' '.join(detail_parts)}")
 
@@ -825,8 +805,16 @@ def _build_learning_plan_section(
             "(e.g. plan has 'Past Tense Verbs' and you drill irregular past tense "
             "→ record as 'Past Tense Verbs')."
             "\n- If the pace assessment above shows BEHIND or AHEAD, follow the ACTION directive."
-            "\n- Level auto-adjustments happen via exercise scores. If a level "
-            "change occurs, the plan may become outdated — proactively suggest adapting it."
+            "\n- PLAN vs LEVEL: Plan progress tracks TOPIC COVERAGE (breadth) — "
+            "whether the student has practiced each topic enough. Level promotion "
+            "tracks OVERALL SCORE CONSISTENCY (depth) — it requires consistently "
+            "high scores across all exercises. A student can complete all plan "
+            "topics while not yet reaching the next level — this is normal. "
+            "When the plan nears completion but level progress (see STUDENT "
+            "PROFILE above) is not yet strong, guide the student to consolidate: "
+            "revisit completed plan topics with harder exercises to strengthen scores."
+            "\n- If a level change occurs, the plan may become outdated — "
+            "proactively suggest adapting it."
             "\n- When a plan phase is fully completed, briefly celebrate and "
             "preview the next phase to keep the student motivated."
             "\n- This plan snapshot is from session start. Use "
