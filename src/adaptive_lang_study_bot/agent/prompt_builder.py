@@ -781,11 +781,12 @@ def _build_learning_plan_section(
             vocab_target = raw_phase.get("vocabulary_target")
             vocab_theme = raw_phase.get("vocabulary_theme")
             if vocab_target or vocab_theme:
-                vocab_note = "Vocabulary this week:"
+                vocab_parts: list[str] = []
                 if vocab_theme:
-                    vocab_note += f" theme \"{vocab_theme}\""
+                    vocab_parts.append(f"theme \"{vocab_theme}\"")
                 if vocab_target:
-                    vocab_note += f", target {vocab_target} new words"
+                    vocab_parts.append(f"target {vocab_target} new words")
+                vocab_note = "Vocabulary this week: " + ", ".join(vocab_parts)
                 plan_lines.append(vocab_note)
 
             assessment = raw_phase.get("assessment")
@@ -1033,7 +1034,7 @@ def build_system_prompt(
         f"Additional notes: {'; '.join(_dated_item(_sanitize(i), ts, 'additional_notes', i) for i in user.additional_notes) if user.additional_notes else 'none yet'}",
         f"Weak areas: {', '.join(_dated_item(_sanitize(i), ts, 'weak_areas', i) for i in user.weak_areas) if user.weak_areas else 'none identified yet'}",
         f"Strong areas: {', '.join(_dated_item(_sanitize(i), ts, 'strong_areas', i) for i in user.strong_areas) if user.strong_areas else 'none identified yet'}",
-        f"Recent scores (last {tuning.recent_scores_display}): {recent_n if recent_n else 'no scores yet'}",
+        f"Recent performance (last {tuning.recent_scores_display}): {', '.join(_score_label(s) for s in recent_n) if recent_n else 'no scores yet'}",
         f"Notifications: {_dated('paused' if user.notifications_paused else 'active', ts.get('notifications_paused'))}",
     ]
     # Level progress visibility (Issue #13)
@@ -1308,7 +1309,7 @@ def build_proactive_prompt(
         f"Interests: {', '.join(_dated_item(render_interest(_sanitize(i)), ts, 'interests', i) for i in user.interests) if user.interests else 'not set'}",
         f"Learning goals: {'; '.join(_dated_item(render_goal(_sanitize(g), target_language=target_lang), ts, 'learning_goals', g) for g in user.learning_goals) if user.learning_goals else 'none set'}",
         f"Weak areas: {', '.join(_dated_item(_sanitize(i), ts, 'weak_areas', i) for i in user.weak_areas) if user.weak_areas else 'none identified'}",
-        f"Recent scores (last {tuning.recent_scores_display}): {recent_n if recent_n else 'no scores yet'}",
+        f"Recent performance (last {tuning.recent_scores_display}): {', '.join(_score_label(s) for s in recent_n) if recent_n else 'no scores yet'}",
         f"Topics to avoid: {', '.join(_dated_item(_sanitize(i), ts, 'topics_to_avoid', i) for i in user.topics_to_avoid) if user.topics_to_avoid else 'none'}",
         f"Additional notes: {'; '.join(_dated_item(_sanitize(i), ts, 'additional_notes', i) for i in user.additional_notes) if user.additional_notes else 'none'}",
     ]

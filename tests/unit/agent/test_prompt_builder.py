@@ -820,7 +820,7 @@ class TestBuildProactivePrompt:
     def test_recent_scores_included(self):
         user = _make_user(recent_scores=[7, 8, 6, 9, 7])
         prompt = build_proactive_prompt(user, "proactive_nudge", {})
-        assert "7, 8, 6, 9, 7" in prompt
+        assert "good, very good, good, very good, good" in prompt
 
     def test_prefetch_due_vocabulary(self):
         user = _make_user()
