@@ -267,7 +267,7 @@ async def run_proactive_llm_session(
             sdk_started = True
             await client.query(
                 "Generate the notification message now. Write it directly as your response. "
-                "Use Telegram HTML formatting (not Markdown). Do NOT call any tools."
+                "Use Markdown formatting (**bold**, *italic*, `code`). Do NOT call any tools."
             )
             async for msg in client.receive_response():
                 if isinstance(msg, AssistantMessage):
@@ -1031,6 +1031,7 @@ class SessionManager:
 
             system_prompt = build_system_prompt(
                 user, session_ctx,
+                session_type=session_type,
                 due_count=due_count,
                 stale_topics=stale_topics,
                 topic_performance=topic_performance,

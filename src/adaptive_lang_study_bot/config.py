@@ -55,7 +55,7 @@ class BotTuning:
     exercise_history_max: int = 50
     due_vocab_max: int = 50
     due_vocab_default_limit: int = 30
-    exercise_history_default_limit: int = 20
+    exercise_history_default_limit: int = 10
     progress_summary_default_days: int = 30
     progress_summary_max_days: int = 90
     recent_scores_display: int = 10

@@ -160,17 +160,27 @@ class TestBuildSystemPrompt:
         prompt = build_system_prompt(user, ctx)
         assert "politics" in prompt
 
-    def test_high_scores_noted(self):
+    def test_high_scores_noted_onboarding(self):
+        """Onboarding sessions (no perf tools) get static score hints."""
+        user = _make_user(recent_scores=[9, 10, 9, 10, 9])
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx, session_type="onboarding")
+        assert "performing well" in prompt
+
+    def test_low_scores_noted_onboarding(self):
+        """Onboarding sessions (no perf tools) get static score hints."""
+        user = _make_user(recent_scores=[2, 3, 1, 2, 3])
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx, session_type="onboarding")
+        assert "struggling" in prompt
+
+    def test_interactive_omits_static_score_hint(self):
+        """Interactive sessions rely on tools — no static score adaptation hint."""
         user = _make_user(recent_scores=[9, 10, 9, 10, 9])
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
-        assert "performing well" in prompt
-
-    def test_low_scores_noted(self):
-        user = _make_user(recent_scores=[2, 3, 1, 2, 3])
-        ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx)
-        assert "struggling" in prompt
+        assert "performing well" not in prompt
+        assert "get_progress_summary" in prompt
 
     def test_incomplete_exercise_noted(self):
         user = _make_user(
@@ -376,15 +386,20 @@ class TestLearningGoals:
 
 
 class TestSessionHistory:
-    """Test that session_history is rendered in the system prompt."""
+    """Test that session_history is rendered in the system prompt.
 
-    def test_history_shown(self):
+    Session history is only included for sessions without performance tools
+    (onboarding). Interactive sessions omit it — the agent can call
+    get_exercise_history for live data.
+    """
+
+    def test_history_shown_onboarding(self):
         user = _make_user(session_history=[
             {"date": "2026-02-19", "summary": "Grammar practice", "topics": ["subjunctive"], "score": 7, "status": "completed"},
             {"date": "2026-02-20", "summary": "Vocabulary review", "topics": ["cooking"], "status": "completed"},
         ])
         ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx)
+        prompt = build_system_prompt(user, ctx, session_type="onboarding")
         assert "Recent session history:" in prompt
         assert "2026-02-19" in prompt
         assert "Grammar practice" in prompt
@@ -392,12 +407,21 @@ class TestSessionHistory:
         assert "2026-02-20" in prompt
         assert "Vocabulary review" in prompt
 
+    def test_history_omitted_interactive(self):
+        """Interactive sessions skip static session history (tools available)."""
+        user = _make_user(session_history=[
+            {"date": "2026-02-19", "summary": "Grammar practice", "score": 7, "status": "completed"},
+        ])
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "Recent session history:" not in prompt
+
     def test_history_shows_incomplete_status(self):
         user = _make_user(session_history=[
             {"date": "2026-02-20", "summary": "Verb practice", "status": "incomplete"},
         ])
         ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx)
+        prompt = build_system_prompt(user, ctx, session_type="onboarding")
         assert "(incomplete)" in prompt
 
     def test_history_shows_score(self):
@@ -405,13 +429,13 @@ class TestSessionHistory:
             {"date": "2026-02-20", "summary": "Quiz", "score": 8, "status": "completed"},
         ])
         ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx)
+        prompt = build_system_prompt(user, ctx, session_type="onboarding")
         assert "score: very good" in prompt
 
     def test_empty_history_no_section(self):
         user = _make_user(session_history=[])
         ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx)
+        prompt = build_system_prompt(user, ctx, session_type="onboarding")
         assert "Recent session history:" not in prompt
 
     def test_none_history_no_crash(self):
@@ -425,7 +449,7 @@ class TestSessionHistory:
             {"date": "2026-02-20", "summary": "Mixed practice", "topics": ["verbs", "cooking", "travel"], "status": "completed"},
         ])
         ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx)
+        prompt = build_system_prompt(user, ctx, session_type="onboarding")
         assert "verbs" in prompt
         assert "cooking" in prompt
 
@@ -436,7 +460,7 @@ class TestSessionHistory:
             for i in range(1, 14)
         ])
         ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx)
+        prompt = build_system_prompt(user, ctx, session_type="onboarding")
         # All entries should be present — no prompt-level cap
         assert "Session 1" in prompt
         assert "Session 8" in prompt
@@ -633,32 +657,45 @@ class TestErrorPatterns:
 
 
 class TestStaleTopics:
-    """Test stale topics rendering in the prompt."""
+    """Test stale topics rendering in the prompt.
 
-    def test_stale_topics_rendered(self):
+    Stale topics and topic performance are only included for sessions
+    without performance tools (onboarding). Interactive sessions omit
+    them — the agent can call get_progress_summary for live data.
+    """
+
+    def test_stale_topics_rendered_onboarding(self):
         user = _make_user()
         ctx = compute_session_context(user)
         stale = [
             {"topic": "subjunctive", "days_ago": 10.5, "avg_score": 4.2},
             {"topic": "travel vocab", "days_ago": 8.0, "avg_score": 5.5},
         ]
-        prompt = build_system_prompt(user, ctx, stale_topics=stale)
+        prompt = build_system_prompt(user, ctx, stale_topics=stale, session_type="onboarding")
         assert "Topics needing review" in prompt
         assert "subjunctive" in prompt
         assert "10.5" in prompt
         assert "4.2" in prompt
         assert "travel vocab" in prompt
 
+    def test_stale_topics_omitted_interactive(self):
+        """Interactive sessions skip static stale topics (tools available)."""
+        user = _make_user()
+        ctx = compute_session_context(user)
+        stale = [{"topic": "subjunctive", "days_ago": 10.5, "avg_score": 4.2}]
+        prompt = build_system_prompt(user, ctx, stale_topics=stale)
+        assert "Topics needing review" not in prompt
+
     def test_empty_stale_topics(self):
         user = _make_user()
         ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx, stale_topics=[])
+        prompt = build_system_prompt(user, ctx, stale_topics=[], session_type="onboarding")
         assert "Topics needing review" not in prompt
 
     def test_none_stale_topics(self):
         user = _make_user()
         ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx, stale_topics=None)
+        prompt = build_system_prompt(user, ctx, stale_topics=None, session_type="onboarding")
         assert "Topics needing review" not in prompt
 
     def test_topic_review_instruction(self):
@@ -669,16 +706,20 @@ class TestStaleTopics:
 
 
 class TestTopicPerformance:
-    """Test 7-day topic performance snapshot rendering in the prompt."""
+    """Test 7-day topic performance snapshot rendering in the prompt.
 
-    def test_topic_performance_rendered(self):
+    Only included for sessions without performance tools (onboarding).
+    Interactive sessions rely on get_progress_summary for live data.
+    """
+
+    def test_topic_performance_rendered_onboarding(self):
         user = _make_user()
         ctx = compute_session_context(user)
         perf = {
             "subjunctive": {"avg_score": 4.2, "count": 5},
             "travel vocab": {"avg_score": 8.0, "count": 3},
         }
-        prompt = build_system_prompt(user, ctx, topic_performance=perf)
+        prompt = build_system_prompt(user, ctx, topic_performance=perf, session_type="onboarding")
         assert "Topic performance (last 7 days):" in prompt
         assert "subjunctive" in prompt
         assert "needs work" in prompt  # 4.2 → needs work
@@ -686,6 +727,14 @@ class TestTopicPerformance:
         assert "travel vocab" in prompt
         assert "very good" in prompt  # 8.0 → very good
         assert "3 exercises" in prompt
+
+    def test_topic_performance_omitted_interactive(self):
+        """Interactive sessions skip static topic performance (tools available)."""
+        user = _make_user()
+        ctx = compute_session_context(user)
+        perf = {"subjunctive": {"avg_score": 4.2, "count": 5}}
+        prompt = build_system_prompt(user, ctx, topic_performance=perf)
+        assert "Topic performance (last 7 days):" not in prompt
 
     def test_topic_performance_sorted_by_count(self):
         """Topics should be sorted by exercise count descending."""
@@ -695,7 +744,7 @@ class TestTopicPerformance:
             "rare_topic": {"avg_score": 7.0, "count": 1},
             "common_topic": {"avg_score": 6.0, "count": 10},
         }
-        prompt = build_system_prompt(user, ctx, topic_performance=perf)
+        prompt = build_system_prompt(user, ctx, topic_performance=perf, session_type="onboarding")
         common_pos = prompt.index("common_topic")
         rare_pos = prompt.index("rare_topic")
         assert common_pos < rare_pos
@@ -708,7 +757,7 @@ class TestTopicPerformance:
             f"topic_{i}": {"avg_score": 5.0, "count": 20 - i}
             for i in range(12)
         }
-        prompt = build_system_prompt(user, ctx, topic_performance=perf)
+        prompt = build_system_prompt(user, ctx, topic_performance=perf, session_type="onboarding")
         # All topics should be present — no prompt-level cap
         assert "topic_0" in prompt
         assert "topic_9" in prompt
@@ -718,13 +767,13 @@ class TestTopicPerformance:
     def test_empty_topic_performance(self):
         user = _make_user()
         ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx, topic_performance={})
+        prompt = build_system_prompt(user, ctx, topic_performance={}, session_type="onboarding")
         assert "Topic performance (last 7 days):" not in prompt
 
     def test_none_topic_performance(self):
         user = _make_user()
         ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx, topic_performance=None)
+        prompt = build_system_prompt(user, ctx, topic_performance=None, session_type="onboarding")
         assert "Topic performance (last 7 days):" not in prompt
 
 
@@ -1216,17 +1265,51 @@ class TestIdleTimeoutContinuation:
         assert "cut short by a system limit" in prompt
         assert "Do NOT tease" in prompt
 
-    def test_shutdown_uses_technical_issue_wording(self):
+    def test_shutdown_with_exercises_uses_technical_issue_wording(self):
+        """Shutdown of a session with exercises (short gap) → 'technical issue'."""
+        user = _make_user(
+            last_activity={
+                "status": "incomplete",
+                "close_reason": "shutdown",
+                "topic": "grammar",
+                "session_summary": "Grammar session",
+                "exercise_count": 2,
+            },
+            last_session_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        )
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "technical issue" in prompt
+        assert "abandoned" not in prompt
+
+    def test_shutdown_without_exercises_suppresses_note(self):
+        """Shutdown of an empty/low-engagement session → no 'technical issue' note."""
         user = _make_user(last_activity={
             "status": "incomplete",
             "close_reason": "shutdown",
             "topic": "grammar",
             "session_summary": "Grammar session",
+            "exercise_count": 0,
         })
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
-        assert "technical issue" in prompt
-        assert "abandoned" not in prompt
+        assert "technical issue" not in prompt
+
+    def test_shutdown_long_gap_suppresses_note(self):
+        """Shutdown that happened many hours ago → no 'technical issue' note."""
+        user = _make_user(
+            last_activity={
+                "status": "incomplete",
+                "close_reason": "shutdown",
+                "topic": "grammar",
+                "session_summary": "Grammar session",
+                "exercise_count": 3,
+            },
+            last_session_at=datetime.now(timezone.utc) - timedelta(hours=12),
+        )
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        assert "technical issue" not in prompt
 
     def test_no_close_reason_uses_default_wording(self):
         """Legacy last_activity without close_reason uses default wording."""
@@ -1333,14 +1416,17 @@ class TestIdleTimeoutContinuation:
 
 
 class TestCloseReasonInSessionHistory:
-    """Test that close_reason is rendered in session history entries."""
+    """Test that close_reason is rendered in session history entries.
+
+    Session history is only rendered for onboarding (no perf tools).
+    """
 
     def test_idle_timeout_shown(self):
         user = _make_user(session_history=[
             {"date": "2026-02-20", "summary": "Verb practice", "status": "incomplete", "close_reason": "idle_timeout"},
         ])
         ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx)
+        prompt = build_system_prompt(user, ctx, session_type="onboarding")
         assert "(idle timeout)" in prompt
 
     def test_turn_limit_shown(self):
@@ -1348,7 +1434,7 @@ class TestCloseReasonInSessionHistory:
             {"date": "2026-02-20", "summary": "Long session", "status": "incomplete", "close_reason": "turn_limit"},
         ])
         ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx)
+        prompt = build_system_prompt(user, ctx, session_type="onboarding")
         assert "(turn limit)" in prompt
 
     def test_cost_limit_shown(self):
@@ -1356,7 +1442,7 @@ class TestCloseReasonInSessionHistory:
             {"date": "2026-02-20", "summary": "Intensive", "status": "incomplete", "close_reason": "cost_limit"},
         ])
         ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx)
+        prompt = build_system_prompt(user, ctx, session_type="onboarding")
         assert "(cost limit)" in prompt
 
     def test_no_close_reason_shows_incomplete(self):
@@ -1365,7 +1451,7 @@ class TestCloseReasonInSessionHistory:
             {"date": "2026-02-20", "summary": "Old session", "status": "incomplete"},
         ])
         ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx)
+        prompt = build_system_prompt(user, ctx, session_type="onboarding")
         assert "(incomplete)" in prompt
 
     def test_completed_no_annotation(self):
@@ -1373,7 +1459,7 @@ class TestCloseReasonInSessionHistory:
             {"date": "2026-02-20", "summary": "Good session", "status": "completed"},
         ])
         ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx)
+        prompt = build_system_prompt(user, ctx, session_type="onboarding")
         assert "(incomplete)" not in prompt
         assert "(idle timeout)" not in prompt
 

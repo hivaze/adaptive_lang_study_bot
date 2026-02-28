@@ -419,9 +419,10 @@ def _build_teaching_approach_section(
     user: User,
     is_first_session: bool,
     recent_n: list[int],
+    *,
+    has_perf_tools: bool = False,
 ) -> str:
     """Build the TEACHING APPROACH section of the system prompt."""
-    target_lang = _get_language_name(user.target_language)
     adaptive_lines: list[str] = []
 
     # Session flow (skip for first session — FIRST SESSION GUIDE provides the flow)
@@ -442,23 +443,37 @@ def _build_teaching_approach_section(
             "Present exercises and vocabulary directly rather than offering menus of choices."
         )
 
-    # Score adaptation
-    score_lines = [
-        "SCORE ADAPTATION:",
-        "- If recent scores trend downward, simplify exercises and offer more guidance.",
-        "- If recent scores trend upward, increase challenge gradually.",
-    ]
-    if recent_n:
-        avg = sum(recent_n) / len(recent_n)
-        if avg >= tuning.prompt_score_high_avg:
-            score_lines.append(
-                f"- Student is performing well ({_score_label(avg)}). Consider harder exercises or new topics."
+    # Score adaptation (skip for first session — no scores exist, and FIRST SESSION
+    # GUIDE already provides the diagnostic exercise flow)
+    if not is_first_session:
+        if has_perf_tools:
+            # Interactive: agent has get_progress_summary / get_exercise_history for
+            # live score trends — generic rules are sufficient, no stale snapshot.
+            adaptive_lines.append(
+                "SCORE ADAPTATION:\n"
+                "- Adapt difficulty based on how the student performs during THIS session.\n"
+                "- If they struggle with exercises, simplify and offer more guidance.\n"
+                "- If they answer correctly and quickly, increase challenge gradually.\n"
+                "- Call get_progress_summary if you need historical score trends."
             )
-        elif avg <= tuning.prompt_score_low_avg:
-            score_lines.append(
-                f"- Student is struggling ({_score_label(avg)}). Simplify, encourage, and review basics."
-            )
-    adaptive_lines.append("\n".join(score_lines))
+        else:
+            # Onboarding: no performance tools, bake in static snapshot.
+            score_lines = [
+                "SCORE ADAPTATION:",
+                "- If recent scores trend downward, simplify exercises and offer more guidance.",
+                "- If recent scores trend upward, increase challenge gradually.",
+            ]
+            if recent_n:
+                avg = sum(recent_n) / len(recent_n)
+                if avg >= tuning.prompt_score_high_avg:
+                    score_lines.append(
+                        f"- Student is performing well ({_score_label(avg)}). Consider harder exercises or new topics."
+                    )
+                elif avg <= tuning.prompt_score_low_avg:
+                    score_lines.append(
+                        f"- Student is struggling ({_score_label(avg)}). Simplify, encourage, and review basics."
+                    )
+            adaptive_lines.append("\n".join(score_lines))
 
     # Content selection
     adaptive_lines.append(
@@ -469,15 +484,16 @@ def _build_teaching_approach_section(
         "especially those where they scored low previously."
     )
 
-    # Goals
-    goal_lines = [
-        "GOALS:",
-        "- Align exercises with the student's learning goals when set.",
-        "- When learning goals exist, periodically ask about progress toward them.",
-        "- Suggest vocabulary and topics directly relevant to the student's goals.",
-        "- If no learning goals are set, gently encourage setting one early in the session.",
-    ]
-    adaptive_lines.append("\n".join(goal_lines))
+    # Goals (skip for first session — FIRST SESSION GUIDE step 2 handles goal discovery)
+    if not is_first_session:
+        goal_lines = [
+            "GOALS:",
+            "- Align exercises with the student's learning goals when set.",
+            "- When learning goals exist, periodically ask about progress toward them.",
+            "- Suggest vocabulary and topics directly relevant to the student's goals.",
+            "- If no learning goals are set, gently encourage setting one early in the session.",
+        ]
+        adaptive_lines.append("\n".join(goal_lines))
 
     # Knowledge gap hint for early sessions
     if not is_first_session and user.sessions_completed <= tuning.knowledge_gap_max_sessions:
@@ -516,6 +532,7 @@ def _build_session_context_section(
     stale_topics: list[dict] | None = None,
     topic_performance: dict[str, dict] | None = None,
     active_schedules: list[dict] | None = None,
+    has_perf_tools: bool = False,
 ) -> str:
     """Build the SESSION CONTEXT section of the system prompt."""
     last_activity = user.last_activity or {}
@@ -557,6 +574,8 @@ def _build_session_context_section(
                 topic_info = f" on '{last_activity['topic']}'" if last_activity.get("topic") else ""
                 prev_exercises = last_activity.get("exercise_count", 0)
 
+                note: str | None = None
+
                 if prev_close == "idle_timeout" and (
                     prev_exercises >= 2
                     or last_activity.get("agent_stopped")
@@ -583,22 +602,29 @@ def _build_session_context_section(
                         "Do NOT tease — the bot ended it. Offer to continue or start fresh."
                     )
                 elif prev_close in ("shutdown", "error"):
-                    note = (
-                        f"NOTE: Last session{topic_info} ended due to a technical issue. "
-                        "Do NOT blame the student. Offer to continue or start fresh."
-                    )
+                    # Only mention technical issues if the student was actively
+                    # engaged (had exercises) AND the gap is short enough that
+                    # they likely noticed.  Silent shutdowns during idle/empty
+                    # sessions should not confuse the student with apologies.
+                    if prev_exercises >= 1 and gap_h < tuning.greeting_short_break_hours:
+                        note = (
+                            f"NOTE: Last session{topic_info} ended due to a technical issue. "
+                            "Do NOT blame the student. Offer to continue or start fresh."
+                        )
+                    # else: silent shutdown of low-engagement session — skip note
                 else:
                     note = (
                         f"NOTE: Last session ended mid-conversation{topic_info}. "
                         "Offer to continue or start fresh."
                     )
-                struggling = last_activity.get("struggling_topics")
-                if struggling:
-                    topics_str = ", ".join(
-                        f"{s['topic']} ({_score_label(s.get('avg_score'))})" for s in struggling
-                    )
-                    note += f" Struggled with: {topics_str} — revisit with simpler exercises."
-                ctx_lines.append(note)
+                if note:
+                    struggling = last_activity.get("struggling_topics")
+                    if struggling:
+                        topics_str = ", ".join(
+                            f"{s['topic']} ({_score_label(s.get('avg_score'))})" for s in struggling
+                        )
+                        note += f" Struggled with: {topics_str} — revisit with simpler exercises."
+                    ctx_lines.append(note)
             if last_activity.get("words_practiced"):
                 ctx_lines.append(
                     f"Words practiced last time: {', '.join(_sanitize(w, tuning.prompt_word_max_len) for w in last_activity['words_practiced'])}"
@@ -615,25 +641,26 @@ def _build_session_context_section(
                 )
                 ctx_lines.append(f"Topics that need extra practice: {topics_str}")
 
-    # Session history
-    session_history = user.session_history or []
-    if session_history:
-        ctx_lines.append("\nRecent session history:")
-        for entry in session_history:
-            parts = [entry.get("date", "?")]
-            if entry.get("summary"):
-                parts.append(entry["summary"])
-            if entry.get("score") is not None:
-                parts.append(f"score: {_score_label(entry['score'])}")
-            if entry.get("status") == "incomplete":
-                entry_reason = entry.get("close_reason", "")
-                if entry_reason in ("idle_timeout", "turn_limit", "cost_limit"):
-                    parts.append(f"({entry_reason.replace('_', ' ')})")
-                else:
-                    parts.append("(incomplete)")
-            if entry.get("exercise_count"):
-                parts.append(f"{entry['exercise_count']} exercises")
-            ctx_lines.append(f"  - {' | '.join(parts)}")
+    # Session history — skip for interactive (agent can call get_exercise_history)
+    if not has_perf_tools:
+        session_history = user.session_history or []
+        if session_history:
+            ctx_lines.append("\nRecent session history:")
+            for entry in session_history:
+                parts = [entry.get("date", "?")]
+                if entry.get("summary"):
+                    parts.append(entry["summary"])
+                if entry.get("score") is not None:
+                    parts.append(f"score: {_score_label(entry['score'])}")
+                if entry.get("status") == "incomplete":
+                    entry_reason = entry.get("close_reason", "")
+                    if entry_reason in ("idle_timeout", "turn_limit", "cost_limit"):
+                        parts.append(f"({entry_reason.replace('_', ' ')})")
+                    else:
+                        parts.append("(incomplete)")
+                if entry.get("exercise_count"):
+                    parts.append(f"{entry['exercise_count']} exercises")
+                ctx_lines.append(f"  - {' | '.join(parts)}")
 
     # Additional notes
     if user.additional_notes:
@@ -641,8 +668,8 @@ def _build_session_context_section(
         for note in _sanitize_list(user.additional_notes):
             ctx_lines.append(f"  - {note}")
 
-    # 7-day topic performance
-    if topic_performance:
+    # 7-day topic performance — skip for interactive (agent can call get_progress_summary)
+    if not has_perf_tools and topic_performance:
         ctx_lines.append("\nTopic performance (last 7 days):")
         sorted_topics = sorted(
             topic_performance.items(),
@@ -653,8 +680,8 @@ def _build_session_context_section(
                 f"  - {topic}: {_score_label(stats['avg_score'])} ({stats['count']} exercises)"
             )
 
-    # Topics needing review
-    if stale_topics:
+    # Topics needing review — skip for interactive (derived from topic performance)
+    if not has_perf_tools and stale_topics:
         ctx_lines.append("\nTopics needing review (not practiced in 7+ days with low scores):")
         for st in stale_topics:
             ctx_lines.append(
@@ -811,9 +838,10 @@ def _build_learning_plan_section(
             "tracks OVERALL SCORE CONSISTENCY (depth) — it requires consistently "
             "high scores across all exercises. A student can complete all plan "
             "topics while not yet reaching the next level — this is normal. "
-            "When the plan nears completion but level progress (see STUDENT "
-            "PROFILE above) is not yet strong, guide the student to consolidate: "
-            "revisit completed plan topics with harder exercises to strengthen scores."
+            "When the plan nears completion but level progress (call "
+            "get_progress_summary for score trends) is not yet strong, guide the "
+            "student to consolidate: revisit completed plan topics with harder "
+            "exercises to strengthen scores."
             "\n- If a level change occurs, the plan may become outdated — "
             "proactively suggest adapting it."
             "\n- When a plan phase is fully completed, briefly celebrate and "
@@ -873,7 +901,7 @@ def _build_learning_plan_section(
         f"{plan_goal}. "
         "Base the plan on the student's profile: interests, learning goals, "
         "weak areas, strong areas, and current level. "
-        "Use their session frequency (from session history) for realistic pacing.\n"
+        "Call get_progress_summary to check their recent session frequency for realistic pacing.\n"
         "After creating the plan, briefly mention it in your greeting — "
         "e.g. 'I set up a learning plan for you based on your progress.' "
         "Keep it to one sentence, then proceed with the session normally.\n"
@@ -886,6 +914,7 @@ def build_system_prompt(
     user: User,
     session_ctx: SessionContext,
     *,
+    session_type: str = "interactive",
     due_count: int = 0,
     stale_topics: list[dict] | None = None,
     topic_performance: dict[str, dict] | None = None,
@@ -910,7 +939,15 @@ def build_system_prompt(
     12. SCHEDULING INSTRUCTIONS — RRULE examples
     13. LEARNING PLAN — (conditional) plan structure and progress
     14. BOT CAPABILITIES — what agent can/cannot do vs /settings
+
+    Interactive sessions have live tools (get_exercise_history, get_progress_summary)
+    for performance data, so static snapshots of scores, topic performance, and
+    session history are omitted — the agent can query fresh data when needed.
+    Onboarding sessions lack those tools, so static data is preserved.
     """
+    # Interactive sessions have tools for live performance data; onboarding does not.
+    has_perf_tools = session_type not in ("onboarding",)
+
     scores = user.recent_scores or []
     recent_n = scores[-tuning.recent_scores_display:] if scores else []
 
@@ -981,8 +1018,7 @@ def build_system_prompt(
     )
 
     # --- 4. Tool requirements ---
-    sections.append(
-        "## TOOL REQUIREMENTS\n"
+    tool_hints = [
         "1. NEVER call record_exercise_result in the same message where you present an exercise. "
         "You MUST wait for the student to reply with their answer in a SEPARATE message first. "
         "The flow is: (a) you present the exercise → (b) student sends their answer → "
@@ -991,7 +1027,7 @@ def build_system_prompt(
         "do NOT record a score for that exercise.\n"
         "   CRITICAL: EVERY exercise you present MUST be scored via record_exercise_result "
         "after the student answers — including diagnostic exercises, warm-ups, and "
-        "informal quizzes. If it has a right/wrong answer, it gets scored.\n"
+        "informal quizzes. If it has a right/wrong answer, it gets scored.",
         "2. VOCABULARY RULE: Before teaching ANY word, you MUST call search_vocabulary "
         "to check if the student already knows it. NEVER assume a word is new — always "
         "verify first. The required sequence is: (a) search_vocabulary for the topic/words "
@@ -999,21 +1035,32 @@ def build_system_prompt(
         "genuinely new words → (d) call add_vocabulary for each new word AT THE MOMENT you "
         "present it. Never show vocabulary without saving it via add_vocabulary first. "
         "Always list vocabulary words used in each exercise in the "
-        "words_involved parameter of record_exercise_result.\n"
+        "words_involved parameter of record_exercise_result.",
         "3. Save student preferences via update_preference whenever you learn something "
         "important: learning goals (field='learning_goals'), interests broadly defined — "
         "not just hobbies, but context like 'trip to Paris in March', 'works in healthcare' "
         "(field='interests'), recurring behavioral patterns like 'prefers vocab before exercises' "
-        "(field='additional_notes'). These persist across sessions.\n"
+        "(field='additional_notes'). These persist across sessions.",
         "4. Do NOT run flashcard-style vocabulary review yourself (showing a word and "
         "asking the student to rate 1-4). The /words command has a better UI. "
         "Instead, incorporate due words into your exercises — the system updates their "
-        "spaced repetition schedule automatically via words_involved.\n"
-        "5. Call get_exercise_history to check which topics the student hasn't practiced "
-        "recently before choosing the next exercise topic.\n"
-        "6. When the student asks about their progress, or periodically during longer sessions, "
-        "call get_progress_summary for score trends, vocabulary stats, and session activity."
-    )
+        "spaced repetition schedule automatically via words_involved.",
+    ]
+    if has_perf_tools:
+        n = len(tool_hints) + 1
+        tool_hints.append(
+            f"{n}. Call get_exercise_history to check which topics the student hasn't practiced "
+            "recently before choosing the next exercise topic. This returns per-exercise detail: "
+            "topic, exercise type, score, words involved, and date."
+        )
+        tool_hints.append(
+            f"{n + 1}. Call get_progress_summary for score trends (7-day and period), per-topic "
+            "performance breakdown, vocabulary stats, and session activity. Use this at session "
+            "start to plan content, and periodically during longer sessions to adapt your approach. "
+            "This is your primary source for understanding the student's performance — "
+            "the student profile above is a static snapshot that does not update mid-session."
+        )
+    sections.append("## TOOL REQUIREMENTS\n" + "\n".join(tool_hints))
 
     # --- 5. Student profile ---
     ts = user.field_timestamps or {}
@@ -1034,18 +1081,35 @@ def build_system_prompt(
         f"Additional notes: {'; '.join(_dated_item(_sanitize(i), ts, 'additional_notes', i) for i in user.additional_notes) if user.additional_notes else 'none yet'}",
         f"Weak areas: {', '.join(_dated_item(_sanitize(i), ts, 'weak_areas', i) for i in user.weak_areas) if user.weak_areas else 'none identified yet'}",
         f"Strong areas: {', '.join(_dated_item(_sanitize(i), ts, 'strong_areas', i) for i in user.strong_areas) if user.strong_areas else 'none identified yet'}",
-        f"Recent performance (last {tuning.recent_scores_display}): {', '.join(_score_label(s) for s in recent_n) if recent_n else 'no scores yet'}",
-        f"Notifications: {_dated('paused' if user.notifications_paused else 'active', ts.get('notifications_paused'))}",
     ]
+    if has_perf_tools:
+        # Interactive sessions: agent can call get_progress_summary / get_exercise_history
+        # for live, detailed performance data — omit stale static snapshot.
+        profile_lines.append("Recent performance: use get_progress_summary for live data")
+    else:
+        # Onboarding: no performance tools, keep static snapshot.
+        profile_lines.append(
+            f"Recent performance (last {tuning.recent_scores_display}): "
+            f"{', '.join(_score_label(s) for s in recent_n) if recent_n else 'no scores yet'}"
+        )
+    profile_lines.append(
+        f"Notifications: {_dated('paused' if user.notifications_paused else 'active', ts.get('notifications_paused'))}"
+    )
     # Level progress visibility (Issue #13)
     window = tuning.level_recent_window
     level_scores = scores[-window:] if scores else []
     if level_scores:
         level_avg = sum(level_scores) / len(level_scores)
-        profile_lines.append(
-            f"Level progress: recent performance is {_score_label(level_avg)} "
-            "(level adjusts automatically based on exercise results)"
-        )
+        if has_perf_tools:
+            # Just note the auto-adjust mechanism; agent can query tools for details.
+            profile_lines.append(
+                "Level progress: level adjusts automatically based on exercise results"
+            )
+        else:
+            profile_lines.append(
+                f"Level progress: recent performance is {_score_label(level_avg)} "
+                "(level adjusts automatically based on exercise results)"
+            )
     sections.append("## STUDENT PROFILE\n" + "\n".join(profile_lines))
 
     # --- First session guide (replaces teaching approach / exercise types for new users) ---
@@ -1079,14 +1143,13 @@ def build_system_prompt(
             "a questionnaire. Start with welcome + goal question, flow into the exercise,\n"
             "then gather remaining preferences based on how they responded.\n"
             "You don't need to cover all 8 points if the conversation flows elsewhere —\n"
-            "the most critical ones are goals (2), exercise (5), and style (4).\n\n"
-            "VOCABULARY RULE: When you teach new words during ANY part of this session "
-            "(word lists, examples, exercises), you MUST call add_vocabulary for each word "
-            "AT THE MOMENT you present it. Never show vocabulary without saving it first."
+            "the most critical ones are goals (2), exercise (5), and style (4)."
         )
 
     # --- 6. Teaching approach ---
-    sections.append(_build_teaching_approach_section(user, is_first_session, recent_n))
+    sections.append(_build_teaching_approach_section(
+        user, is_first_session, recent_n, has_perf_tools=has_perf_tools,
+    ))
 
     # --- 7. Level-specific teaching guidance ---
     level_guide = _LEVEL_GUIDANCE.get(user.level)
@@ -1131,34 +1194,34 @@ def build_system_prompt(
 
     # --- 9. Vocabulary strategy (skip for first session — no cards exist yet) ---
     if not is_first_session:
-        vocab_suggestion_lines = [
-            f"Pending vocabulary reviews: {due_count}",
-            "- When due cards exist, call get_due_vocabulary to see which words are due and "
-            "incorporate them into your exercises. When you include due words in words_involved "
-            "of record_exercise_result, the system automatically updates their spaced repetition "
-            "schedule based on the exercise score — so exercises double as vocabulary reviews.",
-            "- Do NOT replicate the flashcard flow yourself (showing a word, asking to rate 1-4). "
-            "The /words command does this with inline buttons. If the student specifically asks "
-            "to review flashcards, suggest /words.",
-            "- Aim for roughly 70% review / 30% new content when due cards exist.",
-            "- If no cards are due, focus on new vocabulary relevant to the session topic.",
-            "- TEACH NEW WORDS DIRECTLY: When introducing new vocabulary (3-5 words at a time), "
-            "teach them immediately — present the words with example sentences and call "
-            "add_vocabulary for each one. Do NOT ask permission first ('Want to learn some words?'). "
-            "Just teach. CRITICAL: You MUST call search_vocabulary BEFORE presenting ANY words "
-            "to verify they are actually new. If the student already knows a word, skip it and "
-            "pick a different one. Re-teaching known words as 'new' is confusing and wastes time. "
-            "After adding vocabulary, immediately create a practice exercise using those words.",
-        ]
+        vocab_lines: list[str] = []
+        if has_perf_tools:
+            # Interactive: agent has get_due_vocabulary for spaced repetition
+            vocab_lines.extend([
+                f"Pending vocabulary reviews: {due_count}",
+                "- When due cards exist, call get_due_vocabulary to see which words are due "
+                "and incorporate them into your exercises. Including due words in words_involved "
+                "of record_exercise_result automatically updates their spaced repetition schedule.",
+                "- Aim for roughly 70% review / 30% new content when due cards exist.",
+                "- If no cards are due, focus on new vocabulary relevant to the session topic.",
+            ])
+        else:
+            # Onboarding: no get_due_vocabulary, just basic vocab guidance
+            vocab_lines.append("Focus on teaching new vocabulary relevant to the session topic.")
+        # Teach proactively, not on request
+        vocab_lines.append(
+            "- Teach new words directly (3-5 at a time). Do NOT ask permission first "
+            "('Want to learn some words?'). Just teach."
+        )
         # Nudge harder when vocabulary is thin for the student's level
         floor = tuning.level_vocab_floor.get(user.level, 0)
         if user.vocabulary_count < floor:
-            vocab_suggestion_lines.append(
+            vocab_lines.append(
                 f"- NOTE: The student knows only {user.vocabulary_count} words, which is "
                 f"below the typical range for {user.level}. Actively propose new vocabulary "
                 "throughout the session — don't wait for the student to ask."
             )
-        sections.append("## VOCABULARY STRATEGY\n" + "\n".join(vocab_suggestion_lines))
+        sections.append("## VOCABULARY STRATEGY\n" + "\n".join(vocab_lines))
 
     # --- 10. Session context ---
     sections.append(_build_session_context_section(
@@ -1166,6 +1229,7 @@ def build_system_prompt(
         stale_topics=stale_topics,
         topic_performance=topic_performance,
         active_schedules=active_schedules,
+        has_perf_tools=has_perf_tools,
     ))
 
     # --- 11. Comeback adaptation (long absence only, skip for first session) ---
@@ -1547,10 +1611,24 @@ def build_summary_prompt(
             f"Exercises scored: {exercise_count} (based on record_exercise_result calls — "
             "may include exercises the student did not fully complete)"
         )
-    if exercise_topics:
+    # Per-exercise results (qualitative labels — no raw numbers)
+    if exercise_scores:
+        result_parts: list[str] = []
+        for i, score in enumerate(exercise_scores):
+            topic = exercise_topics[i] if i < len(exercise_topics) else None
+            ex_type = exercise_types[i] if i < len(exercise_types) else None
+            label = _score_label(score)
+            if topic and ex_type:
+                result_parts.append(f"{topic} ({ex_type}): {label}")
+            elif topic:
+                result_parts.append(f"{topic}: {label}")
+            else:
+                result_parts.append(label)
+        data_lines.append(f"Exercise results: {', '.join(result_parts)}")
+    elif exercise_topics:
         unique_topics = list(dict.fromkeys(exercise_topics))
         data_lines.append(f"Topics covered: {', '.join(unique_topics)}")
-    if exercise_types:
+    if exercise_types and not exercise_scores:
         unique_types = list(dict.fromkeys(exercise_types))
         data_lines.append(f"Exercise types: {', '.join(unique_types)}")
     if vocab_count:
