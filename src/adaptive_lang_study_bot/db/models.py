@@ -238,6 +238,9 @@ class Session(Base):
     tool_calls_detail: Mapped[dict | None] = mapped_column(JSONB)
     duration_ms: Mapped[int | None] = mapped_column(Integer)
 
+    # System prompt snapshot
+    system_prompt: Mapped[str | None] = mapped_column(Text)
+
     # Post-session pipeline
     pipeline_status: Mapped[str] = mapped_column(String(20), default="pending")
     pipeline_issues: Mapped[dict | None] = mapped_column(JSONB)

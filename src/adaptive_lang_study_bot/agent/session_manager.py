@@ -246,6 +246,7 @@ async def run_proactive_llm_session(
                 id=db_session_id,
                 user_id=user_id,
                 session_type=session_type,
+                system_prompt=system_prompt,
             )
             await db.commit()
 
@@ -1053,6 +1054,7 @@ class SessionManager:
                     id=db_session_id,
                     user_id=user_id,
                     session_type=session_type,
+                    system_prompt=system_prompt,
                 )
                 await db.commit()
 
