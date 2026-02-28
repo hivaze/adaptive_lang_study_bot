@@ -21,7 +21,7 @@ from adaptive_lang_study_bot.bot.helpers import TELEGRAM_MSG_MAX_LEN, build_filt
 from adaptive_lang_study_bot.bot.routers.chat import _split_message
 from adaptive_lang_study_bot.db.models import User
 from adaptive_lang_study_bot.enums import NotificationTier, ScheduleType
-from adaptive_lang_study_bot.bot.routers.review import _format_card_front, _start_review
+from adaptive_lang_study_bot.bot.routers.review import _format_card_front, _start_review, is_in_review
 from adaptive_lang_study_bot.config import settings
 from adaptive_lang_study_bot.db.repositories import AccessRequestRepo, ScheduleRepo, UserRepo, VocabularyRepo
 from adaptive_lang_study_bot.i18n import DEFAULT_LANGUAGE, get_localized_language_name, t
@@ -991,6 +991,11 @@ async def on_cta_words(callback: CallbackQuery, user: User, db_session: AsyncSes
         await callback.answer(t("review.active_session", lang), show_alert=True)
         return
 
+    # Block if already in a vocabulary review
+    if is_in_review(user.telegram_id):
+        await callback.answer(t("review.active_review", lang), show_alert=True)
+        return
+
     # Directly trigger the review flow instead of telling the user to type /words.
     due_cards = await VocabularyRepo.get_due(db_session, user.telegram_id, limit=20)
     if not due_cards:
@@ -1020,6 +1025,11 @@ async def on_cta_session(
         return
     if callback.message is None:
         await callback.answer()
+        return
+
+    # Block if a vocabulary review is active — avoid overlapping sessions.
+    if is_in_review(user.telegram_id):
+        await callback.answer(t("review.active_review", lang), show_alert=True)
         return
 
     # Release middleware DB connection before the long LLM call.

@@ -105,6 +105,26 @@ _LEVEL_GUIDANCE: dict[str, str] = {
 }
 
 
+def _score_label(score: float | int | None) -> str:
+    """Convert a numeric 0-10 score to a qualitative label.
+
+    Rule #7 forbids the agent from showing numeric scores to the student.
+    Replacing numbers with labels in the prompt prevents accidental leakage.
+    """
+    if score is None:
+        return "unknown"
+    s = float(score)
+    if s <= 3:
+        return "poor"
+    if s <= 5:
+        return "needs work"
+    if s <= 7:
+        return "good"
+    if s <= 9:
+        return "very good"
+    return "excellent"
+
+
 def _sanitize(text: str, max_len: int = tuning.prompt_sanitize_default_len) -> str:
     """Collapse whitespace/newlines and truncate user-controlled text for prompt safety."""
     return " ".join(text.split())[:max_len]
@@ -295,7 +315,7 @@ def _build_comeback_section(
     struggling = last_activity.get("struggling_topics", [])
     if struggling and isinstance(struggling, list):
         topics_str = ", ".join(
-            f"{_sanitize(str(s.get('topic', '')))} (avg {s.get('avg_score', '?')}/10)"
+            f"{_sanitize(str(s.get('topic', '')))} ({_score_label(s.get('avg_score'))})"
             for s in struggling
             if isinstance(s, dict)
         )
@@ -354,7 +374,7 @@ def _build_comeback_section(
         if avg_score is not None and avg_score < tuning.comeback_struggling_avg:
             lines.append(
                 f"{priority}. DIFFICULTY ADJUSTMENT: The student was struggling "
-                f"before leaving (avg score {avg_score:.1f}/10) and has been away "
+                f"before leaving ({_score_label(avg_score)}) and has been away "
                 f"{round(gap_days)} days. Use EASY difficulty for the first half of "
                 "this session. Provide extra scaffolding and encouragement. "
                 "Gradually increase only if they are clearly comfortable."
@@ -374,13 +394,13 @@ def _build_comeback_section(
         if avg_score is not None and avg_score < tuning.comeback_struggling_avg:
             lines.append(
                 f"{priority}. WARM-UP: The student was struggling before leaving "
-                f"(avg {avg_score:.1f}/10). Start with a gentle warm-up exercise "
+                f"({_score_label(avg_score)}). Start with a gentle warm-up exercise "
                 "below their level. One or two easy questions to rebuild confidence "
                 "before returning to their regular difficulty."
             )
         elif avg_score is not None and avg_score >= tuning.comeback_good_avg and gap_days >= tuning.comeback_stale_gap_days:
             lines.append(
-                f"{priority}. WARM-UP: The student had good scores ({avg_score:.1f}/10) "
+                f"{priority}. WARM-UP: The student had good scores ({_score_label(avg_score)}) "
                 f"but has been away {round(gap_days)} days. Start with a quick warm-up "
                 "at their level to verify retention. If they stumble, simplify "
                 "without commenting on the difficulty change."
@@ -452,11 +472,11 @@ def _build_teaching_approach_section(
         avg = sum(recent_n) / len(recent_n)
         if avg >= tuning.prompt_score_high_avg:
             score_lines.append(
-                f"- Student is performing well (avg {avg:.1f}/10). Consider harder exercises or new topics."
+                f"- Student is performing well ({_score_label(avg)}). Consider harder exercises or new topics."
             )
         elif avg <= tuning.prompt_score_low_avg:
             score_lines.append(
-                f"- Student is struggling (avg {avg:.1f}/10). Simplify, encourage, and review basics."
+                f"- Student is struggling ({_score_label(avg)}). Simplify, encourage, and review basics."
             )
     adaptive_lines.append("\n".join(score_lines))
 
@@ -547,7 +567,7 @@ def _build_session_context_section(
             if last_activity.get("last_exercise"):
                 ctx_lines.append(f"Last exercise: {last_activity['last_exercise']}")
             if last_activity.get("score") is not None:
-                ctx_lines.append(f"Last score: {last_activity['score']}/10")
+                ctx_lines.append(f"Last score: {_score_label(last_activity['score'])}")
             if last_activity.get("topics_covered"):
                 ctx_lines.append(
                     f"Topics covered last time: {', '.join(last_activity['topics_covered'])}"
@@ -595,7 +615,7 @@ def _build_session_context_section(
                 struggling = last_activity.get("struggling_topics")
                 if struggling:
                     topics_str = ", ".join(
-                        f"{s['topic']} ({s['avg_score']}/10)" for s in struggling
+                        f"{s['topic']} ({_score_label(s.get('avg_score'))})" for s in struggling
                     )
                     note += f" Struggled with: {topics_str} — revisit with simpler exercises."
                 ctx_lines.append(note)
@@ -605,13 +625,13 @@ def _build_session_context_section(
                 )
             if last_activity.get("exercise_type_scores"):
                 scores_str = ", ".join(
-                    f"{t}: {s}/10" for t, s in last_activity["exercise_type_scores"].items()
+                    f"{tp}: {_score_label(sc)}" for tp, sc in last_activity["exercise_type_scores"].items()
                 )
                 ctx_lines.append(f"Exercise performance last time: {scores_str}")
             if last_activity.get("struggling_topics") and last_activity.get("status") != "incomplete":
                 struggling = last_activity["struggling_topics"]
                 topics_str = ", ".join(
-                    f"{s['topic']} ({s['avg_score']}/10)" for s in struggling
+                    f"{s['topic']} ({_score_label(s.get('avg_score'))})" for s in struggling
                 )
                 ctx_lines.append(f"Topics that need extra practice: {topics_str}")
 
@@ -624,7 +644,7 @@ def _build_session_context_section(
             if entry.get("summary"):
                 parts.append(entry["summary"])
             if entry.get("score") is not None:
-                parts.append(f"score: {entry['score']}/10")
+                parts.append(f"score: {_score_label(entry['score'])}")
             if entry.get("status") == "incomplete":
                 entry_reason = entry.get("close_reason", "")
                 if entry_reason in ("idle_timeout", "turn_limit", "cost_limit"):
@@ -650,7 +670,7 @@ def _build_session_context_section(
         )
         for topic, stats in sorted_topics:
             ctx_lines.append(
-                f"  - {topic}: avg {stats['avg_score']}/10 ({stats['count']} exercises)"
+                f"  - {topic}: {_score_label(stats['avg_score'])} ({stats['count']} exercises)"
             )
 
     # Topics needing review
@@ -1032,9 +1052,8 @@ def build_system_prompt(
     if level_scores:
         level_avg = sum(level_scores) / len(level_scores)
         profile_lines.append(
-            f"Level progress: avg of last {window} scores is {level_avg:.1f}/10 "
-            f"(auto-level-up at {tuning.level_up_avg}+, "
-            f"auto-level-down at {tuning.level_down_avg}-)"
+            f"Level progress: recent performance is {_score_label(level_avg)} "
+            "(level adjusts automatically based on exercise results)"
         )
     sections.append("## STUDENT PROFILE\n" + "\n".join(profile_lines))
 
@@ -1364,11 +1383,11 @@ def build_proactive_prompt(
         s7 = ps.get("score_7d", {})
         s30 = ps.get("score_30d", {})
         if s7.get("count", 0) > 0:
-            lines.append(f"- Last 7 days: avg {s7.get('avg', 0):.1f}/10, {s7['count']} exercises")
+            lines.append(f"- Last 7 days: {_score_label(s7.get('avg', 0))}, {s7['count']} exercises")
         else:
             lines.append("- Last 7 days: no exercises")
         if s30.get("count", 0) > 0:
-            lines.append(f"- Last 30 days: avg {s30.get('avg', 0):.1f}/10, {s30['count']} exercises")
+            lines.append(f"- Last 30 days: {_score_label(s30.get('avg', 0))}, {s30['count']} exercises")
         else:
             lines.append("- Last 30 days: no exercises")
 
@@ -1377,10 +1396,9 @@ def build_proactive_prompt(
         if topic_perf:
             lines.append("### Topic Performance")
             for tp in topic_perf[:10]:
-                avg = tp.get("avg_score") or 0
                 lines.append(
                     f"- {_sanitize(str(tp.get('topic', '?')), 50)}: "
-                    f"avg {avg:.1f}/10 ({tp.get('exercise_count', 0)} exercises)"
+                    f"{_score_label(tp.get('avg_score'))} ({tp.get('exercise_count', 0)} exercises)"
                 )
 
         # Vocabulary

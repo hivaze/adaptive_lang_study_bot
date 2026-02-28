@@ -23,19 +23,93 @@ TELEGRAM_MSG_MAX_LEN = 4096
 
 _CODE_BLOCK_RE = re.compile(r"```\w*\n(.*?)```", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
+_BOLD_ITALIC_RE = re.compile(r"\*\*\*(.+?)\*\*\*", re.DOTALL)
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
 _ITALIC_RE = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)")
 _HEADER_RE = re.compile(r"^#{1,6}\s+(.+)$", re.MULTILINE)
 _HR_RE = re.compile(r"^-{3,}\s*$", re.MULTILINE)
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 
+# Matches HTML open/close tags (b, i, u, s, a, code, pre).
+_HTML_TAG_RE = re.compile(r"<(/?)([a-z]+)(?:\s[^>]*)?>")
+# Matches empty tag pairs like <i></i>, <b></b> left after nesting fixes.
+_EMPTY_TAG_RE = re.compile(r"<([a-z]+)(?:\s[^>]*)?>(\s*)</\1>")
+
+
+def _fix_tag_nesting(html: str) -> str:
+    """Fix overlapping HTML tags to ensure proper nesting for Telegram.
+
+    Telegram's HTML parser rejects overlapping tags like ``<b>...<i>...</b></i>``
+    and the message falls back to plaintext, exposing raw tags to the user.
+
+    This uses a stack-based approach: when a closing tag doesn't match the
+    top of the stack, intermediate tags are closed and reopened to maintain
+    valid nesting.
+    """
+    result: list[str] = []
+    # Stack entries: (tag_name, full_opening_tag_string)
+    stack: list[tuple[str, str]] = []
+    last_end = 0
+
+    for m in _HTML_TAG_RE.finditer(html):
+        # Append text between tags
+        if m.start() > last_end:
+            result.append(html[last_end:m.start()])
+        last_end = m.end()
+
+        is_close = m.group(1) == "/"
+        tag_name = m.group(2)
+        full_tag = m.group(0)
+
+        if not is_close:
+            result.append(full_tag)
+            stack.append((tag_name, full_tag))
+        else:
+            # Find the matching open tag in the stack
+            match_idx = None
+            for i in range(len(stack) - 1, -1, -1):
+                if stack[i][0] == tag_name:
+                    match_idx = i
+                    break
+
+            if match_idx is None:
+                # Stray closing tag with no matching opener — drop it
+                continue
+
+            # Close all tags from top of stack down to (and including) the match
+            tags_to_reopen: list[tuple[str, str]] = []
+            while len(stack) > match_idx:
+                popped_name, popped_open = stack.pop()
+                result.append(f"</{popped_name}>")
+                if popped_name != tag_name:
+                    tags_to_reopen.append((popped_name, popped_open))
+
+            # Reopen the intermediate tags that were closed early
+            for name, open_tag in reversed(tags_to_reopen):
+                result.append(open_tag)
+                stack.append((name, open_tag))
+
+    # Append remaining text after last tag
+    if last_end < len(html):
+        result.append(html[last_end:])
+
+    # Close any tags still open at the end
+    while stack:
+        result.append(f"</{stack.pop()[0]}>")
+
+    # Strip empty tag pairs like <i></i> left by reopening + immediate close
+    out = "".join(result)
+    while _EMPTY_TAG_RE.search(out):
+        out = _EMPTY_TAG_RE.sub(r"\2", out)
+    return out
+
 
 def markdown_to_telegram_html(text: str) -> str:
     """Convert common Markdown formatting to Telegram HTML.
 
-    Handles: code blocks, inline code, bold, italic, headers, horizontal
-    rules, and links.  Operates in a safe order — code spans are replaced
-    with placeholders first so their contents are not mangled.
+    Handles: code blocks, inline code, bold+italic, bold, italic, headers,
+    horizontal rules, and links.  Operates in a safe order — code spans are
+    replaced with placeholders first so their contents are not mangled.
     """
     placeholders: dict[str, str] = {}
 
@@ -49,20 +123,25 @@ def markdown_to_telegram_html(text: str) -> str:
     text = _CODE_BLOCK_RE.sub(lambda m: _protect(m, "pre"), text)
     # 2. Protect inline code (` ... `)
     text = _INLINE_CODE_RE.sub(lambda m: _protect(m, "code"), text)
-    # 3. Bold (**text**)
+    # 3. Bold+italic (***text***) — must come before bold/italic
+    text = _BOLD_ITALIC_RE.sub(r"<b><i>\1</i></b>", text)
+    # 4. Bold (**text**)
     text = _BOLD_RE.sub(r"<b>\1</b>", text)
-    # 4. Italic (*text*) — only after bold is consumed
+    # 5. Italic (*text*) — only after bold is consumed
     text = _ITALIC_RE.sub(r"<i>\1</i>", text)
-    # 5. Headers (## text → bold)
+    # 6. Headers (## text → bold)
     text = _HEADER_RE.sub(r"<b>\1</b>", text)
-    # 6. Horizontal rules (--- → remove)
+    # 7. Horizontal rules (--- → remove)
     text = _HR_RE.sub("", text)
-    # 7. Links [text](url)
+    # 8. Links [text](url)
     text = _LINK_RE.sub(r'<a href="\2">\1</a>', text)
 
     # Restore protected code spans
     for token, replacement in placeholders.items():
         text = text.replace(token, replacement)
+
+    # Fix any overlapping tags produced by regex edge cases
+    text = _fix_tag_nesting(text)
 
     return text
 

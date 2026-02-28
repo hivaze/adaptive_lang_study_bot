@@ -25,6 +25,7 @@ from adaptive_lang_study_bot.i18n import DEFAULT_LANGUAGE, t
 from adaptive_lang_study_bot.proactive.dispatcher import dispatch_notification
 from adaptive_lang_study_bot.utils import compute_next_trigger, safe_zoneinfo
 from adaptive_lang_study_bot.agent.session_manager import session_manager
+from adaptive_lang_study_bot.bot.routers.review import is_in_review
 from adaptive_lang_study_bot.proactive.triggers import ALL_TRIGGERS
 
 # Schedule failure thresholds are in config.py:BotTuning
@@ -308,9 +309,11 @@ async def _phase_event_triggers(bot: Bot) -> None:
         # Evaluate triggers (pure Python, no I/O)
         work: list[tuple] = []
         for user in users:
-            # Skip users with active interactive sessions — sending a
-            # proactive notification mid-session is confusing UX.
+            # Skip users with active interactive or review sessions — sending
+            # a proactive notification mid-session is confusing UX.
             if session_manager.has_active_session(user.telegram_id):
+                continue
+            if is_in_review(user.telegram_id):
                 continue
             due_count = due_counts.get(user.telegram_id, 0)
             for trigger_fn in ALL_TRIGGERS:

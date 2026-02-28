@@ -153,6 +153,13 @@ def check_incomplete_exercise(user: User, *, due_count: int = 0) -> Trigger | No
     if not last or last.get("status") != "incomplete":
         return None
 
+    # Sessions that ended via idle_timeout after substantive work (≥2 exercises
+    # or agent-initiated wrap-up) are effectively completed — don't nag.
+    if last.get("close_reason") == "idle_timeout" and (
+        last.get("exercise_count", 0) >= 2 or last.get("agent_stopped")
+    ):
+        return None
+
     if user.last_session_at is None:
         return None
 

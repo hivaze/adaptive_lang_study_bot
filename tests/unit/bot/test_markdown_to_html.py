@@ -2,7 +2,7 @@
 
 import pytest
 
-from adaptive_lang_study_bot.bot.helpers import markdown_to_telegram_html
+from adaptive_lang_study_bot.bot.helpers import _fix_tag_nesting, markdown_to_telegram_html
 
 
 class TestBold:
@@ -158,3 +158,61 @@ class TestMixedContent:
         assert "<b>la préfecture</b>" in result
         assert "<b>le formulaire</b>" in result
         assert "(префектура)" in result
+
+
+class TestOverlappingTags:
+    """Regression tests for overlapping bold/italic markers."""
+
+    def test_triple_stars_bold_italic(self):
+        """***text*** should produce properly nested bold+italic."""
+        result = markdown_to_telegram_html("***hello***")
+        assert result == "<b><i>hello</i></b>"
+
+    def test_bold_containing_italic_at_end(self):
+        """**avoir mal *à*** — italic inside bold ending together."""
+        result = markdown_to_telegram_html("**avoir mal *à***")
+        # Tags must be properly nested, never overlapping
+        assert "</i></b>" in result or "</b>" in result
+        assert "<b>" in result
+        # No raw asterisks should remain in the formatted portion
+        assert "<i>" not in result or result.index("</i>") < result.index("</b>")
+
+    def test_fix_tag_nesting_overlapping_b_i(self):
+        """Direct test: _fix_tag_nesting corrects <b>...<i>...</b></i>."""
+        bad = "<b>avoir mal <i>à</b></i>"
+        fixed = _fix_tag_nesting(bad)
+        assert fixed == "<b>avoir mal <i>à</i></b>"
+
+    def test_fix_tag_nesting_already_valid(self):
+        """Properly nested tags are left unchanged."""
+        good = "<b>avoir mal <i>à</i></b>"
+        assert _fix_tag_nesting(good) == good
+
+    def test_fix_tag_nesting_no_tags(self):
+        """Plain text without tags passes through unchanged."""
+        assert _fix_tag_nesting("hello world") == "hello world"
+
+    def test_fix_tag_nesting_stray_close(self):
+        """Stray closing tag with no opener is dropped."""
+        assert _fix_tag_nesting("hello</b> world") == "hello world"
+
+    def test_fix_tag_nesting_unclosed_tag(self):
+        """Unclosed tag is auto-closed at the end."""
+        assert _fix_tag_nesting("<b>hello") == "<b>hello</b>"
+
+    def test_fix_tag_nesting_deeply_nested(self):
+        """Triple nesting with one overlap."""
+        bad = "<b><i><u>text</b></i></u>"
+        fixed = _fix_tag_nesting(bad)
+        # u is inside i which is inside b — closing b first should
+        # close u and i, then reopen them
+        assert "</u></i></b>" in fixed
+
+    def test_real_world_avoir_mal(self):
+        """The exact bug from the user report."""
+        md = "**avoir mal *à***"
+        result = markdown_to_telegram_html(md)
+        # Must not contain overlapping tags
+        assert "</b></i>" not in result
+        # Must contain both bold and valid HTML
+        assert "<b>" in result

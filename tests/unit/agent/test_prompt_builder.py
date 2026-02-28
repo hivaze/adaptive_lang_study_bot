@@ -283,7 +283,7 @@ class TestLastActivityContext:
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
         assert "Last exercise: fill_blank" in prompt
-        assert "Last score: 8/10" in prompt
+        assert "Last score: very good" in prompt
 
     def test_incomplete_with_topic_shown(self):
         """Incomplete status with topic includes topic in the continuation note."""
@@ -324,7 +324,7 @@ class TestLastActivityContext:
         prompt = build_system_prompt(user, ctx)
         assert "Last topic: subjunctive" in prompt
         assert "Last exercise: translation" in prompt
-        assert "Last score: 6/10" in prompt
+        assert "Last score: good" in prompt
         assert "Topics covered last time:" in prompt
         assert "ended mid-conversation on 'subjunctive'" in prompt
         assert "quiero" in prompt
@@ -406,7 +406,7 @@ class TestSessionHistory:
         ])
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
-        assert "score: 8/10" in prompt
+        assert "score: very good" in prompt
 
     def test_empty_history_no_section(self):
         user = _make_user(session_history=[])
@@ -540,7 +540,7 @@ class TestIncompleteSessionEnriched:
         })
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
-        assert "Last score: 5/10" in prompt
+        assert "Last score: needs work" in prompt
 
     def test_words_practiced_shown(self):
         user = _make_user(last_activity={
@@ -580,7 +580,7 @@ class TestIncompleteSessionEnriched:
         prompt = build_system_prompt(user, ctx)
         assert "Struggled with" in prompt
         assert "subjunctive" in prompt
-        assert "3.0/10" in prompt
+        assert "poor" in prompt
         assert "revisit with simpler exercises" in prompt
 
 
@@ -595,8 +595,8 @@ class TestErrorPatterns:
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
         assert "Exercise performance last time:" in prompt
-        assert "translation: 8.5/10" in prompt
-        assert "fill_blank: 4.0/10" in prompt
+        assert "translation: very good" in prompt
+        assert "fill_blank: needs work" in prompt
 
     def test_struggling_topics_completed_session(self):
         """Completed session with struggling topics shows extra practice note."""
@@ -611,7 +611,7 @@ class TestErrorPatterns:
         prompt = build_system_prompt(user, ctx)
         assert "Topics that need extra practice:" in prompt
         assert "prepositions" in prompt
-        assert "3.5/10" in prompt
+        assert "needs work" in prompt
 
     def test_no_struggling_topics_no_section(self):
         user = _make_user(last_activity={
@@ -681,10 +681,10 @@ class TestTopicPerformance:
         prompt = build_system_prompt(user, ctx, topic_performance=perf)
         assert "Topic performance (last 7 days):" in prompt
         assert "subjunctive" in prompt
-        assert "4.2/10" in prompt
+        assert "needs work" in prompt  # 4.2 → needs work
         assert "5 exercises" in prompt
         assert "travel vocab" in prompt
-        assert "8.0/10" in prompt
+        assert "very good" in prompt  # 8.0 → very good
         assert "3 exercises" in prompt
 
     def test_topic_performance_sorted_by_count(self):
@@ -860,10 +860,10 @@ class TestBuildProactivePrompt:
         prompt = build_proactive_prompt(user, "proactive_summary", {}, prefetch=prefetch)
         assert "PROGRESS DATA" in prompt
         assert "Score Trends" in prompt
-        assert "7.5" in prompt
+        assert "good" in prompt  # 7.5 → good
         assert "Topic Performance" in prompt
         assert "verbs" in prompt
-        assert "8.2" in prompt
+        assert "very good" in prompt  # 8.2 → very good
         assert "Vocabulary" in prompt
         assert "new: 5" in prompt
         assert "Session Activity" in prompt

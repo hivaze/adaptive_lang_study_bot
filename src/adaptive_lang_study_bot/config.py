@@ -75,6 +75,7 @@ class BotTuning:
     # -- FSRS scheduling steps (Telegram-friendly: hours/days, not minutes) --
     fsrs_learning_steps_minutes: tuple[int, ...] = (240, 1440)     # (4h, 1d)
     fsrs_relearning_steps_minutes: tuple[int, ...] = (480,)        # (8h,)
+    fsrs_review_session_cap: int = 30                              # max cards per /words session
 
     # -- Weak/strong area recent topic limit --
     weak_strong_recent_limit: int = 10

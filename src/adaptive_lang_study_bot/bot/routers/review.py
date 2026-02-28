@@ -1,4 +1,5 @@
 import time
+from dataclasses import dataclass, field
 from datetime import timezone
 from html import escape as esc
 
@@ -16,6 +17,7 @@ from sqlalchemy import select as sa_select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from adaptive_lang_study_bot.agent.session_manager import session_manager
+from adaptive_lang_study_bot.config import tuning
 from adaptive_lang_study_bot.db.models import User, Vocabulary as VocabModel
 from adaptive_lang_study_bot.db.repositories import UserRepo, VocabularyRepo, VocabularyReviewLogRepo
 from adaptive_lang_study_bot.fsrs_engine.scheduler import review_card
@@ -26,30 +28,49 @@ router = Router()
 _REVIEW_FETCH_LIMIT = 20
 _REVIEW_TTL = 600  # 10 minutes — reviews auto-expire
 
-# Track users currently in flashcard review (telegram_id → monotonic timestamp).
+
+@dataclass(slots=True)
+class _ReviewState:
+    """Per-user review session state."""
+
+    started_at: float = field(default_factory=time.monotonic)
+    reviewed_count: int = 0
+
+
+# Track users currently in flashcard review (telegram_id → state).
 # In-memory only — single-process bot, no persistence needed.
-_active_reviews: dict[int, float] = {}
+_active_reviews: dict[int, _ReviewState] = {}
 
 
 def is_in_review(user_id: int) -> bool:
     """Check if user is currently in flashcard review mode."""
-    started = _active_reviews.get(user_id)
-    if started is None:
+    state = _active_reviews.get(user_id)
+    if state is None:
         return False
-    if time.monotonic() - started > _REVIEW_TTL:
+    if time.monotonic() - state.started_at > _REVIEW_TTL:
         _active_reviews.pop(user_id, None)
         return False
     return True
 
 
 def _start_review(user_id: int) -> None:
-    _active_reviews[user_id] = time.monotonic()
+    _active_reviews[user_id] = _ReviewState()
 
 
 def _touch_review(user_id: int) -> None:
     """Refresh review timestamp on each interaction."""
-    if user_id in _active_reviews:
-        _active_reviews[user_id] = time.monotonic()
+    state = _active_reviews.get(user_id)
+    if state is not None:
+        state.started_at = time.monotonic()
+
+
+def _increment_reviewed(user_id: int) -> int:
+    """Increment reviewed count and return the new value."""
+    state = _active_reviews.get(user_id)
+    if state is not None:
+        state.reviewed_count += 1
+        return state.reviewed_count
+    return 0
 
 
 def _end_review(user_id: int) -> None:
@@ -291,26 +312,34 @@ async def on_fsrs_rate(
     rating_label = _get_rating_label(rating, lang)
     next_interval = _format_interval(result["scheduled_days"], lang)
     next_position = position + 1
+    reviewed_count = _increment_reviewed(user.telegram_id)
 
     # Check for remaining due cards
     remaining = await VocabularyRepo.get_due(db_session, user.telegram_id, limit=20)
 
-    if not remaining:
+    # End the session if: no more due cards OR session cap reached.
+    cap_reached = reviewed_count >= tuning.fsrs_review_session_cap
+    if not remaining or cap_reached:
         _end_review(user.telegram_id)
+        total_due = await VocabularyRepo.count_due(db_session, user.telegram_id)
+
         # Clear stale notification context (e.g. "14 cards due for review")
         # so the next session doesn't reference already-completed reviews.
-        if user.last_notification_text:
+        if total_due == 0 and user.last_notification_text:
             await UserRepo.update_fields(
                 db_session, user.telegram_id,
                 last_notification_text=None, last_notification_at=None,
             )
-        # Check if more cards became due beyond the current batch
-        total_due = await VocabularyRepo.count_due(db_session, user.telegram_id)
+
         done_text = t("review.rated_done", lang,
                        word=esc(vocab.word), rating=rating_label, interval=next_interval,
                        position=position, total=total)
-        if total_due > 0:
+        if cap_reached and total_due > 0:
+            done_text += "\n\n" + t("review.session_cap_reached", lang,
+                                     reviewed=reviewed_count, remaining=total_due)
+        elif total_due > 0:
             done_text += "\n\n" + t("review.more_due", lang, count=total_due)
+        if total_due > 0:
             done_kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
                     text=t("review.btn_review_more", lang),
