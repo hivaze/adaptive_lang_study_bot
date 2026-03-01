@@ -217,6 +217,7 @@ class BotTuning:
     greeting_long_break_hours: float = 24  # < this → long_break (else day_plus_break or long_absence)
 
     # -- Time of day boundaries --
+    time_of_day_night_end: int = 6  # hours: < this → "night"
     time_of_day_morning_end: int = 12  # hours: < this → "morning"
     time_of_day_afternoon_end: int = 17  # hours: < this → "afternoon", else "evening"
 

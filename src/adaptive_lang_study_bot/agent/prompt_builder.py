@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timezone
 from typing import TypedDict
 
@@ -197,7 +198,9 @@ def compute_session_context(user: User) -> SessionContext:
     if user.last_notification_text and user.last_notification_at:
         notif_gap = (now - user.last_notification_at).total_seconds() / 3600
         if notif_gap < tuning.notification_lookback_hours:
-            notification_text = user.last_notification_text
+            # Strip Telegram HTML tags (e.g. <b>7</b> → 7) so the LLM
+            # sees clean text rather than markup noise.
+            notification_text = re.sub(r"<[^>]+>", "", user.last_notification_text)
 
     # Use user's local time for time-of-day (not UTC)
     local_hour = local_now.hour
@@ -210,7 +213,8 @@ def compute_session_context(user: User) -> SessionContext:
         "notification_text": notification_text,
         "notification_hours_ago": round(notif_gap, 1) if notification_text else None,
         "time_of_day": (
-            "morning" if local_hour < tuning.time_of_day_morning_end
+            "night" if local_hour < tuning.time_of_day_night_end
+            else "morning" if local_hour < tuning.time_of_day_morning_end
             else "afternoon" if local_hour < tuning.time_of_day_afternoon_end
             else "evening"
         ),
@@ -662,11 +666,7 @@ def _build_session_context_section(
                     parts.append(f"{entry['exercise_count']} exercises")
                 ctx_lines.append(f"  - {' | '.join(parts)}")
 
-    # Additional notes
-    if user.additional_notes:
-        ctx_lines.append("\nAdditional notes about this student:")
-        for note in _sanitize_list(user.additional_notes):
-            ctx_lines.append(f"  - {note}")
+    # Additional notes are already in STUDENT PROFILE — don't duplicate here.
 
     # 7-day topic performance — skip for interactive (agent can call get_progress_summary)
     if not has_perf_tools and topic_performance:
@@ -1383,7 +1383,8 @@ def build_proactive_prompt(
     local_now = user_local_now(user)
     local_hour = local_now.hour
     time_of_day = (
-        "morning" if local_hour < tuning.time_of_day_morning_end
+        "night" if local_hour < tuning.time_of_day_night_end
+        else "morning" if local_hour < tuning.time_of_day_morning_end
         else "afternoon" if local_hour < tuning.time_of_day_afternoon_end
         else "evening"
     )
@@ -1596,7 +1597,8 @@ def build_summary_prompt(
     local_now = datetime.now(timezone.utc).astimezone(safe_zoneinfo(user_timezone))
     local_hour = local_now.hour
     time_of_day = (
-        "morning" if local_hour < tuning.time_of_day_morning_end
+        "night" if local_hour < tuning.time_of_day_night_end
+        else "morning" if local_hour < tuning.time_of_day_morning_end
         else "afternoon" if local_hour < tuning.time_of_day_afternoon_end
         else "evening"
     )

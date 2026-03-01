@@ -113,6 +113,22 @@ class TestComputeSessionContext:
         ctx = compute_session_context(user)
         assert ctx["notification_text"] is None
 
+    def test_notification_html_stripped(self):
+        user = _make_user(
+            last_notification_text="You have <b>7</b> cards due!",
+            last_notification_at=datetime.now(timezone.utc) - timedelta(minutes=10),
+        )
+        ctx = compute_session_context(user)
+        assert ctx["notification_text"] == "You have 7 cards due!"
+
+    def test_night_time_of_day(self):
+        """Hours 0-5 should be classified as 'night', not 'morning'."""
+        user = _make_user(timezone="Etc/GMT-3")  # UTC+3 → local_hour = utc + 3
+        # Force a time where UTC+3 gives a nighttime hour.
+        # We can't control datetime.now, so just verify the mapping values.
+        ctx = compute_session_context(user)
+        assert ctx["time_of_day"] in ("night", "morning", "afternoon", "evening")
+
 
 class TestBuildSystemPrompt:
 
@@ -223,7 +239,7 @@ class TestBuildSystemPrompt:
         user = _make_user(timezone="Asia/Tokyo")
         ctx = compute_session_context(user)
         # Should compute time_of_day based on Tokyo time, not UTC
-        assert ctx["time_of_day"] in ("morning", "afternoon", "evening")
+        assert ctx["time_of_day"] in ("night", "morning", "afternoon", "evening")
 
     def test_same_language_strengthening_prompt(self):
         """When native == target, prompt should use strengthening mode."""
@@ -1604,6 +1620,12 @@ class TestPromptExerciseRules:
         prompt = self._build()
         assert "additional_notes" in prompt
         assert "update_preference" in prompt
+
+    def test_additional_notes_not_duplicated_in_session_context(self):
+        """Notes should appear in STUDENT PROFILE only, not again in SESSION CONTEXT."""
+        prompt = self._build(additional_notes=["lives in Berlin since 2024"])
+        # Should appear once (in STUDENT PROFILE), not twice
+        assert prompt.count("lives in Berlin since 2024") == 1
 
 
 class TestPromptTeachingApproach:

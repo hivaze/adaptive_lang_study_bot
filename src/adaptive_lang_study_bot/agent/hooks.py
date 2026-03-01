@@ -82,6 +82,7 @@ class SessionHookState:
         self.max_turns: int = 0
         self.wrap_up_injected: bool = False
         self.exercise_scores: list[int] = []  # Scores from this session for trend
+        self._seeded_count: int = 0  # Number of pre-seeded scores (from prior sessions)
         # Cost budget tracking — synced from ManagedSession before each query()
         self.accumulated_cost: float = 0.0
         self.max_cost_usd: float = 0.0

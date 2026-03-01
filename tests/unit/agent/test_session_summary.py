@@ -385,6 +385,42 @@ class TestCollectSessionData:
         assert data["exercise_scores"] == []
         assert data["words_added"] == []
 
+    def test_seeded_scores_excluded_from_count(self):
+        """Seeded scores (from prior sessions for adaptive hints) should NOT
+        inflate the session's exercise count or appear in session_data."""
+        state = SessionHookState(user_id=1)
+        # Simulate seeding with 3 prior scores
+        state.exercise_scores = [8, 9, 10]
+        state._seeded_count = 3
+        # Then 1 new exercise scored during this session
+        state.exercise_scores.append(7)
+        state.exercise_topics = ["grammar"]
+        state.exercise_types = ["fill-in-the-blank"]
+
+        managed = _make_managed(
+            tools_called=["mcp__langbot__record_exercise_result"],
+            hook_state=state,
+            turn_count=5,
+        )
+        data = _collect_session_data(managed)
+        assert data["exercise_count"] == 1
+        assert data["exercise_scores"] == [7]
+
+    def test_seeded_only_no_new_exercises(self):
+        """When only seeded scores exist and no exercises were done, count is 0."""
+        state = SessionHookState(user_id=1)
+        state.exercise_scores = [8, 9]
+        state._seeded_count = 2
+
+        managed = _make_managed(
+            tools_called=[],
+            hook_state=state,
+            turn_count=3,
+        )
+        data = _collect_session_data(managed)
+        assert data["exercise_count"] == 0
+        assert data["exercise_scores"] == []
+
 
 # ---------------------------------------------------------------------------
 # CTA keyboard

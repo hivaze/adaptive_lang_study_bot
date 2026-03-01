@@ -449,7 +449,9 @@ def create_session_tools(
         try:
             words = json.loads(words_raw) if isinstance(words_raw, str) else words_raw
         except json.JSONDecodeError:
-            words = [words_raw] if words_raw else []
+            # Agent sent a plain string (e.g. "le chat, un chien") instead of
+            # a JSON array.  Split on commas so each word is stored individually.
+            words = [w.strip() for w in words_raw.split(",") if w.strip()] if words_raw else []
         if not isinstance(words, list):
             words = [words]
         words = [w for w in (str(w).strip()[:tuning.max_word_length] for w in words[:tuning.max_exercise_words]) if w]

@@ -451,13 +451,17 @@ def _collect_session_data(managed: "ManagedSession") -> dict:
     hook = managed.hook_state
 
     if hook and hook.exercise_scores:
-        exercise_count = len(hook.exercise_scores)
+        # exercise_scores may contain pre-seeded scores from prior sessions
+        # (used for adaptive hint continuity). Only count new ones.
+        session_scores = hook.exercise_scores[hook._seeded_count:]
+        exercise_count = len(session_scores)
     else:
+        session_scores = []
         exercise_count = tool_names.count("record_exercise_result")
 
     return {
         "exercise_count": exercise_count,
-        "exercise_scores": list(hook.exercise_scores) if hook else [],
+        "exercise_scores": session_scores,
         "exercise_topics": list(hook.exercise_topics) if hook else [],
         "exercise_types": list(hook.exercise_types) if hook else [],
         "words_added": list(hook.words_added) if hook else [],
@@ -1081,9 +1085,9 @@ class SessionManager:
             hooks, hook_state = build_session_hooks(user_id)
 
             # Seed hook state with user's recent scores for cross-session continuity
-            hook_state.exercise_scores = list(
-                (user.recent_scores or [])[-tuning.hook_rolling_avg_window:]
-            )
+            seeded = list((user.recent_scores or [])[-tuning.hook_rolling_avg_window:])
+            hook_state.exercise_scores = seeded
+            hook_state._seeded_count = len(seeded)
 
             # Create MCP server with session-specific tools
             server = create_langbot_server(tools)
