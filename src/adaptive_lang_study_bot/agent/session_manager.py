@@ -39,6 +39,8 @@ from adaptive_lang_study_bot.agent.tools import (
     compute_plan_progress,
     create_langbot_server,
     create_session_tools,
+    fetch_news_for_proactive,
+    web_search_available,
 )
 from adaptive_lang_study_bot.cache.session_lock import (
     acquire_session_lock,
@@ -231,6 +233,14 @@ async def run_proactive_llm_session(
                     },
                     "sessions_this_week": sessions_week["session_count"],
                 }
+
+        # 3b. Optionally fetch news for proactive prompt enrichment
+        news_context = await fetch_news_for_proactive(
+            target_language=user.target_language or "",
+            interests=user.interests,
+        )
+        if news_context:
+            prefetch["news_context"] = news_context
 
         # 4. Build proactive system prompt
         system_prompt = build_proactive_prompt(
@@ -472,10 +482,21 @@ def _collect_session_data(managed: "ManagedSession") -> dict:
     }
 
 
-def _build_summary_cta_keyboard(lang: str, *, has_vocabulary: bool = True) -> InlineKeyboardMarkup:
-    """Build CTA keyboard for session summaries where user didn't make progress."""
+def _build_summary_cta_keyboard(
+    lang: str,
+    *,
+    has_vocabulary: bool = True,
+    limit_close: bool = False,
+) -> InlineKeyboardMarkup:
+    """Build CTA keyboard for session summaries.
+
+    When *limit_close* is True (turn/cost limit hit), the primary button uses
+    "Continue lesson" wording so the user knows the session was interrupted
+    rather than naturally finished.
+    """
+    cta_key = "cta.continue_lesson" if limit_close else "cta.start_session"
     rows = [
-        [InlineKeyboardButton(text=t("cta.start_session", lang), callback_data="cta:session")],
+        [InlineKeyboardButton(text=t(cta_key, lang), callback_data="cta:session")],
     ]
     if has_vocabulary:
         rows.append(
@@ -575,11 +596,17 @@ async def _generate_and_send_summary(
             logger.debug("Suppressing stale summary for user {} — new session active", user_id)
             return
 
-        # Attach CTA keyboard for no-progress sessions
+        # Attach CTA keyboard.
+        # - For limit closes (turn/cost): always attach so the user can continue
+        #   in a new session (their last message was not processed).
+        # - For other closes: only attach for no-progress sessions.
+        is_limit_close = close_reason in {CloseReason.TURN_LIMIT, CloseReason.COST_LIMIT}
         total_vocab = managed.user_vocabulary_count + session_data.get("vocab_count", 0)
         reply_markup = (
-            _build_summary_cta_keyboard(lang, has_vocabulary=total_vocab > 0)
-            if not has_progress
+            _build_summary_cta_keyboard(
+                lang, has_vocabulary=total_vocab > 0, limit_close=is_limit_close,
+            )
+            if is_limit_close or not has_progress
             else None
         )
 
@@ -875,8 +902,13 @@ class SessionManager:
         self,
         user: User,
         text: str,
-    ) -> list[str]:
-        """Handle a user message. Returns list of response text chunks."""
+    ) -> list[str] | None:
+        """Handle a user message. Returns list of response text chunks.
+
+        Returns ``None`` when the session was closed due to turn/cost limits —
+        meaning a summary with CTA buttons has been sent to the user and the
+        caller should NOT send any additional messages.
+        """
         user_id = user.telegram_id
         lang = user.native_language or DEFAULT_LANGUAGE
         tier = UserTier(user.tier)
@@ -886,10 +918,12 @@ class SessionManager:
         managed = self._sessions.get(user_id)
 
         need_new_session = managed is None
-        summary_task: asyncio.Task | None = None
 
         if managed is not None:
-            # Close session if turn or cost limit reached, and schedule summary
+            # Close session if turn or cost limit reached, and schedule summary.
+            # Do NOT create a new session — the user's message was intended for
+            # the old context and would confuse a fresh session.  Instead, the
+            # summary includes a CTA button to continue.
             close_reason: CloseReason | None = None
             if managed.turn_count >= limits.max_turns_per_session:
                 close_reason = CloseReason.TURN_LIMIT
@@ -899,7 +933,6 @@ class SessionManager:
             if close_reason is not None:
                 session_data = _collect_session_data(managed)
                 await self._close_session(user_id, reason=close_reason)
-                need_new_session = True
                 if self._bot:
                     summary_task = asyncio.create_task(
                         _generate_and_send_summary(
@@ -909,6 +942,11 @@ class SessionManager:
                             managed.user_level, managed.target_language,
                         )
                     )
+                    try:
+                        await asyncio.wait_for(asyncio.shield(summary_task), timeout=20.0)
+                    except (asyncio.TimeoutError, Exception):
+                        summary_task.add_done_callback(_log_task_exception)
+                return None  # Summary with CTA sent; caller should not respond
 
         if need_new_session:
             limit_error = await self._check_daily_limits(
@@ -939,12 +977,6 @@ class SessionManager:
         else:
             return [t("session.busy", lang)]
 
-        # Ensure AI summary task completes (it sends its own message).
-        if summary_task is not None:
-            try:
-                await asyncio.wait_for(asyncio.shield(summary_task), timeout=20.0)
-            except (asyncio.TimeoutError, Exception):
-                summary_task.add_done_callback(_log_task_exception)
 
         self._inject_limit_warnings(managed, limits, lang, response_chunks)
         return response_chunks
@@ -1049,6 +1081,7 @@ class SessionManager:
                 ],
                 active_plan=active_plan,
                 plan_progress=plan_progress,
+                has_web_search=web_search_available() and tier == UserTier.PREMIUM,
             )
 
             # Create DB session record

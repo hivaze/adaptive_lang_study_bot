@@ -203,6 +203,12 @@ class BotTuning:
     plan_default_weekly_sessions: int = 4
     plan_auto_create_after_sessions: int = 3  # sessions > this → auto-create instead of propose
 
+    # -- Web search --
+    max_searches_per_session: int = 5  # shared counter for search + extract calls
+    web_search_max_results: int = 5
+    web_search_timeout_seconds: float = 10.0
+    web_extract_max_content_chars: int = 5000  # truncate extracted page content
+
     # -- Prompt builder --
     prompt_sanitize_default_len: int = 200  # default max_len for _sanitize/_sanitize_list
     prompt_name_max_len: int = 50  # first_name truncation in prompt
@@ -268,7 +274,7 @@ TIER_LIMITS: dict[UserTier, TierLimits] = {
         thinking_type="adaptive",
         max_llm_notifications_per_day=2,
         rate_limit_per_minute=5,
-        max_cost_per_session_usd=0.40,
+        max_cost_per_session_usd=0.60,
         redis_session_ttl_seconds=480,  # idle_timeout (360) + 120s buffer for cleanup loop delays
     ),
     UserTier.PREMIUM: TierLimits(
@@ -280,7 +286,7 @@ TIER_LIMITS: dict[UserTier, TierLimits] = {
         thinking_type="adaptive",
         max_llm_notifications_per_day=8,
         rate_limit_per_minute=20,
-        max_cost_per_session_usd=1.50,
+        max_cost_per_session_usd=2.25,
         redis_session_ttl_seconds=720,  # idle_timeout (600) + 120s buffer for cleanup loop delays
     ),
 }
@@ -337,6 +343,9 @@ class Settings(BaseSettings):
 
     # Logging
     log_level: str = "INFO"  # LOG_LEVEL env var; toggled at runtime via /settings
+
+    # Web search (Tavily) — optional, tool disabled when empty
+    tavily_api_key: str = ""  # TAVILY_API_KEY env var; free tier at tavily.com
 
     # Metrics
     metrics_port: int = 9090  # METRICS_PORT env var; Prometheus HTTP server

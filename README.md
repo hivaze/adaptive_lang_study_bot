@@ -110,12 +110,12 @@ All configuration is via environment variables (loaded by `pydantic-settings` fr
 | Model | claude-haiku-4-5 | claude-sonnet-4-6 |
 | Max turns/session | 20 | 35 |
 | Max sessions/day | 5 | 15 |
-| Session idle timeout | 5 min | 10 min |
+| Session idle timeout | 6 min | 10 min |
 | Thinking mode | adaptive | adaptive |
 | Effort | low | low |
 | LLM notifications/day | 2 | 8 |
 | Rate limit | 5 msg/min | 20 msg/min |
-| Max cost/session | $0.40 | $1.50 |
+| Max cost/session | $0.60 | $2.25 |
 | Max cost/day | $2.00 | $8.00 |
 
 To grant a user premium access, use the admin panel or update the `tier` column in the `users` table directly.
@@ -160,7 +160,7 @@ Any other text message starts or continues an interactive study session with the
 │ Agent Session (per user)                                       │
 │   ClaudeSDKClient ──────────────────> Anthropic API            │
 │    ├── System Prompt (15 sections)     (Haiku / Sonnet)        │
-│    ├── MCP Server (10 tools) ────────> PostgreSQL              │
+│    ├── MCP Server (10-12 tools) ─────> PostgreSQL              │
 │    └── Hooks (PostToolUse, UserPromptSubmit, Stop)             │
 │              │ on close                                        │
 │              ▼                                                 │

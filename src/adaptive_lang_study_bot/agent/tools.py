@@ -1,3 +1,4 @@
+import asyncio
 import json
 import uuid as _uuid
 from collections.abc import Callable
@@ -11,7 +12,13 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from dateutil.rrule import DAILY, HOURLY, MINUTELY, MONTHLY, SECONDLY, WEEKLY, YEARLY, rrulestr
 
-from adaptive_lang_study_bot.config import CEFR_LEVELS, TIER_LIMITS, tuning
+from adaptive_lang_study_bot.config import CEFR_LEVELS, TIER_LIMITS, settings, tuning
+
+try:
+    from tavily import AsyncTavilyClient
+    _TAVILY_AVAILABLE = True
+except ImportError:
+    _TAVILY_AVAILABLE = False
 from adaptive_lang_study_bot.db.repositories import (
     ExerciseResultRepo,
     LearningPlanRepo,
@@ -38,6 +45,11 @@ from adaptive_lang_study_bot.utils import compute_next_trigger, safe_zoneinfo, s
 # ---------------------------------------------------------------------------
 
 _USER_MUTABLE_FIELDS = {"interests", "learning_goals", "preferred_difficulty", "session_style", "topics_to_avoid", "notifications_paused", "additional_notes"}
+
+
+def web_search_available() -> bool:
+    """Check if web search tool can be created (library installed + API key set)."""
+    return _TAVILY_AVAILABLE and bool(settings.tavily_api_key)
 
 # Base period in minutes for each dateutil frequency constant.
 # Uses private _freq / _interval attrs — stable across all dateutil versions.
@@ -143,6 +155,8 @@ TOOL_NAMES = [
     "mcp__langbot__get_exercise_history",
     "mcp__langbot__get_progress_summary",
     "mcp__langbot__manage_learning_plan",
+    "mcp__langbot__web_search",
+    "mcp__langbot__web_extract",
 ]
 
 # Tools allowed per session type
@@ -152,6 +166,7 @@ _SESSION_TYPE_TOOLS: dict[SessionType, set[str]] = {
         "add_vocabulary", "get_due_vocabulary",
         "manage_schedule", "search_vocabulary", "get_exercise_history",
         "get_progress_summary", "manage_learning_plan",
+        "web_search", "web_extract",
     },
     SessionType.ONBOARDING: {
         "get_user_profile", "update_preference", "record_exercise_result",
@@ -1310,6 +1325,146 @@ def create_session_tools(
                 logger.exception("Failed to manage learning plan for user {}", user_id)
                 return _err("Database error managing learning plan, please try again")
 
+    # --- Web search tool (conditional on API key) ---
+
+    web_search_tool = None
+    web_extract_tool = None
+    if web_search_available() and user_tier == UserTier.PREMIUM:
+        _search_count = 0
+
+        @tool(
+            "web_search",
+            "Search the web for real-world content: news articles, cultural material, "
+            "authentic usage examples in the target language, or reading comprehension "
+            "material. Returns search results with titles, URLs, and content extracts. "
+            "Do NOT use for translations or grammar rules — use your own knowledge.",
+            {
+                "query": str,
+                "max_results": int,
+                "topic": str,
+            },
+        )
+        async def web_search(args: dict[str, Any]) -> dict[str, Any]:
+            nonlocal _search_count
+
+            if _search_count >= tuning.max_searches_per_session:
+                return _err(
+                    f"Search limit reached ({tuning.max_searches_per_session} per session). "
+                    "Use your own knowledge for the rest of this session."
+                )
+
+            query = str(args.get("query", "")).strip()
+            if not query:
+                return _err("Query cannot be empty")
+            query = query[:400]
+
+            max_results = min(
+                int(args.get("max_results", tuning.web_search_max_results)),
+                tuning.web_search_max_results,
+            )
+            topic = str(args.get("topic", "general"))
+            if topic not in ("general", "news"):
+                topic = "general"
+
+            try:
+                client = AsyncTavilyClient(api_key=settings.tavily_api_key)
+                raw = await asyncio.wait_for(
+                    client.search(
+                        query=query,
+                        max_results=max_results,
+                        topic=topic,
+                        include_answer=True,
+                    ),
+                    timeout=tuning.web_search_timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                return _err("Web search timed out, please try a shorter or simpler query")
+            except Exception as e:
+                logger.warning("Web search failed for user {}: {}", user_id, e)
+                return _err("Web search temporarily unavailable, please continue without it")
+
+            _search_count += 1
+
+            results = []
+            for r in raw.get("results", [])[:max_results]:
+                entry: dict[str, Any] = {
+                    "title": r.get("title", ""),
+                    "url": r.get("url", ""),
+                    "content": r.get("content", "")[:1000],
+                }
+                if r.get("published_date"):
+                    entry["published_date"] = r["published_date"]
+                results.append(entry)
+
+            return _ok({
+                "answer": raw.get("answer") or "",
+                "results": results,
+                "searches_remaining": tuning.max_searches_per_session - _search_count,
+            })
+
+        web_search_tool = web_search
+
+        @tool(
+            "web_extract",
+            "Extract full content from a specific web page URL. Use this after web_search "
+            "to get the complete article text for reading comprehension exercises, "
+            "vocabulary extraction, or discussion material. Returns the page title and "
+            "content as clean text. Shares the per-session search limit with web_search.",
+            {
+                "url": str,
+            },
+        )
+        async def web_extract(args: dict[str, Any]) -> dict[str, Any]:
+            nonlocal _search_count
+
+            if _search_count >= tuning.max_searches_per_session:
+                return _err(
+                    f"Search limit reached ({tuning.max_searches_per_session} per session). "
+                    "Use your own knowledge for the rest of this session."
+                )
+
+            url = str(args.get("url", "")).strip()
+            if not url:
+                return _err("URL cannot be empty")
+            if not url.startswith(("http://", "https://")):
+                return _err("URL must start with http:// or https://")
+
+            try:
+                client = AsyncTavilyClient(api_key=settings.tavily_api_key)
+                raw = await asyncio.wait_for(
+                    client.extract(urls=[url]),
+                    timeout=tuning.web_search_timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                return _err("Page extraction timed out, try a different URL")
+            except Exception as e:
+                logger.warning("Web extract failed for user {}: {}", user_id, e)
+                return _err("Page extraction temporarily unavailable")
+
+            _search_count += 1
+
+            results = raw.get("results", [])
+            failed = raw.get("failed_results", [])
+
+            if not results:
+                reason = failed[0].get("error", "unknown error") if failed else "unknown error"
+                return _err(f"Could not extract content from URL: {reason}")
+
+            page = results[0]
+            content = page.get("raw_content", "")
+            # Truncate to configured limit
+            if len(content) > tuning.web_extract_max_content_chars:
+                content = content[:tuning.web_extract_max_content_chars] + "\n\n[Content truncated]"
+
+            return _ok({
+                "title": page.get("title", ""),
+                "url": page.get("url", url),
+                "content": content,
+                "searches_remaining": tuning.max_searches_per_session - _search_count,
+            })
+
+        web_extract_tool = web_extract
+
     # --- Build list and permission check ---
 
     all_tools = [
@@ -1324,6 +1479,9 @@ def create_session_tools(
         get_progress_summary,
         manage_learning_plan,
     ]
+    if web_search_tool is not None:
+        all_tools.append(web_search_tool)
+        all_tools.append(web_extract_tool)
 
     def can_use_tool(tool_name: str) -> bool:
         bare_name = strip_mcp_prefix(tool_name)
@@ -1340,3 +1498,53 @@ def create_langbot_server(tools: list) -> Any:
         version="1.0.0",
         tools=tools,
     )
+
+
+async def fetch_news_for_proactive(
+    target_language: str,
+    interests: list[str] | None = None,
+) -> str | None:
+    """Fetch news content for proactive prompt injection.
+
+    Returns a formatted text snippet with news results, or None on failure.
+    Used by ``run_proactive_llm_session()`` to enrich proactive notifications
+    with real-world content — the proactive flow is tool-less, so this is
+    called before the LLM session and injected into the prompt.
+    """
+    if not web_search_available():
+        return None
+
+    # Build a query from target language + interests
+    interest_part = ""
+    if interests:
+        interest_part = f" about {', '.join(interests[:3])}"
+    query = f"news{interest_part} in {target_language}"
+
+    try:
+        client = AsyncTavilyClient(api_key=settings.tavily_api_key)
+        raw = await asyncio.wait_for(
+            client.search(
+                query=query,
+                topic="news",
+                max_results=3,
+                include_answer=False,
+            ),
+            timeout=tuning.web_search_timeout_seconds,
+        )
+    except Exception:
+        logger.debug("Proactive news fetch failed for language={}", target_language)
+        return None
+
+    results = raw.get("results", [])
+    if not results:
+        return None
+
+    lines: list[str] = []
+    for r in results[:3]:
+        title = r.get("title", "").strip()
+        content = r.get("content", "").strip()[:500]
+        url = r.get("url", "")
+        if title and content:
+            lines.append(f"- **{title}**\n  {content}\n  Source: {url}")
+
+    return "\n\n".join(lines) if lines else None

@@ -802,7 +802,7 @@ async def _auto_start_first_session(message: Message, user: User, lang: str) -> 
         first_prompt = t("start.first_session_prompt", lang)
         response_chunks = await session_manager.handle_message(user, first_prompt)
 
-        if not response_chunks or all(not c.strip() for c in response_chunks):
+        if response_chunks is None or not response_chunks or all(not c.strip() for c in response_chunks):
             return
 
         for chunk in response_chunks:
@@ -1062,7 +1062,7 @@ async def on_cta_session(
     finally:
         typing_task.cancel()
 
-    if not response_chunks or all(not c.strip() for c in response_chunks):
+    if response_chunks is None or not response_chunks or all(not c.strip() for c in response_chunks):
         return
 
     for chunk in response_chunks:

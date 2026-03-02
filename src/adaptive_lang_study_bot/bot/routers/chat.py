@@ -101,6 +101,11 @@ async def handle_text(message: Message, user: User, db_session: AsyncSession) ->
     finally:
         typing_task.cancel()
 
+    # None means the session was closed due to limits — summary with CTA
+    # buttons has been sent internally, nothing more to do.
+    if response_chunks is None:
+        return
+
     # If agent returned nothing (e.g. only tool calls), send a fallback message
     if not response_chunks or all(not c.strip() for c in response_chunks):
         await message.answer(t("session.no_response", lang))

@@ -956,6 +956,46 @@ class TestBuildProactivePrompt:
         assert "DUE VOCABULARY" not in prompt
         assert "PROGRESS DATA" not in prompt
 
+    def test_news_context_included_when_present(self):
+        user = _make_user()
+        news = "- **Tech News**: AI is changing language learning\n  Source: https://example.com"
+        prompt = build_proactive_prompt(
+            user, "proactive_nudge", {},
+            prefetch={"news_context": news},
+        )
+        assert "NEWS CONTEXT" in prompt
+        assert "Tech News" in prompt
+
+    def test_no_news_context_when_absent(self):
+        user = _make_user()
+        prompt = build_proactive_prompt(user, "proactive_nudge", {})
+        assert "NEWS CONTEXT" not in prompt
+
+
+class TestWebSearchPromptHint:
+
+    def test_web_search_hint_when_enabled(self):
+        user = _make_user()
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx, has_web_search=True)
+        assert "web_search" in prompt
+        assert "TOOL REQUIREMENTS" in prompt
+
+    def test_no_web_search_hint_by_default(self):
+        user = _make_user()
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx)
+        # web_search should not appear in TOOL REQUIREMENTS
+        tool_section = prompt.split("TOOL REQUIREMENTS")[1].split("##")[0]
+        assert "web_search" not in tool_section
+
+    def test_web_search_hint_mentions_limit(self):
+        user = _make_user()
+        ctx = compute_session_context(user)
+        prompt = build_system_prompt(user, ctx, has_web_search=True)
+        from adaptive_lang_study_bot.config import tuning
+        assert str(tuning.max_searches_per_session) in prompt
+
 
 # ---------------------------------------------------------------------------
 # Comeback adaptation

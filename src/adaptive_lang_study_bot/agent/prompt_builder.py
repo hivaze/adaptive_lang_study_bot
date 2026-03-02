@@ -921,6 +921,7 @@ def build_system_prompt(
     active_schedules: list[dict] | None = None,
     active_plan: "LearningPlan | None" = None,
     plan_progress: dict | None = None,
+    has_web_search: bool = False,
 ) -> str:
     """Build the full system prompt for a session.
 
@@ -1059,6 +1060,18 @@ def build_system_prompt(
             "start to plan content, and periodically during longer sessions to adapt your approach. "
             "This is your primary source for understanding the student's performance — "
             "the student profile above is a static snapshot that does not update mid-session."
+        )
+    if has_web_search:
+        n = len(tool_hints) + 1
+        tool_hints.append(
+            f"{n}. You have access to web_search and web_extract for finding real-world content. "
+            "Use web_search to find: cultural articles, current events in the target language, "
+            "authentic usage examples, or reading comprehension material. "
+            "Use web_extract to get the full text of a specific page URL (e.g. after finding "
+            "an interesting article via web_search). "
+            "Do NOT use these for translations or grammar rules — use your own knowledge. "
+            f"You have up to {tuning.max_searches_per_session} web calls per session (shared "
+            "between search and extract) — use them strategically."
         )
     sections.append("## TOOL REQUIREMENTS\n" + "\n".join(tool_hints))
 
@@ -1475,6 +1488,16 @@ def build_proactive_prompt(
         lines.append(f"- This week: {sw} sessions")
 
         sections.append("\n".join(lines))
+
+    # --- 4c. News context (injected by proactive engine via web search) ---
+    if pf.get("news_context"):
+        sections.append(
+            "## NEWS CONTEXT\n"
+            "Recent content found for the student's target language and interests. "
+            "Use this material to create an engaging notification with real-world "
+            "content for discussion or practice.\n\n"
+            + str(pf["news_context"])
+        )
 
     # --- 5. Learning plan context (compact, for proactive_summary) ---
     if active_plan and plan_progress and session_type == "proactive_summary":

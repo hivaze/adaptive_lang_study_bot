@@ -98,6 +98,8 @@ def summarize_tool_usage(tool_names: list[str]) -> list[str]:
         parts.append("Updated study schedule")
     if "update_preference" in tool_names:
         parts.append("Updated preferences")
+    if "web_search" in tool_names or "web_extract" in tool_names:
+        parts.append("Used web search")
     return parts
 
 

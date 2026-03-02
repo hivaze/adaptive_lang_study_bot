@@ -26,14 +26,14 @@ poetry add <package>                           # add dependency
 ```
 src/adaptive_lang_study_bot/
 ├── config.py              # Settings (pydantic-settings), BotTuning (centralized magic numbers), TIER_LIMITS
-├── enums.py               # StrEnum: UserTier, SessionType, NotificationTier, CloseReason, Difficulty, SessionStyle, etc.
-├── utils.py               # Helpers: user_local_now, safe_zoneinfo, compute_next_trigger, get_language_name, strip_mcp_prefix, is_user_admin, compute_new_streak, summarize_tool_usage, stamp_field/stamp_fields/get_item_date (field timestamps)
+├── enums.py               # StrEnum: UserTier, SessionType, SessionStyle, Difficulty, CloseReason, NotificationTier, NotificationStatus, ScheduleType, ScheduleStatus, PipelineStatus, AccessRequestStatus
+├── utils.py               # Helpers: score_label, user_local_now, safe_zoneinfo, compute_next_trigger, get_language_name, strip_mcp_prefix, is_user_admin, compute_new_streak, summarize_tool_usage, stamp_field/stamp_fields/get_item_date (field timestamps)
 ├── i18n.py                # t(key, lang, **kwargs) with JSON locale fallback
 ├── logging_config.py      # Loguru setup + stdlib bridge, runtime log level toggle
 ├── metrics.py             # Prometheus counters/gauges/histograms (16 metrics)
 ├── locales/               # JSON locale files (en, ru, es, fr, de, pt, it)
 ├── agent/
-│   ├── tools.py           # 10 MCP tools, _SESSION_TYPE_TOOLS, _USER_MUTABLE_FIELDS, compute_plan_progress()
+│   ├── tools.py           # 10 core + 2 optional web MCP tools (web_search, web_extract; conditional on Tavily), _SESSION_TYPE_TOOLS, _USER_MUTABLE_FIELDS, compute_plan_progress()
 │   ├── hooks.py           # PostToolUse (adaptive hints), UserPromptSubmit (turn limit), Stop hooks
 │   ├── prompt_builder.py  # build_system_prompt(), build_proactive_prompt(), compute_session_context()
 │   ├── session_manager.py # SessionManager (interactive) + run_proactive_llm_session() + run_summary_llm_session() (standalone)
@@ -69,7 +69,7 @@ tests/
 └── llm/        # Real Claude API calls — prompt compliance, security, tool calling, session types
 
 development/
-├── code_sandbox/  # SDK experiment scripts (exp_01..exp_14) + shared.py
+├── code_sandbox/  # SDK experiment scripts (exp_01..exp_15) + shared.py
 └── docs/          # Design docs: experiment_observations, personalization, proactive_behavior, user_paths
 ```
 
@@ -89,7 +89,7 @@ Each `ClaudeSDKClient` instance spawns a Claude CLI subprocess. Sessions are ass
 
 1. **System prompt** (`prompt_builder.py`) — full string override, built fresh per session from a DB snapshot of the user's profile. Up to 15 sections for interactive (role, rules, output format, tool requirements, student profile, first session guide, teaching approach, level guidance, exercise types, vocab strategy, session context, comeback adaptation, scheduling, learning plan, bot capabilities). Some are conditional: first session guide (new users only), level guidance, vocab strategy, comeback adaptation (gap ≥ 48h), learning plan (three modes: active plan with progress, propose plan interactively on early sessions ≤ `plan_auto_create_after_sessions`, auto-create plan silently for experienced users). Proactive prompts are compact (5 sections + conditional learning plan context for proactive_summary: role+rules, profile, time context, task, trigger context).
 
-2. **MCP tools** (`tools.py`) — 10 tools registered via `@tool` + `create_sdk_mcp_server()`. Each tool is a closure capturing `(session_factory, user_id)` — creates its own short-lived DB session per call. Tools are filtered by `_SESSION_TYPE_TOOLS[session_type]` before MCP server creation — the SDK never sees disallowed tools.
+2. **MCP tools** (`tools.py`) — 10 core tools + 2 optional web tools (`web_search`, `web_extract`; conditional on Tavily library + `TAVILY_API_KEY`) registered via `@tool` + `create_sdk_mcp_server()`. Each tool is a closure capturing `(session_factory, user_id)` — creates its own short-lived DB session per call. Tools are filtered by `_SESSION_TYPE_TOOLS[session_type]` before MCP server creation — the SDK never sees disallowed tools.
 
 3. **Hooks** (`hooks.py`) — per-session `SessionHookState` tracks exercise scores, tool calls, turn count. `PostToolUse` injects adaptive difficulty hints after exercises (cheap behavior steering — no extra LLM call). `UserPromptSubmit` injects wrap-up hint at 80% of turn limit.
 
@@ -97,7 +97,7 @@ Each `ClaudeSDKClient` instance spawns a Claude CLI subprocess. Sessions are ass
 
 ### Two-tier system
 
-Free vs premium tiers (admin-assigned, no billing). Defined in `config.py:TIER_LIMITS` as `dict[UserTier, TierLimits]`. Affects: model (haiku/sonnet), turn limits (20/35), cost caps (per-session and daily), idle timeout (5/10 min), thinking (adaptive for both), effort (low), notification limits (2/8 LLM/day), rate limits (5/20 msg/min).
+Free vs premium tiers (admin-assigned, no billing). Defined in `config.py:TIER_LIMITS` as `dict[UserTier, TierLimits]`. Affects: model (haiku/sonnet), turn limits (20/35), cost caps (per-session and daily), idle timeout (6/10 min), thinking (adaptive for both), effort (low), notification limits (2/8 LLM/day), rate limits (5/20 msg/min).
 
 ### Concurrency model
 
@@ -238,7 +238,7 @@ SDK spawns Claude CLI as subprocess. Nesting guard removed at import time in `se
 
 | Type | Entry point | Model | Hooks | Tools | Timeout | Notes |
 |------|-------------|-------|-------|-------|---------|-------|
-| Interactive | `SessionManager._create_session()` | Tier-based (haiku/sonnet) | PostToolUse + UserPromptSubmit + Stop | 7-10 (session-type filtered) | Idle timeout (5/10 min) | Long-lived, multi-turn, reused across messages |
+| Interactive | `SessionManager._create_session()` | Tier-based (haiku/sonnet) | PostToolUse + UserPromptSubmit + Stop | 6-12 (session-type filtered) | Idle timeout (6/10 min) | Long-lived, multi-turn, reused across messages |
 | Proactive | `run_proactive_llm_session()` | haiku (`tuning.proactive_model`) | None | None (tool-less) | 30s hard timeout | Standalone function, single query, generates text directly |
 | Summary | `run_summary_llm_session()` | haiku (`tuning.proactive_model`) | None | None (tool-less) | 15s timeout, max 3 turns | Generates session-end summary, no DB writes |
 

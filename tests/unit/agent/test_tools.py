@@ -9,6 +9,7 @@ from adaptive_lang_study_bot.agent.tools import (
     _parse_list_field,
     _rrule_interval_minutes,
     create_session_tools,
+    web_search_available,
 )
 from adaptive_lang_study_bot.config import TIER_LIMITS, tuning
 from adaptive_lang_study_bot.enums import SessionType, UserTier
@@ -168,7 +169,10 @@ class TestCanUseTool:
         assert can_use("nonexistent_tool") is False
 
     def test_tools_created_match_session_type(self):
-        """Verify create_session_tools returns the right number of tools per type."""
+        """Verify create_session_tools returns the right number of tools per type.
+
+        Uses PREMIUM tier so tier-gated tools (web_search, web_extract) are created.
+        """
         for session_type, expected_names in _SESSION_TYPE_TOOLS.items():
             mock_session = AsyncMock()
             tools, _ = create_session_tools(
@@ -176,6 +180,7 @@ class TestCanUseTool:
                 user_id=999,
                 session_id="test-id",
                 session_type=session_type,
+                user_tier=UserTier.PREMIUM,
             )
             # All tools are created (filtering happens in session_manager)
             # but can_use_tool should only allow the right ones
@@ -274,4 +279,102 @@ class TestParseListField:
         result = _parse_list_field("  a ;  b  ; c  ", max_items=5, max_len=100)
         assert result == ["a", "b", "c"]
 
+
+class TestWebTools:
+    """Tests for web_search and web_extract tool constants, availability, and tier gating."""
+
+    def test_web_search_in_tool_names(self):
+        assert "mcp__langbot__web_search" in TOOL_NAMES
+
+    def test_web_extract_in_tool_names(self):
+        assert "mcp__langbot__web_extract" in TOOL_NAMES
+
+    def test_web_search_in_interactive(self):
+        assert "web_search" in _SESSION_TYPE_TOOLS[SessionType.INTERACTIVE]
+
+    def test_web_extract_in_interactive(self):
+        assert "web_extract" in _SESSION_TYPE_TOOLS[SessionType.INTERACTIVE]
+
+    def test_web_tools_not_in_onboarding(self):
+        assert "web_search" not in _SESSION_TYPE_TOOLS[SessionType.ONBOARDING]
+        assert "web_extract" not in _SESSION_TYPE_TOOLS[SessionType.ONBOARDING]
+
+    def test_web_tools_not_in_proactive(self):
+        for st in (SessionType.PROACTIVE_REVIEW, SessionType.PROACTIVE_QUIZ,
+                   SessionType.PROACTIVE_SUMMARY, SessionType.PROACTIVE_NUDGE):
+            assert "web_search" not in _SESSION_TYPE_TOOLS[st]
+            assert "web_extract" not in _SESSION_TYPE_TOOLS[st]
+
+    def test_web_tools_not_in_assessment(self):
+        assert "web_search" not in _SESSION_TYPE_TOOLS[SessionType.ASSESSMENT]
+        assert "web_extract" not in _SESSION_TYPE_TOOLS[SessionType.ASSESSMENT]
+
+    def test_web_search_available_with_key(self, monkeypatch):
+        import adaptive_lang_study_bot.agent.tools as tools_mod
+        monkeypatch.setattr(tools_mod, "_TAVILY_AVAILABLE", True)
+        monkeypatch.setattr(tools_mod.settings, "tavily_api_key", "test-key")
+        assert web_search_available() is True
+
+    def test_web_search_unavailable_without_key(self, monkeypatch):
+        import adaptive_lang_study_bot.agent.tools as tools_mod
+        monkeypatch.setattr(tools_mod, "_TAVILY_AVAILABLE", True)
+        monkeypatch.setattr(tools_mod.settings, "tavily_api_key", "")
+        assert web_search_available() is False
+
+    def test_web_search_unavailable_without_library(self, monkeypatch):
+        import adaptive_lang_study_bot.agent.tools as tools_mod
+        monkeypatch.setattr(tools_mod, "_TAVILY_AVAILABLE", False)
+        monkeypatch.setattr(tools_mod.settings, "tavily_api_key", "test-key")
+        assert web_search_available() is False
+
+    def test_interactive_can_use_web_tools(self):
+        mock_session = AsyncMock()
+        _, can_use_tool = create_session_tools(
+            session_factory=lambda: mock_session,
+            user_id=999,
+            session_id="test-id",
+            session_type=SessionType.INTERACTIVE,
+        )
+        assert can_use_tool("web_search") is True
+        assert can_use_tool("mcp__langbot__web_search") is True
+        assert can_use_tool("web_extract") is True
+        assert can_use_tool("mcp__langbot__web_extract") is True
+
+    def test_onboarding_cannot_use_web_tools(self):
+        mock_session = AsyncMock()
+        _, can_use_tool = create_session_tools(
+            session_factory=lambda: mock_session,
+            user_id=999,
+            session_id="test-id",
+            session_type=SessionType.ONBOARDING,
+        )
+        assert can_use_tool("web_search") is False
+        assert can_use_tool("web_extract") is False
+
+    def test_web_tools_only_created_for_premium(self):
+        """Web tools should only be created when user_tier is PREMIUM."""
+        mock_session = AsyncMock()
+        # Premium tier — web tools should be in the list
+        tools_premium, _ = create_session_tools(
+            session_factory=lambda: mock_session,
+            user_id=999,
+            session_id="test-id",
+            session_type=SessionType.INTERACTIVE,
+            user_tier=UserTier.PREMIUM,
+        )
+        premium_names = {t.name for t in tools_premium}
+        assert "web_search" in premium_names
+        assert "web_extract" in premium_names
+
+        # Free tier — web tools should NOT be in the list
+        tools_free, _ = create_session_tools(
+            session_factory=lambda: mock_session,
+            user_id=999,
+            session_id="test-id",
+            session_type=SessionType.INTERACTIVE,
+            user_tier=UserTier.FREE,
+        )
+        free_names = {t.name for t in tools_free}
+        assert "web_search" not in free_names
+        assert "web_extract" not in free_names
 
