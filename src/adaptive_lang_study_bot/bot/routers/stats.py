@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from html import escape as esc
 
 from aiogram import Router
@@ -5,12 +6,13 @@ from aiogram.filters import Command
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from adaptive_lang_study_bot.agent.tools import compute_plan_progress
 from adaptive_lang_study_bot.bot.helpers import localize_value
 from adaptive_lang_study_bot.config import TIER_LIMITS, UserTier
 from adaptive_lang_study_bot.db.models import User
-from adaptive_lang_study_bot.db.repositories import ExerciseResultRepo, VocabularyRepo
+from adaptive_lang_study_bot.db.repositories import ExerciseResultRepo, LearningPlanRepo, VocabularyRepo
 from adaptive_lang_study_bot.i18n import DEFAULT_LANGUAGE, get_localized_language_name, render_goal, t
-from adaptive_lang_study_bot.utils import score_label
+from adaptive_lang_study_bot.utils import compute_level_progress, score_label
 
 router = Router()
 
@@ -55,6 +57,57 @@ async def cmd_stats(message: Message, user: User, db_session: AsyncSession) -> N
     if user.strong_areas:
         strong = ", ".join(esc(a) for a in user.strong_areas)
         lines.append(t("stats.strong_areas", lang, areas=strong))
+
+    # Level progress
+    if user.recent_scores:
+        level_progress = compute_level_progress(user.recent_scores, user.level)
+        lines.append(t("stats.level_progress", lang, progress=esc(level_progress)))
+
+    # Learning plan
+    plan = await LearningPlanRepo.get_active(db_session, user.telegram_id)
+    if plan:
+        today = datetime.now(timezone.utc).date()
+        elapsed_days = (today - plan.start_date).days
+        current_week = max(1, min(plan.total_weeks, elapsed_days // 7 + 1))
+
+        # Compute progress from exercise results
+        all_topics = [
+            tp
+            for p in (plan.plan_data or {}).get("phases", [])
+            for tp in p.get("topics", [])
+        ]
+        topic_stats_raw = await ExerciseResultRepo.get_stats_for_topics(
+            db_session, user.telegram_id, all_topics, plan.start_date,
+        )
+        progress = compute_plan_progress(
+            plan.plan_data or {}, plan.total_weeks, plan.start_date, topic_stats_raw,
+        )
+
+        lines.append(t(
+            "stats.plan_title", lang,
+            current_level=esc(plan.current_level),
+            target_level=esc(plan.target_level),
+        ))
+        lines.append(t(
+            "stats.plan_progress", lang,
+            completed=progress["completed_topics"],
+            total=progress["total_topics"],
+            pct=progress["progress_pct"],
+        ))
+        lines.append(t(
+            "stats.plan_week", lang,
+            current=current_week,
+            total=plan.total_weeks,
+        ))
+
+        # Current phase info
+        for phase in progress["phases"]:
+            if phase["status"] == "in_progress":
+                lines.append(t(
+                    "stats.plan_current_phase", lang,
+                    focus=esc(phase["focus"] or ""),
+                ))
+                break
 
     if recent:
         lines.append(t("stats.recent_exercises", lang))
