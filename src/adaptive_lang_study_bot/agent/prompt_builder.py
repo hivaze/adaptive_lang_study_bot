@@ -1000,7 +1000,9 @@ def build_system_prompt(
         "them to tap /end to finish the session and see their summary. "
         "Do NOT just say goodbye — the session stays open until /end is used.\n"
         "9. Use an informal, friendly tone — like a helpful friend, not a formal teacher. "
-        "Keep it warm and casual."
+        "Keep it warm and casual.\n"
+        f"10. Level changes require sustained performance over {tuning.level_recent_window} exercises. "
+        "Plan sessions knowing that consistent practice matters more than single high scores."
     )
 
     # --- 3. Output format ---
@@ -1114,15 +1116,22 @@ def build_system_prompt(
     if level_scores:
         level_avg = sum(level_scores) / len(level_scores)
         if has_perf_tools:
-            # Just note the auto-adjust mechanism; agent can query tools for details.
             profile_lines.append(
-                "Level progress: level adjusts automatically based on exercise results"
+                f"Level progress: level adjusts based on the last {window} exercise scores. "
+                "Current level can change when enough exercises are completed. "
+                "Use get_progress_summary to check trends. "
+                "NEVER reveal exact scores, thresholds, or numeric averages to the student."
             )
         else:
             profile_lines.append(
                 f"Level progress: recent performance is {_score_label(level_avg)} "
-                "(level adjusts automatically based on exercise results)"
+                f"(based on last {window} exercises). "
+                "Level adjusts automatically based on exercise results."
             )
+    else:
+        profile_lines.append(
+            f"Level progress: need at least {window} exercises for level evaluation"
+        )
     sections.append("## STUDENT PROFILE\n" + "\n".join(profile_lines))
 
     # --- First session guide (replaces teaching approach / exercise types for new users) ---
@@ -1550,6 +1559,7 @@ def build_summary_prompt(
     user_level: str,
     user_timezone: str = "UTC",
     plan_summary: str | None = None,
+    level_progress: str | None = None,
 ) -> str:
     """Build a focused system prompt for AI session summary generation.
 
@@ -1664,6 +1674,8 @@ def build_summary_prompt(
         data_lines.append(f"Vocabulary words reviewed via exercises: {words_reviewed}")
     if plan_summary:
         data_lines.append(f"Learning plan: {plan_summary}")
+    if level_progress:
+        data_lines.append(f"Level progress: {level_progress}")
 
     sections.append("## SESSION DATA\n" + "\n".join(data_lines))
 
@@ -1687,6 +1699,11 @@ def build_summary_prompt(
         "contributed to plan progress (e.g. which plan topics were covered). "
     ) if plan_summary else ""
 
+    level_hint = (
+        "If level progress info is provided, briefly mention the student's "
+        "trajectory toward their next level (without numeric scores). "
+    ) if level_progress else ""
+
     if has_progress and not is_minimal_progress:
         task = (
             "Summarize the student's session achievements in 2-4 sentences. "
@@ -1694,6 +1711,7 @@ def build_summary_prompt(
             "Give qualitative feedback on their performance (praise, encouragement, "
             "areas to improve) — do NOT include numeric scores or averages. "
             + plan_hint
+            + level_hint
             + "End with a specific recommendation for what to focus on next time. "
             + no_header_reminder
         )

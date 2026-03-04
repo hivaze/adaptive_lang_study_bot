@@ -9,7 +9,12 @@ from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 
 from adaptive_lang_study_bot.cache.client import get_redis
-from adaptive_lang_study_bot.cache.keys import PROACTIVE_TICK_LOCK_KEY, PROACTIVE_TICK_LOCK_TTL
+from adaptive_lang_study_bot.cache.keys import (
+    NOTIF_REMINDER_KEY,
+    NOTIF_REMINDER_TTL,
+    PROACTIVE_TICK_LOCK_KEY,
+    PROACTIVE_TICK_LOCK_TTL,
+)
 from adaptive_lang_study_bot.cache.redis_lock import acquire_lock, generate_lock_token, refresh_lock, release_lock
 from adaptive_lang_study_bot.config import settings, tuning
 from adaptive_lang_study_bot.metrics import PROACTIVE_TICK_DURATION, PROACTIVE_TICKS
@@ -23,13 +28,21 @@ from adaptive_lang_study_bot.db.repositories import (
 from adaptive_lang_study_bot.enums import ScheduleStatus, ScheduleType
 from adaptive_lang_study_bot.i18n import DEFAULT_LANGUAGE, t
 from adaptive_lang_study_bot.proactive.dispatcher import dispatch_notification
-from adaptive_lang_study_bot.utils import compute_next_trigger, safe_zoneinfo
+from adaptive_lang_study_bot.utils import compute_next_trigger, get_language_name, safe_zoneinfo
 from adaptive_lang_study_bot.agent.session_manager import session_manager
 from adaptive_lang_study_bot.bot.routers.review import is_in_review
 from adaptive_lang_study_bot.proactive.triggers import ALL_TRIGGERS
 
 # Schedule failure thresholds are in config.py:BotTuning
 # (tuning.schedule_max_backoff_minutes, tuning.schedule_max_consecutive_failures)
+
+
+def _local_today_start(tz_str: str) -> datetime:
+    """Return the start of user's local today as a UTC datetime."""
+    tz = safe_zoneinfo(tz_str)
+    local_now = datetime.now(timezone.utc).astimezone(tz)
+    local_midnight = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return local_midnight.astimezone(timezone.utc)
 
 
 async def _refresh_tick_lock(redis, token: str) -> None:
@@ -72,6 +85,7 @@ async def tick_scheduler(bot: Bot) -> None:
     refresh_task = asyncio.create_task(_periodic_lock_refresh(redis, token))
 
     try:
+        await _phase_reminders(bot)
         await _phase_schedules(bot)
         await _phase_event_triggers(bot)
     except Exception:
@@ -111,6 +125,112 @@ async def _advance_schedule(schedule, user_timezone: str, *, success: bool) -> N
                 success=success,
             )
         await db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Phase 0: Follow-up reminders for scheduled lessons
+# ---------------------------------------------------------------------------
+
+async def _phase_reminders(bot: Bot) -> None:
+    """Process pending follow-up reminders for ignored scheduled lesson notifications.
+
+    Scans Redis for notif:reminder:{user_id} keys. For each:
+    - If user started a session since the reminder was set → cancel chain.
+    - If interval elapsed and count < max → send follow-up, delete previous message.
+    - If count >= max → cancel chain.
+    """
+    redis = await get_redis()
+    reminder_keys: list[str] = []
+    async for key in redis.scan_iter(match="notif:reminder:*", count=100):
+        reminder_keys.append(key if isinstance(key, str) else key.decode())
+
+    if not reminder_keys:
+        return
+
+    now = datetime.now(timezone.utc)
+
+    for key in reminder_keys:
+        try:
+            data = await redis.hgetall(key)
+            if not data:
+                await redis.delete(key)
+                continue
+
+            # Decode Redis hash values
+            raw = {
+                (k if isinstance(k, str) else k.decode()): (v if isinstance(v, str) else v.decode())
+                for k, v in data.items()
+            }
+            user_id = int(raw["user_id"])
+            msg_id = int(raw["msg_id"])
+            count = int(raw["count"])
+            sent_at = datetime.fromisoformat(raw["sent_at"])
+            lang = raw.get("lang", DEFAULT_LANGUAGE)
+            target_language = raw.get("target_language", "")
+            user_name = raw.get("user_name", "")
+
+            # Cancel if user started a session since reminder was set
+            initial_sent_at = datetime.fromisoformat(raw["initial_sent_at"])
+            async with async_session_factory() as db:
+                sessions_since = await SessionRepo.count_since(
+                    db, user_id, initial_sent_at,
+                )
+            if sessions_since > 0:
+                # User started a lesson — cancel reminder chain
+                await redis.delete(key)
+                logger.debug("Reminder chain cancelled for user {} — session started", user_id)
+                continue
+
+            # Check if enough time elapsed
+            elapsed = (now - sent_at).total_seconds()
+            if elapsed < tuning.schedule_reminder_interval:
+                continue
+
+            # Check if max reminders reached
+            if count >= tuning.schedule_reminder_max:
+                await redis.delete(key)
+                logger.debug("Reminder chain exhausted for user {} ({} reminders sent)", user_id, count)
+                continue
+
+            # Skip if user now has an active session
+            if session_manager.has_active_session(user_id):
+                await redis.delete(key)
+                continue
+
+            # Send follow-up reminder, delete previous message
+            try:
+                await bot.delete_message(chat_id=user_id, message_id=msg_id)
+            except Exception:
+                logger.debug("Failed to delete previous reminder msg {} for user {}", msg_id, user_id)
+
+            reminder_text = t(
+                "notif.practice_reminder_followup", lang,
+                name=user_name, target_language=target_language,
+            )
+            try:
+                sent = await bot.send_message(user_id, reminder_text, parse_mode="HTML")
+                new_msg_id = sent.message_id
+            except Exception:
+                logger.warning("Failed to send follow-up reminder to user {}", user_id)
+                await redis.delete(key)
+                continue
+
+            # Update reminder state
+            await redis.hset(key, mapping={
+                "msg_id": str(new_msg_id),
+                "count": str(count + 1),
+                "sent_at": now.isoformat(),
+            })
+            await redis.expire(key, NOTIF_REMINDER_TTL)
+            logger.info(
+                "Sent follow-up reminder {}/{} to user {}",
+                count + 1, tuning.schedule_reminder_max, user_id,
+            )
+
+        except Exception:
+            logger.exception("Error processing reminder key {}", key)
+            with suppress(Exception):
+                await redis.delete(key)
 
 
 # ---------------------------------------------------------------------------
@@ -193,9 +313,26 @@ async def _phase_schedules(bot: Bot) -> None:
                     await _advance_schedule(schedule, user.timezone, success=True)
                     return
 
+                # Check if user already had a lesson today — use different template
+                today_start = _local_today_start(user.timezone)
+                async with async_session_factory() as db:
+                    today_sessions = await SessionRepo.count_since(
+                        db, user.telegram_id, today_start,
+                    )
+
+                # For practice reminders, use "another lesson" variant if already studied
+                template_type = schedule.schedule_type
+                if (
+                    today_sessions > 0
+                    and schedule.schedule_type == ScheduleType.PRACTICE_REMINDER
+                ):
+                    template_type = "practice_reminder_another"
+
+                target_lang_name = get_language_name(user.target_language)
+
                 trigger = {
                     "type": schedule.schedule_type,
-                    "template_type": schedule.schedule_type,
+                    "template_type": template_type,
                     "tier": schedule.notification_tier,
                     "trigger_source": "schedule",
                     "data": {
@@ -204,8 +341,9 @@ async def _phase_schedules(bot: Bot) -> None:
                         "due_count": due_count,
                         "level": user.level,
                         "vocab_count": user.vocabulary_count,
-                        "target_language": user.target_language,
+                        "target_language": target_lang_name,
                         "sessions_week": session_counts.get(user.telegram_id, 0),
+                        "today_sessions": today_sessions,
                     },
                 }
 

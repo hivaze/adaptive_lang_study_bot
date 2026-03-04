@@ -8,7 +8,15 @@ from loguru import logger
 from redis.exceptions import RedisError
 
 from adaptive_lang_study_bot.cache.client import get_redis
-from adaptive_lang_study_bot.cache.keys import NOTIF_COOLDOWN_KEY, NOTIF_COOLDOWN_TTL, NOTIF_DEDUP_KEY, NOTIF_LLM_KEY
+from adaptive_lang_study_bot.cache.keys import (
+    NOTIF_COOLDOWN_KEY,
+    NOTIF_COOLDOWN_TTL,
+    NOTIF_DEDUP_KEY,
+    NOTIF_LLM_KEY,
+    NOTIF_REMINDER_KEY,
+    NOTIF_REMINDER_TTL,
+)
+from adaptive_lang_study_bot.config import tuning as _tuning
 from adaptive_lang_study_bot.config import TIER_LIMITS
 from adaptive_lang_study_bot.metrics import NOTIFICATION_LLM_COST, NOTIFICATIONS_SENT, NOTIFICATIONS_SKIPPED
 from adaptive_lang_study_bot.agent.session_manager import run_proactive_llm_session
@@ -433,6 +441,33 @@ async def dispatch_notification(
             await redis.set(cooldown_key, "1", ex=NOTIF_COOLDOWN_TTL)
         except RedisError:
             logger.warning("Redis unavailable during cooldown set for user {}", user.telegram_id)
+
+    # Start follow-up reminder chain for practice_reminder notifications
+    # when the user hasn't studied today (trigger data includes today_sessions)
+    if (
+        status == NotificationStatus.SENT
+        and telegram_message_id is not None
+        and notification_type == ScheduleType.PRACTICE_REMINDER
+        and trigger.get("trigger_source") == "schedule"
+        and trigger.get("data", {}).get("today_sessions", 0) == 0
+    ):
+        try:
+            redis = await get_redis()
+            reminder_key = NOTIF_REMINDER_KEY.format(user_id=user.telegram_id)
+            now_iso = now.isoformat()
+            await redis.hset(reminder_key, mapping={
+                "user_id": str(user.telegram_id),
+                "msg_id": str(telegram_message_id),
+                "count": "1",
+                "sent_at": now_iso,
+                "initial_sent_at": now_iso,
+                "lang": user.native_language or "en",
+                "target_language": trigger.get("data", {}).get("target_language", ""),
+                "user_name": user.first_name or "",
+            })
+            await redis.expire(reminder_key, NOTIF_REMINDER_TTL)
+        except RedisError:
+            logger.warning("Failed to set reminder chain for user {}", user.telegram_id)
 
     # Release the LLM reservation if the notification was not successfully sent as LLM
     if llm_reserved and (status != NotificationStatus.SENT or tier != NotificationTier.LLM):

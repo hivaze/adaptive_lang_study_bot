@@ -180,6 +180,7 @@ class TestPhaseSchedules:
                  s2.id: (ScheduleStatus.ACTIVE, None),
              }), \
              patch(f"{TICK_MODULE}.SessionRepo.count_since_batch", new_callable=AsyncMock, return_value={}), \
+             patch(f"{TICK_MODULE}.SessionRepo.count_since", new_callable=AsyncMock, return_value=0), \
              patch(f"{TICK_MODULE}.dispatch_notification", new_callable=AsyncMock, return_value="msg") as mock_dispatch, \
              patch(f"{TICK_MODULE}.compute_next_trigger", return_value=datetime.now(timezone.utc) + timedelta(days=1)), \
              patch(f"{TICK_MODULE}.ScheduleRepo.update_after_trigger", new_callable=AsyncMock), \
@@ -203,6 +204,7 @@ class TestPhaseSchedules:
                  s.id: (ScheduleStatus.PAUSED, None),
              }), \
              patch(f"{TICK_MODULE}.SessionRepo.count_since_batch", new_callable=AsyncMock, return_value={}), \
+             patch(f"{TICK_MODULE}.SessionRepo.count_since", new_callable=AsyncMock, return_value=0), \
              patch(f"{TICK_MODULE}.dispatch_notification", new_callable=AsyncMock) as mock_dispatch:
             from adaptive_lang_study_bot.proactive.tick import _phase_schedules
 
@@ -222,6 +224,7 @@ class TestPhaseSchedules:
              patch(f"{TICK_MODULE}.VocabularyRepo.count_due_batch", new_callable=AsyncMock, return_value={}), \
              patch(f"{TICK_MODULE}.ScheduleRepo.get_statuses_batch", new_callable=AsyncMock, return_value={}), \
              patch(f"{TICK_MODULE}.SessionRepo.count_since_batch", new_callable=AsyncMock, return_value={}), \
+             patch(f"{TICK_MODULE}.SessionRepo.count_since", new_callable=AsyncMock, return_value=0), \
              patch(f"{TICK_MODULE}.dispatch_notification", new_callable=AsyncMock) as mock_dispatch:
             from adaptive_lang_study_bot.proactive.tick import _phase_schedules
 
@@ -242,6 +245,7 @@ class TestPhaseSchedules:
                  s.id: (ScheduleStatus.ACTIVE, None),
              }), \
              patch(f"{TICK_MODULE}.SessionRepo.count_since_batch", new_callable=AsyncMock, return_value={}), \
+             patch(f"{TICK_MODULE}.SessionRepo.count_since", new_callable=AsyncMock, return_value=0), \
              patch(f"{TICK_MODULE}.dispatch_notification", new_callable=AsyncMock, side_effect=RuntimeError("fail")), \
              patch(f"{TICK_MODULE}._handle_schedule_failure", new_callable=AsyncMock) as mock_handle:
             from adaptive_lang_study_bot.proactive.tick import _phase_schedules
@@ -276,6 +280,7 @@ class TestPhaseSchedules:
              patch(f"{TICK_MODULE}.VocabularyRepo.count_due_batch", new_callable=AsyncMock, return_value=due_counts), \
              patch(f"{TICK_MODULE}.ScheduleRepo.get_statuses_batch", new_callable=AsyncMock, return_value=statuses), \
              patch(f"{TICK_MODULE}.SessionRepo.count_since_batch", new_callable=AsyncMock, return_value={}), \
+             patch(f"{TICK_MODULE}.SessionRepo.count_since", new_callable=AsyncMock, return_value=0), \
              patch(f"{TICK_MODULE}.dispatch_notification", side_effect=slow_dispatch), \
              patch(f"{TICK_MODULE}.compute_next_trigger", return_value=datetime.now(timezone.utc) + timedelta(days=1)), \
              patch(f"{TICK_MODULE}.ScheduleRepo.update_after_trigger", new_callable=AsyncMock), \

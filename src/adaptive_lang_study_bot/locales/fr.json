@@ -248,15 +248,12 @@
   "stats.cards_due": "<b>Cartes à réviser :</b> {count}",
   "stats.difficulty": "<b>Difficulté :</b> {value}",
   "stats.style": "<b>Style :</b> {value}",
-  "stats.recent_scores": "<b>Scores récents :</b> {scores}",
-  "stats.no_scores": "pas encore de scores",
-  "stats.average": "<b>Moyenne :</b> {avg}/10",
   "stats.goals_title": "\n<b>Objectifs d'apprentissage</b>",
   "stats.no_goals": "\n<i>Aucun objectif défini. Dis-moi tes objectifs dans le chat !</i>",
   "stats.weak_areas": "\n<b>Points faibles :</b> {areas}",
   "stats.strong_areas": "<b>Points forts :</b> {areas}",
   "stats.recent_exercises": "\n<b>Exercices récents</b>",
-  "stats.exercise_line": "  • {topic} : <b>{score}/{max_score}</b> ({exercise_type})",
+  "stats.exercise_line": "  • {topic} : <b>{label}</b> ({exercise_type})",
   "stats.tier": "\n<b>Forfait :</b> {tier}",
   "stats.tier_free": "Gratuit",
   "stats.tier_premium": "Premium",
@@ -395,6 +392,29 @@
     "Impressionnant, {name} ! Ton vocabulaire a atteint <b>{vocab_count} mots</b>. Quelle persévérance !",
     "{name}, <b>{sessions_completed}</b> sessions terminées ! Tu construis une base solide.",
     "Continue comme ça, {name} ! Ta <b>série de {streak} jours</b> montre un vrai engagement."
+  ],
+  "notif.practice_reminder": [
+    "Salut {name} ! C'est l'heure de ta leçon de {target_language}. Gardons le rythme !",
+    "{name}, ta leçon programmée commence maintenant ! Prêt(e) à apprendre le {target_language} ?",
+    "C'est l'heure de la leçon, {name} ! Ta session de {target_language} t'attend."
+  ],
+  "notif.practice_reminder_another": [
+    "Bravo aujourd'hui, {name} ! Envie d'une autre session de {target_language} ?",
+    "{name}, tu as déjà étudié aujourd'hui — super ! Un petit tour bonus ?"
+  ],
+  "notif.practice_reminder_followup": [
+    "Toujours là, {name} ? Ta leçon de {target_language} t'attend !",
+    "N'oublie pas ta leçon, {name} ! Même 5 minutes de pratique du {target_language} comptent.",
+    "Dernier rappel, {name} ! Ta session de {target_language} est prête quand tu veux."
+  ],
+  "notif.quiz": [
+    "C'est l'heure du quiz, {name} ! Testons tes connaissances en {target_language}.",
+    "Prêt(e) pour un quiz rapide de {target_language}, {name} ?",
+    "{name}, c'est l'heure du quiz ! Un petit bilan de ton progrès en {target_language}."
+  ],
+  "notif.custom": [
+    "Salut {name} ! C'est l'heure de ton activité programmée en {target_language}.",
+    "{name}, tu as une tâche de {target_language} qui t'attend !"
   ],
   "pipeline.plan_completed": "Vous avez complété votre plan d'apprentissage visant le niveau {target_level} ! Il est temps de créer un nouveau plan pour le prochain niveau.",
 

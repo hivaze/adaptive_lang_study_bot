@@ -248,15 +248,12 @@
   "stats.cards_due": "<b>Карточек к повторению:</b> {count}",
   "stats.difficulty": "<b>Сложность:</b> {value}",
   "stats.style": "<b>Стиль:</b> {value}",
-  "stats.recent_scores": "<b>Последние баллы:</b> {scores}",
-  "stats.no_scores": "баллов пока нет",
-  "stats.average": "<b>Среднее:</b> {avg}/10",
   "stats.goals_title": "\n<b>Учебные цели</b>",
   "stats.no_goals": "\n<i>Учебные цели не заданы. Расскажи мне о своих целях в чате!</i>",
   "stats.weak_areas": "\n<b>Слабые стороны:</b> {areas}",
   "stats.strong_areas": "<b>Сильные стороны:</b> {areas}",
   "stats.recent_exercises": "\n<b>Последние упражнения</b>",
-  "stats.exercise_line": "  • {topic}: <b>{score}/{max_score}</b> ({exercise_type})",
+  "stats.exercise_line": "  • {topic}: <b>{label}</b> ({exercise_type})",
   "stats.tier": "\n<b>Тариф:</b> {tier}",
   "stats.tier_free": "Бесплатный",
   "stats.tier_premium": "Премиум",
@@ -395,6 +392,29 @@
     "Впечатляет, {name}! Твой словарь вырос до <b>{vocab_count} слов</b>. Это настоящая преданность делу!",
     "{name}, уже <b>{sessions_completed}</b> завершённых занятий! Ты строишь прочную основу.",
     "Продолжай в том же духе, {name}! Твоя серия в <b>{streak} дней</b> говорит о настоящей дисциплине."
+  ],
+  "notif.practice_reminder": [
+    "Привет, {name}! Время для урока {target_language}. Давай не терять темп!",
+    "{name}, пора на занятие! Готов(-а) к уроку {target_language}?",
+    "Время урока, {name}! Твоё занятие по {target_language} ждёт."
+  ],
+  "notif.practice_reminder_another": [
+    "Отлично позанимался(-ась) сегодня, {name}! Хочешь ещё один урок {target_language}?",
+    "{name}, ты уже занимался(-ась) сегодня — молодец! Как насчёт ещё одного подхода?"
+  ],
+  "notif.practice_reminder_followup": [
+    "Всё ещё тут, {name}? Твой урок {target_language} ждёт!",
+    "Не забудь про урок, {name}! Даже 5 минут практики {target_language} — это польза.",
+    "Последнее напоминание, {name}! Урок {target_language} готов, когда будешь готов(-а)."
+  ],
+  "notif.quiz": [
+    "Время квиза, {name}! Проверим твои знания {target_language}.",
+    "Готов(-а) к быстрому квизу по {target_language}, {name}? Посмотрим, что помнишь!",
+    "{name}, пора для квиза! Быстрая проверка прогресса по {target_language}."
+  ],
+  "notif.custom": [
+    "Привет, {name}! Время для запланированного занятия по {target_language}.",
+    "{name}, у тебя запланировано задание по {target_language}!"
   ],
   "pipeline.plan_completed": "Вы завершили план обучения с целью {target_level}! Пора составить новый план для следующего уровня.",
 

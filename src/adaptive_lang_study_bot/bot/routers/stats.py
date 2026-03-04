@@ -10,6 +10,7 @@ from adaptive_lang_study_bot.config import TIER_LIMITS, UserTier
 from adaptive_lang_study_bot.db.models import User
 from adaptive_lang_study_bot.db.repositories import ExerciseResultRepo, VocabularyRepo
 from adaptive_lang_study_bot.i18n import DEFAULT_LANGUAGE, get_localized_language_name, render_goal, t
+from adaptive_lang_study_bot.utils import score_label
 
 router = Router()
 
@@ -26,12 +27,6 @@ async def cmd_stats(message: Message, user: User, db_session: AsyncSession) -> N
         db_session, user.telegram_id, limit=5,
     )
 
-    scores = user.recent_scores or []
-    recent_5 = scores[-5:] if scores else []
-    avg = sum(recent_5) / len(recent_5) if recent_5 else 0
-
-    scores_display = ", ".join(str(s) for s in recent_5) if recent_5 else t("stats.no_scores", lang)
-
     target_lang_name = esc(get_localized_language_name(user.target_language, lang))
 
     lines = [
@@ -43,11 +38,7 @@ async def cmd_stats(message: Message, user: User, db_session: AsyncSession) -> N
         t("stats.cards_due", lang, count=due_count),
         t("stats.difficulty", lang, value=esc(localize_value(user.preferred_difficulty, lang))),
         t("stats.style", lang, value=esc(localize_value(user.session_style, lang))),
-        t("stats.recent_scores", lang, scores=scores_display),
     ]
-
-    if recent_5:
-        lines.append(t("stats.average", lang, avg=f"{avg:.1f}"))
 
     # Learning goals
     if user.learning_goals:
@@ -68,10 +59,11 @@ async def cmd_stats(message: Message, user: User, db_session: AsyncSession) -> N
     if recent:
         lines.append(t("stats.recent_exercises", lang))
         for ex in recent:
+            label = score_label(ex.score / ex.max_score * 10 if ex.max_score else ex.score)
             lines.append(
                 t("stats.exercise_line", lang,
-                  topic=esc(ex.topic), score=ex.score,
-                  max_score=ex.max_score, exercise_type=esc(ex.exercise_type)),
+                  topic=esc(ex.topic), label=esc(label),
+                  exercise_type=esc(ex.exercise_type)),
             )
 
     # Tier info

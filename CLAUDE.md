@@ -27,7 +27,7 @@ poetry add <package>                           # add dependency
 src/adaptive_lang_study_bot/
 ├── config.py              # Settings (pydantic-settings), BotTuning (centralized magic numbers), TIER_LIMITS
 ├── enums.py               # StrEnum: UserTier, SessionType, SessionStyle, Difficulty, CloseReason, NotificationTier, NotificationStatus, ScheduleType, ScheduleStatus, PipelineStatus, AccessRequestStatus
-├── utils.py               # Helpers: score_label, user_local_now, safe_zoneinfo, compute_next_trigger, get_language_name, strip_mcp_prefix, is_user_admin, compute_new_streak, summarize_tool_usage, stamp_field/stamp_fields/get_item_date (field timestamps)
+├── utils.py               # Helpers: score_label, user_local_now, safe_zoneinfo, compute_next_trigger, get_language_name, strip_mcp_prefix, is_user_admin, compute_new_streak, compute_level_progress, summarize_tool_usage, stamp_field/stamp_fields/get_item_date (field timestamps)
 ├── i18n.py                # t(key, lang, **kwargs) with JSON locale fallback
 ├── logging_config.py      # Loguru setup + stdlib bridge, runtime log level toggle
 ├── metrics.py             # Prometheus counters/gauges/histograms (16 metrics)
@@ -54,7 +54,7 @@ src/adaptive_lang_study_bot/
 │   ├── redis_lock.py      # Distributed lock helpers (Lua release)
 │   └── session_lock.py    # Per-user session lock (SET NX)
 ├── proactive/
-│   ├── tick.py            # APScheduler 60s tick: Phase 1 (schedules) → Phase 2 (event triggers)
+│   ├── tick.py            # APScheduler 60s tick: Phase 0 (follow-up reminders) → Phase 1 (schedules) → Phase 2 (event triggers)
 │   ├── triggers.py        # 11 event triggers in ALL_TRIGGERS priority list
 │   ├── dispatcher.py      # should_send() gates, template/LLM/hybrid dispatch, CTA keyboards
 │   └── admin_reports.py   # Stats reports (12h), health alerts (60s), 7 health checks
@@ -81,7 +81,7 @@ development/
 
 **Interactive** (user-initiated): Telegram message → aiogram middlewares → `chat` router → `SessionManager.handle_message()` → `ClaudeSDKClient.query()` → response back to Telegram. One long-lived session per user, reused across messages until closed.
 
-**Proactive** (system-initiated): APScheduler 60s tick → `tick_scheduler()` evaluates due schedules (Phase 1) and event triggers (Phase 2) → `dispatcher.dispatch_notification()` → either renders an i18n template ($0) or runs a short-lived `run_proactive_llm_session()` → sends Telegram message with CTA keyboard. Proactive sessions are standalone (not managed by `SessionManager`), have no hooks, 30s timeout, haiku model, max 10 turns.
+**Proactive** (system-initiated): APScheduler 60s tick → `tick_scheduler()` processes follow-up reminders (Phase 0), evaluates due schedules (Phase 1), and event triggers (Phase 2) → `dispatcher.dispatch_notification()` → either renders an i18n template ($0) or runs a short-lived `run_proactive_llm_session()` → sends Telegram message with CTA keyboard. Proactive sessions are standalone (not managed by `SessionManager`), have no hooks, 30s timeout, haiku model, max 10 turns.
 
 ### Agent session architecture
 
@@ -129,15 +129,16 @@ Redis is NOT used as a traditional cache — it provides distributed coordinatio
 | Notification dedup | `notif:dedup:{user_id}:{type}:{date}` | SET with daily TTL |
 | LLM notification counter | `notif:llm_count:{user_id}:{date}` | Increment with daily TTL |
 | Notification cooldown | `notif:cooldown:{user_id}` | SET with 5-min TTL |
+| Reminder chain | `notif:reminder:{user_id}` | Hash (msg_id, count, sent_at, initial_sent_at) with 1h TTL |
 | Proactive tick lock | `lock:proactive_tick` | Distributed lock |
 | Admin health/stats locks | `lock:admin_health`, `lock:admin_stats_report` | Distributed lock |
 | Admin alert dedup | `admin:alert:{type}:{date_hour}` | 1-hour cooldown |
 
 ### Proactive engine
 
-11 event triggers in `triggers.py:ALL_TRIGGERS`, evaluated in priority order. Only one fires per user per tick. Phase 2 skips users with active interactive sessions to avoid mid-session interruptions. Three tiers of triggers: Tier 1 (engagement — streak risk, due cards, inactivity), Tier 1.5 (re-engagement — post-onboarding escalation windows, lapsed user escalation, dormant weekly), Tier 2 (learning — weak areas, score trends, incomplete exercises, progress celebrations).
+11 event triggers in `triggers.py:ALL_TRIGGERS`, evaluated in priority order. Only one fires per user per tick. Phase 2 skips users with active interactive sessions to avoid mid-session interruptions. Three tiers of triggers: Tier 1 (engagement — streak risk, due cards, inactivity), Tier 1.5 (re-engagement — post-onboarding escalation windows, lapsed user escalation, dormant weekly), Tier 2 (learning — weak areas, score trends, incomplete exercises, progress celebrations). Phase 1 (schedules) checks if the user already had a lesson today — uses `practice_reminder_another` template variant if so.
 
-Notifications dispatch via three tiers: **template** (i18n, $0), **LLM** (`run_proactive_llm_session()`), **hybrid** (try LLM, fall back to template). `should_send()` gates: paused → preference → quiet hours → cooldown → dedup. LLM notifications exceeding daily limit downgrade to template.
+Notifications dispatch via three tiers: **template** (i18n, $0), **LLM** (`run_proactive_llm_session()`), **hybrid** (try LLM, fall back to template). `should_send()` gates: paused → preference → quiet hours → cooldown → dedup. LLM notifications exceeding daily limit downgrade to template. Practice reminder notifications trigger follow-up reminder chains (Phase 0): if the user doesn't start a session within `tuning.schedule_reminder_interval` (10 min), a follow-up is sent up to `tuning.schedule_reminder_max` (5) times, deleting the previous message each time. Chain auto-cancels if the user starts a session.
 
 ### Guardrail layers
 
@@ -281,7 +282,7 @@ return {
 
 **Proactive** (`build_proactive_prompt`) — 5 sections + conditional LEARNING PLAN CONTEXT for proactive_summary: ROLE+RULES, STUDENT PROFILE (compact), TIME CONTEXT, TASK (per-session-type instructions from `_PROACTIVE_TASK_INSTRUCTIONS`), TRIGGER CONTEXT, LEARNING PLAN CONTEXT (conditional, proactive_summary only). Agent generates notification text directly (no tools).
 
-**Summary** (`build_summary_prompt`) — 4 sections: ROLE, RULES (close-reason-aware tone), SESSION DATA (exercise counts, topics, words, duration), TASK (progress vs no-progress branch).
+**Summary** (`build_summary_prompt`) — 4 sections: ROLE, RULES (close-reason-aware tone), SESSION DATA (exercise counts, topics, words, duration, qualitative level progress), TASK (progress vs no-progress branch, includes level trajectory hint).
 
 SDK exception types: `CLINotFoundError`, `ProcessError`, `ClaudeSDKError`.
 

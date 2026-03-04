@@ -88,9 +88,11 @@ class BotTuning:
     # -- Notification --
     notification_max_length: int = 2000
     notification_preview_length: int = 80
+    schedule_reminder_max: int = 5  # max follow-up reminders for scheduled lessons
+    schedule_reminder_interval: int = 600  # seconds between follow-up reminders (10 min)
 
     # -- Streak --
-    streak_grace_days: int = 2  # days before streak resets
+    streak_grace_days: int = 1  # days before streak resets (1 = strict consecutive)
     streak_decay_threshold: int = 30  # streaks >= this use decay instead of hard reset
     streak_decay_factor: float = 0.7  # keep 70% of streak on reset
 

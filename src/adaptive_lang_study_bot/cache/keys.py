@@ -15,6 +15,7 @@ PROACTIVE_TICK_LOCK_KEY = "lock:proactive_tick"
 ADMIN_HEALTH_LOCK_KEY = "lock:admin_health"
 ADMIN_STATS_LOCK_KEY = "lock:admin_stats_report"
 ADMIN_ALERT_DEDUP_KEY = "admin:alert:{alert_type}:{date_hour}"
+NOTIF_REMINDER_KEY = "notif:reminder:{user_id}"  # Hash: msg_id, count, sent_at
 
 # --- TTL constants (seconds) ---
 
@@ -25,3 +26,4 @@ PROACTIVE_TICK_LOCK_TTL = 300  # 5 minutes
 ADMIN_HEALTH_LOCK_TTL = 120  # 2 minutes
 ADMIN_STATS_LOCK_TTL = 300  # 5 minutes
 ADMIN_ALERT_DEDUP_TTL = 3600  # 1 hour
+NOTIF_REMINDER_TTL = 3600  # 1 hour max lifetime for reminder chain

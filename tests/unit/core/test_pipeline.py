@@ -44,9 +44,9 @@ class TestComputeNewStreak:
     def test_same_day_unchanged(self):
         assert compute_new_streak(5, date(2026, 1, 1), date(2026, 1, 1)) == 5
 
-    def test_gap_two_days_grace(self):
-        """2-day gap is within grace period — streak preserved but not incremented."""
-        assert compute_new_streak(10, date(2026, 1, 1), date(2026, 1, 3)) == 10
+    def test_gap_two_days_resets_short_streak(self):
+        """2-day gap exceeds grace period (grace=1) — short streak resets to 1."""
+        assert compute_new_streak(10, date(2026, 1, 1), date(2026, 1, 3)) == 1
 
     def test_gap_three_days_resets_short_streak(self):
         """3-day gap exceeds grace period — short streak resets to 1."""

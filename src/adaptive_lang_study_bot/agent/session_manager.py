@@ -77,7 +77,7 @@ from adaptive_lang_study_bot.metrics import (
     SESSIONS_CREATED,
 )
 from adaptive_lang_study_bot.pipeline.post_session import run_post_session
-from adaptive_lang_study_bot.utils import strip_mcp_prefix
+from adaptive_lang_study_bot.utils import compute_level_progress, strip_mcp_prefix
 
 # Remove CLAUDECODE env var once at import time so nested SDK subprocesses
 # can start (instead of popping it on every session creation).
@@ -374,6 +374,7 @@ async def run_summary_llm_session(
     user_level: str,
     user_timezone: str = "UTC",
     plan_summary: str | None = None,
+    level_progress: str | None = None,
 ) -> tuple[str | None, float]:
     """Run a short-lived LLM session to generate an AI session summary.
 
@@ -403,6 +404,7 @@ async def run_summary_llm_session(
             user_level=user_level,
             user_timezone=user_timezone,
             plan_summary=plan_summary,
+            level_progress=level_progress,
         )
 
         options = ClaudeAgentOptions(
@@ -543,10 +545,18 @@ async def _generate_and_send_summary(
             or session_data.get("words_reviewed", 0)
         )
 
-        # Fetch plan context for the summary (best-effort)
+        # Fetch plan context and level progress for the summary (best-effort)
         plan_summary: str | None = None
+        level_progress: str | None = None
         try:
             async with async_session_factory() as db:
+                # Level progress
+                user_fresh = await UserRepo.get(db, user_id)
+                if user_fresh and user_fresh.recent_scores:
+                    level_progress = compute_level_progress(
+                        user_fresh.recent_scores, user_fresh.level,
+                    )
+
                 active_plan = await LearningPlanRepo.get_active(db, user_id)
                 if active_plan:
                     all_topics = [
@@ -585,6 +595,7 @@ async def _generate_and_send_summary(
                 user_level=user_level,
                 user_timezone=managed.user_timezone,
                 plan_summary=plan_summary,
+                level_progress=level_progress,
             )
 
         # Fallback to enriched template
