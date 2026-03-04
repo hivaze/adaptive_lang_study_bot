@@ -19,6 +19,8 @@ try:
     _TAVILY_AVAILABLE = True
 except ImportError:
     _TAVILY_AVAILABLE = False
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from adaptive_lang_study_bot.db.repositories import (
     ExerciseResultRepo,
     LearningPlanRepo,
@@ -88,10 +90,15 @@ def compute_plan_progress(
             avg_score = stats.get("avg_score")
             last_practiced = stats.get("last_practiced")
 
+            is_consolidation = phase.get("consolidation", False)
+            mastery = (
+                tuning.level_up_avg if is_consolidation
+                else tuning.plan_topic_mastery_score
+            )
             if (
                 count >= tuning.plan_topic_min_exercises
                 and avg_score is not None
-                and avg_score >= tuning.plan_topic_mastery_score
+                and avg_score >= mastery
             ):
                 status = "completed"
                 phase_completed += 1
@@ -117,12 +124,15 @@ def compute_plan_progress(
                 t["status"] == "in_progress" for t in topic_details
             ) else "pending"
         )
-        phase_results.append({
+        result_entry: dict[str, Any] = {
             "week": phase.get("week"),
             "focus": phase.get("focus"),
             "status": phase_status,
             "topics": topic_details,
-        })
+        }
+        if phase.get("consolidation"):
+            result_entry["consolidation"] = True
+        phase_results.append(result_entry)
 
     progress_pct = round(completed_topics / total_topics * 100) if total_topics > 0 else 0
 
@@ -132,6 +142,126 @@ def compute_plan_progress(
         "total_topics": total_topics,
         "phases": phase_results,
     }
+
+
+async def fetch_plan_topic_stats(
+    db: AsyncSession,
+    user_id: int,
+    plan: "LearningPlan",
+) -> dict[str, dict]:
+    """Fetch per-topic exercise stats, using split date ranges for consolidation phases.
+
+    Regular topics use plan.start_date.  Consolidation topics (added after
+    plan hit 100%) use the consolidation_added_at date so only fresh
+    exercises count toward their mastery.
+    """
+    plan_data = plan.plan_data or {}
+    consol_since_str = plan_data.get("consolidation_added_at")
+
+    if not consol_since_str:
+        all_topics = [
+            t for p in plan_data.get("phases", []) for t in p.get("topics", [])
+        ]
+        return await ExerciseResultRepo.get_stats_for_topics(
+            db, user_id, all_topics, plan.start_date,
+        )
+
+    regular_topics: list[str] = []
+    consolidation_topics: list[str] = []
+    for p in plan_data.get("phases", []):
+        bucket = consolidation_topics if p.get("consolidation") else regular_topics
+        bucket.extend(p.get("topics", []))
+
+    stats = await ExerciseResultRepo.get_stats_for_topics(
+        db, user_id, regular_topics, plan.start_date,
+    )
+    if consolidation_topics:
+        consol_stats = await ExerciseResultRepo.get_stats_for_topics(
+            db, user_id, consolidation_topics,
+            date.fromisoformat(consol_since_str),
+        )
+        stats.update(consol_stats)
+    return stats
+
+
+async def _maybe_add_consolidation_phase(
+    db: AsyncSession,
+    plan: "LearningPlan",
+    progress: dict,
+    topic_stats: dict[str, dict],
+    user_level: str,
+) -> bool:
+    """Auto-extend plan with a consolidation phase when 100% complete but level not reached.
+
+    Returns True if a consolidation phase was added.
+    """
+    plan_data = plan.plan_data or {}
+
+    # Guards
+    if plan_data.get("consolidation_added"):
+        return False
+    if progress["progress_pct"] < 100:
+        return False
+    if plan.total_weeks >= tuning.plan_max_weeks:
+        return False
+
+    target_level = plan.target_level
+    if target_level in CEFR_LEVELS and user_level in CEFR_LEVELS:
+        if CEFR_LEVELS.index(user_level) >= CEFR_LEVELS.index(target_level):
+            return False  # already at or above target
+    else:
+        return False
+
+    # Find weakest completed topics (avg_score below level_up_avg)
+    weak_topics: list[tuple[str, float]] = []
+    for phase_info in progress["phases"]:
+        if phase_info.get("consolidation"):
+            continue
+        for t in phase_info.get("topics", []):
+            if t["status"] == "completed":
+                avg = topic_stats.get(t["name"], {}).get("avg_score")
+                if avg is not None and avg < tuning.level_up_avg:
+                    weak_topics.append((t["name"], avg))
+
+    if not weak_topics:
+        return False  # all topics already at level-up threshold
+
+    # Pick weakest topics, capped at plan_max_topics_per_week
+    weak_topics.sort(key=lambda x: x[1])
+    selected = [name for name, _ in weak_topics[:tuning.plan_max_topics_per_week]]
+
+    # Build consolidation phase
+    new_week = plan.total_weeks + 1
+    phase_start = plan.start_date + timedelta(weeks=new_week - 1)
+    phase_end = plan.start_date + timedelta(weeks=new_week) - timedelta(days=1)
+    today_str = datetime.now(timezone.utc).date().isoformat()
+
+    consolidation_phase = {
+        "week": new_week,
+        "start_date": phase_start.isoformat(),
+        "end_date": phase_end.isoformat(),
+        "focus": f"Consolidation — strengthen weak areas for {target_level}",
+        "topics": selected,
+        "consolidation": True,
+    }
+
+    phases = list(plan_data.get("phases", []))
+    phases.append(consolidation_phase)
+    plan_data = dict(plan_data)
+    plan_data["phases"] = phases
+    plan_data["consolidation_added"] = True
+    plan_data["consolidation_added_at"] = today_str
+
+    new_end_date = plan.start_date + timedelta(weeks=new_week)
+    await LearningPlanRepo.update_fields(
+        db,
+        plan.id,
+        plan_data=plan_data,
+        total_weeks=new_week,
+        target_end_date=new_end_date,
+    )
+    await db.commit()
+    return True
 
 
 def _rrule_interval_minutes(rrule_str: str) -> float:
@@ -1060,13 +1190,8 @@ def create_session_tools(
                         return _ok({"has_plan": False})
 
                     # Derive progress from ExerciseResult data
-                    all_topics = [
-                        t
-                        for p in (plan.plan_data or {}).get("phases", [])
-                        for t in p.get("topics", [])
-                    ]
-                    topic_stats = await ExerciseResultRepo.get_stats_for_topics(
-                        db_session, user_id, all_topics, plan.start_date,
+                    topic_stats = await fetch_plan_topic_stats(
+                        db_session, user_id, plan,
                     )
                     progress = compute_plan_progress(
                         plan.plan_data or {},
@@ -1074,6 +1199,24 @@ def create_session_tools(
                         plan.start_date,
                         topic_stats,
                     )
+
+                    # Auto-extend with consolidation phase if 100% but level not reached
+                    if progress["progress_pct"] == 100:
+                        user = await UserRepo.get(db_session, user_id)
+                        if user and await _maybe_add_consolidation_phase(
+                            db_session, plan, progress, topic_stats, user.level,
+                        ):
+                            # Re-fetch updated plan and recompute
+                            plan = await LearningPlanRepo.get_active(db_session, user_id)
+                            topic_stats = await fetch_plan_topic_stats(
+                                db_session, user_id, plan,
+                            )
+                            progress = compute_plan_progress(
+                                plan.plan_data or {},
+                                plan.total_weeks,
+                                plan.start_date,
+                                topic_stats,
+                            )
 
                     # Compute current week from date
                     today = datetime.now(_user_tz).date()

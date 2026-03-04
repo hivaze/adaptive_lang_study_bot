@@ -6,7 +6,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from adaptive_lang_study_bot.agent.tools import compute_plan_progress
+from adaptive_lang_study_bot.agent.tools import compute_plan_progress, fetch_plan_topic_stats
 from adaptive_lang_study_bot.bot.helpers import localize_value
 from adaptive_lang_study_bot.config import TIER_LIMITS, UserTier
 from adaptive_lang_study_bot.db.models import User
@@ -71,13 +71,8 @@ async def cmd_stats(message: Message, user: User, db_session: AsyncSession) -> N
         current_week = max(1, min(plan.total_weeks, elapsed_days // 7 + 1))
 
         # Compute progress from exercise results
-        all_topics = [
-            tp
-            for p in (plan.plan_data or {}).get("phases", [])
-            for tp in p.get("topics", [])
-        ]
-        topic_stats_raw = await ExerciseResultRepo.get_stats_for_topics(
-            db_session, user.telegram_id, all_topics, plan.start_date,
+        topic_stats_raw = await fetch_plan_topic_stats(
+            db_session, user.telegram_id, plan,
         )
         progress = compute_plan_progress(
             plan.plan_data or {}, plan.total_weeks, plan.start_date, topic_stats_raw,

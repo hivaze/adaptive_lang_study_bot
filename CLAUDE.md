@@ -33,7 +33,7 @@ src/adaptive_lang_study_bot/
 ├── metrics.py             # Prometheus counters/gauges/histograms (16 metrics)
 ├── locales/               # JSON locale files (en, ru, es, fr, de, pt, it)
 ├── agent/
-│   ├── tools.py           # 10 core + 2 optional web MCP tools (web_search, web_extract; conditional on Tavily), _SESSION_TYPE_TOOLS, _USER_MUTABLE_FIELDS, compute_plan_progress()
+│   ├── tools.py           # 10 core + 2 optional web MCP tools (web_search, web_extract; conditional on Tavily), _SESSION_TYPE_TOOLS, _USER_MUTABLE_FIELDS, compute_plan_progress(), fetch_plan_topic_stats(), _maybe_add_consolidation_phase()
 │   ├── hooks.py           # PostToolUse (adaptive hints), UserPromptSubmit (turn limit), Stop hooks
 │   ├── prompt_builder.py  # build_system_prompt(), build_proactive_prompt(), compute_session_context()
 │   ├── session_manager.py # SessionManager (interactive) + run_proactive_llm_session() + run_summary_llm_session() (standalone)
@@ -332,7 +332,7 @@ Key design choices (read code for details):
 - FSRS state denormalized in vocabulary (`fsrs_due` column) for efficient due-card queries
 - Schedules use RRULE strings; `next_trigger_at` is the polled field
 - Notification preferences inlined in users table (avoids JOIN on proactive tick)
-- Learning plans: one per user (UNIQUE constraint), JSONB `plan_data` stores phases/topics, progress derived from exercise results via `compute_plan_progress()` (no stored per-topic state)
+- Learning plans: one per user (UNIQUE constraint), JSONB `plan_data` stores phases/topics, progress derived from exercise results via `compute_plan_progress()` (no stored per-topic state). Auto-consolidation: when plan reaches 100% completion but user level < target, `_maybe_add_consolidation_phase()` appends a consolidation phase targeting weakest topics at `level_up_avg` mastery threshold (triggered via `manage_learning_plan(action='get')`). Consolidation phases use `consolidation_added_at` date for fresh-exercise-only stat counting via `fetch_plan_topic_stats()`.
 - Field timestamps: `users.field_timestamps` JSONB tracks when profile fields were set/changed (date-only, user-local). Scalar fields use field name → ISO date string. Array fields use `sha256(item)[:8]` hex hash → ISO date string (avoids duplicating item text). Utilities: `stamp_field()`, `stamp_fields()`, `get_item_date()` in `utils.py`. Rendered as "(since DATE)" in system/proactive prompts. Language switch resets timestamps.
 
 ## Sensitive Files

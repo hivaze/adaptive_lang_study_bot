@@ -752,9 +752,15 @@ def _build_learning_plan_section(
         progress_phases = plan_progress.get("phases", [])
         if 0 < current_week <= len(progress_phases):
             phase = progress_phases[current_week - 1]
-            plan_lines.append(
-                f"\nCurrent phase (Week {current_week}): \"{phase.get('focus', 'N/A')}\""
-            )
+            if phase.get("consolidation"):
+                plan_lines.append(
+                    f"\nCONSOLIDATION PHASE (Week {current_week}): "
+                    f"Strengthening weak areas for {active_plan.target_level} promotion"
+                )
+            else:
+                plan_lines.append(
+                    f"\nCurrent phase (Week {current_week}): \"{phase.get('focus', 'N/A')}\""
+                )
             for t in phase.get("topics", []):
                 status_mark = {
                     "completed": "[completed]",
@@ -849,6 +855,21 @@ def _build_learning_plan_section(
             "\n- This plan snapshot is from session start. Use "
             "manage_learning_plan(action='get') for up-to-date progress during the session."
         )
+
+        # Consolidation-specific guidance
+        has_consolidation = any(
+            p.get("consolidation") for p in (active_plan.plan_data or {}).get("phases", [])
+        )
+        if has_consolidation:
+            plan_lines.append(
+                "\n- CONSOLIDATION PHASE: The plan was auto-extended because all "
+                "topics were completed but the level-up threshold hasn't been reached yet. "
+                "Consolidation targets the weakest topics with a higher mastery bar "
+                "(matching the level-up score requirement). Only exercises done AFTER "
+                "the consolidation phase was added count toward its completion. "
+                "Use challenging exercises and aim for scores of 9-10. "
+                "You can adapt or replace this phase if needed."
+            )
         return "## LEARNING PLAN\n" + "\n".join(plan_lines)
 
     if not user.onboarding_completed:

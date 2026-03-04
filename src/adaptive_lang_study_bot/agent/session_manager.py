@@ -40,6 +40,7 @@ from adaptive_lang_study_bot.agent.tools import (
     create_langbot_server,
     create_session_tools,
     fetch_news_for_proactive,
+    fetch_plan_topic_stats,
     web_search_available,
 )
 from adaptive_lang_study_bot.cache.session_lock import (
@@ -201,14 +202,7 @@ async def run_proactive_llm_session(
             elif session_type == SessionType.PROACTIVE_SUMMARY:
                 active_plan = await LearningPlanRepo.get_active(db, user_id)
                 if active_plan:
-                    all_plan_topics = [
-                        t
-                        for p in (active_plan.plan_data or {}).get("phases", [])
-                        for t in p.get("topics", [])
-                    ]
-                    topic_stats = await ExerciseResultRepo.get_stats_for_topics(
-                        db, user_id, all_plan_topics, active_plan.start_date,
-                    )
+                    topic_stats = await fetch_plan_topic_stats(db, user_id, active_plan)
                     plan_progress = compute_plan_progress(
                         active_plan.plan_data or {},
                         active_plan.total_weeks,
@@ -559,14 +553,7 @@ async def _generate_and_send_summary(
 
                 active_plan = await LearningPlanRepo.get_active(db, user_id)
                 if active_plan:
-                    all_topics = [
-                        t_name
-                        for p in (active_plan.plan_data or {}).get("phases", [])
-                        for t_name in p.get("topics", [])
-                    ]
-                    topic_stats = await ExerciseResultRepo.get_stats_for_topics(
-                        db, user_id, all_topics, active_plan.start_date,
-                    )
+                    topic_stats = await fetch_plan_topic_stats(db, user_id, active_plan)
                     progress = compute_plan_progress(
                         active_plan.plan_data or {},
                         active_plan.total_weeks,
@@ -1042,14 +1029,7 @@ class SessionManager:
                 active_plan = await LearningPlanRepo.get_active(db, user_id)
                 plan_progress = None
                 if active_plan:
-                    all_plan_topics = [
-                        t
-                        for p in (active_plan.plan_data or {}).get("phases", [])
-                        for t in p.get("topics", [])
-                    ]
-                    topic_stats = await ExerciseResultRepo.get_stats_for_topics(
-                        db, user_id, all_plan_topics, active_plan.start_date,
-                    )
+                    topic_stats = await fetch_plan_topic_stats(db, user_id, active_plan)
                     plan_progress = compute_plan_progress(
                         active_plan.plan_data or {},
                         active_plan.total_weeks,
