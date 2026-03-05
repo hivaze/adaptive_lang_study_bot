@@ -241,6 +241,9 @@ class Session(Base):
     # System prompt snapshot
     system_prompt: Mapped[str | None] = mapped_column(Text)
 
+    # Internal AI summary (agent-facing, generated post-session)
+    ai_summary: Mapped[str | None] = mapped_column(Text)
+
     # Post-session pipeline
     pipeline_status: Mapped[str] = mapped_column(String(20), default="pending")
     pipeline_issues: Mapped[dict | None] = mapped_column(JSONB)

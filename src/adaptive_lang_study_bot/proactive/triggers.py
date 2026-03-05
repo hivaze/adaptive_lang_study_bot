@@ -16,6 +16,12 @@ def _hours_since(dt: datetime, now: datetime) -> float:
     return (now - dt).total_seconds() / 3600
 
 
+def _pick_weak_area(user: User) -> str | None:
+    """Pick a weak area not covered in the most recent session."""
+    last_topic = (user.last_activity or {}).get("topic")
+    return next((t for t in user.weak_areas if t != last_topic), None)
+
+
 class Trigger(TypedDict):
     """Standard shape for notification trigger dicts passed between modules."""
 
@@ -119,9 +125,7 @@ def check_weak_area_persistent(user: User, *, due_count: int = 0) -> Trigger | N
 
     # Pick the first weak area not covered in the most recent session —
     # skip topics that were likely just added and haven't persisted yet.
-    last = user.last_activity or {}
-    last_topic = last.get("topic")
-    topic = next((t for t in user.weak_areas if t != last_topic), None)
+    topic = _pick_weak_area(user)
     if topic is None:
         return None
 
@@ -203,9 +207,7 @@ def check_weak_area_drill_due(user: User, *, due_count: int = 0) -> Trigger | No
         return None
 
     # Skip the topic from the most recent session (may have just been addressed)
-    last = user.last_activity or {}
-    last_topic = last.get("topic")
-    topic = next((t for t in user.weak_areas if t != last_topic), None)
+    topic = _pick_weak_area(user)
     if topic is None:
         return None
 

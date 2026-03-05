@@ -16,6 +16,7 @@ ADMIN_HEALTH_LOCK_KEY = "lock:admin_health"
 ADMIN_STATS_LOCK_KEY = "lock:admin_stats_report"
 ADMIN_ALERT_DEDUP_KEY = "admin:alert:{alert_type}:{date_hour}"
 NOTIF_REMINDER_KEY = "notif:reminder:{user_id}"  # Hash: msg_id, count, sent_at
+SESSION_COOLDOWN_KEY = "session:cooldown:{user_id}"  # Post-session cooldown
 
 # --- TTL constants (seconds) ---
 

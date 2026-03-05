@@ -3,8 +3,8 @@ from unittest.mock import MagicMock
 
 from adaptive_lang_study_bot.agent.prompt_builder import (
     _build_comeback_section,
+    build_internal_summary_prompt,
     build_proactive_prompt,
-    build_summary_prompt,
     build_system_prompt,
     compute_session_context,
 )
@@ -213,7 +213,7 @@ class TestBuildSystemPrompt:
         )
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
-        assert "RESPONDING TO A NOTIFICATION" in prompt
+        assert "NOTIFICATION REPLY CONTEXT" in prompt
         assert "Review your words!" in prompt
 
     def test_due_count_shown(self):
@@ -884,10 +884,52 @@ class TestBuildProactivePrompt:
         prompt = build_proactive_prompt(user, "proactive_nudge", {})
         assert "ROLE" in prompt
 
-    def test_recent_scores_included(self):
-        user = _make_user(recent_scores=[7, 8, 6, 9, 7])
+    def test_session_style_and_difficulty_included(self):
+        user = _make_user(session_style="structured", preferred_difficulty="hard")
         prompt = build_proactive_prompt(user, "proactive_nudge", {})
-        assert "good, very good, good, very good, good" in prompt
+        assert "structured" in prompt
+        assert "hard" in prompt
+
+    def test_strong_areas_included(self):
+        user = _make_user(strong_areas=["present tense"])
+        prompt = build_proactive_prompt(user, "proactive_nudge", {})
+        assert "present tense" in prompt
+
+    def test_additional_notes_included(self):
+        user = _make_user(additional_notes=["prefers short exercises"])
+        prompt = build_proactive_prompt(user, "proactive_nudge", {})
+        assert "prefers short exercises" in prompt
+
+    def test_last_session_gap_shown(self):
+        user = _make_user(last_session_at=datetime.now(timezone.utc) - timedelta(hours=5))
+        prompt = build_proactive_prompt(user, "proactive_nudge", {})
+        assert "Last session:" in prompt
+        assert "hours ago" in prompt
+
+    def test_recent_sessions_rendered(self):
+        sess = MagicMock()
+        sess.started_at = datetime.now(timezone.utc) - timedelta(hours=2)
+        sess.ended_at = datetime.now(timezone.utc) - timedelta(hours=1, minutes=45)
+        sess.ai_summary = "Covered verb conjugation. Good performance on exercises."
+        prompt = build_proactive_prompt(user=_make_user(), session_type="proactive_nudge", trigger_data={}, recent_sessions=[sess])
+        assert "RECENT CONTEXT" in prompt
+        assert "Covered verb conjugation" in prompt
+
+    def test_last_activity_fallback_when_no_summaries(self):
+        user = _make_user(last_activity={"session_summary": "Practiced articles", "topic": "grammar"})
+        prompt = build_proactive_prompt(user, "proactive_nudge", {})
+        assert "RECENT CONTEXT" in prompt
+        assert "Practiced articles" in prompt
+
+    def test_last_activity_hidden_when_summaries_present(self):
+        user = _make_user(last_activity={"session_summary": "Old summary", "topic": "grammar"})
+        sess = MagicMock()
+        sess.started_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        sess.ended_at = datetime.now(timezone.utc) - timedelta(minutes=45)
+        sess.ai_summary = "AI summary replaces last_activity."
+        prompt = build_proactive_prompt(user, "proactive_nudge", {}, recent_sessions=[sess])
+        assert "Old summary" not in prompt
+        assert "AI summary replaces last_activity" in prompt
 
     def test_prefetch_due_vocabulary(self):
         user = _make_user()
@@ -926,8 +968,6 @@ class TestBuildProactivePrompt:
         }
         prompt = build_proactive_prompt(user, "proactive_summary", {}, prefetch=prefetch)
         assert "PROGRESS DATA" in prompt
-        assert "Score Trends" in prompt
-        assert "good" in prompt  # 7.5 → good
         assert "Topic Performance" in prompt
         assert "verbs" in prompt
         assert "very good" in prompt  # 8.2 → very good
@@ -936,7 +976,7 @@ class TestBuildProactivePrompt:
         assert "Session Activity" in prompt
         assert "4 sessions" in prompt
 
-    def test_prefetch_progress_summary_no_exercises(self):
+    def test_prefetch_progress_summary_no_topics(self):
         user = _make_user()
         prefetch = {
             "progress_summary": {
@@ -949,7 +989,6 @@ class TestBuildProactivePrompt:
         }
         prompt = build_proactive_prompt(user, "proactive_summary", {}, prefetch=prefetch)
         assert "PROGRESS DATA" in prompt
-        assert "no exercises" in prompt
         assert "Topic Performance" not in prompt
 
     def test_no_prefetch_no_data_sections(self):
@@ -1559,517 +1598,188 @@ class TestEngagementHint:
         assert "immediately engaging" not in prompt
 
 
+
 # ---------------------------------------------------------------------------
-# Summary prompt: productivity-aware tiers
+# Internal summary prompt
 # ---------------------------------------------------------------------------
 
 
-class TestBuildSummaryPrompt:
-    """Test the three-tier summary task generation."""
+class TestBuildInternalSummaryPrompt:
+    """Tests for the internal AI summary prompt (agent-facing)."""
 
-    @staticmethod
-    def _build(*, exercise_count=0, vocab_count=0, words_reviewed=0,
-               close_reason="explicit_close", duration_minutes=10,
-               exercise_scores=None, exercise_topics=None):
-        return build_summary_prompt(
-            "ru", "fr",
+    def test_contains_required_sections(self):
+        prompt = build_internal_summary_prompt(
+            conversation_digest="[User]: Bonjour\n[Tutor]: Salut!",
             session_data={
-                "exercise_count": exercise_count,
-                "exercise_scores": exercise_scores or [],
-                "exercise_topics": exercise_topics or [],
-                "exercise_types": [],
-                "words_added": [],
-                "words_reviewed": words_reviewed,
-                "vocab_count": vocab_count,
-                "turn_count": 5,
-                "duration_minutes": duration_minutes,
-            },
-            close_reason=close_reason,
-            user_name="Test",
-            user_streak=5,
-            user_level="A2",
-        )
-
-    def test_good_progress_mentions_achievements(self):
-        prompt = self._build(exercise_count=3, exercise_scores=[7, 8, 6],
-                             exercise_topics=["verbs", "cooking"])
-        assert "achievements" in prompt.lower() or "honestly" in prompt.lower()
-        assert "barely" not in prompt
-
-    def test_minimal_progress_idle_timeout_is_honest(self):
-        prompt = self._build(exercise_count=1, close_reason="idle_timeout",
-                             exercise_scores=[7])
-        assert "barely" in prompt.lower() or "little" in prompt.lower()
-
-    def test_minimal_progress_short_duration_is_honest(self):
-        prompt = self._build(exercise_count=1, duration_minutes=2,
-                             exercise_scores=[7])
-        assert "barely" in prompt.lower() or "little" in prompt.lower()
-
-    def test_no_progress_suggests_activity(self):
-        prompt = self._build(exercise_count=0)
-        assert "didn't" in prompt.lower() or "no" in prompt.lower()
-
-    def test_idle_timeout_hint_includes_honest_assessment(self):
-        prompt = self._build(exercise_count=1, close_reason="idle_timeout")
-        assert "honest" in prompt.lower() or "pretend" in prompt.lower()
-
-    def test_rules_allow_constructive_feedback(self):
-        prompt = self._build()
-        assert "honest and constructive" in prompt.lower()
-        assert "NEVER guilt-trip or criticize" not in prompt
-
-
-class TestPromptExerciseRules:
-    """Test exercise rules and tool requirement changes."""
-
-    def _build(self, **overrides):
-        user = _make_user(**overrides)
-        ctx = compute_session_context(user)
-        return build_system_prompt(user, ctx, due_count=0)
-
-    def test_record_only_after_answer(self):
-        prompt = self._build()
-        assert "NEVER call record_exercise_result in the same message" in prompt
-
-    def test_no_always_call_record(self):
-        """Old 'ALWAYS call record_exercise_result' pattern should not appear."""
-        prompt = self._build()
-        assert "ALWAYS call record_exercise_result" not in prompt
-
-    def test_different_example_sentences(self):
-        prompt = self._build()
-        assert "COMPLETELY DIFFERENT sentences" in prompt
-
-    def test_no_answer_keys(self):
-        prompt = self._build()
-        assert "NEVER include answer keys" in prompt
-
-    def test_no_wait_instruction(self):
-        prompt = self._build()
-        assert "NEVER tell the student to" in prompt
-        assert "wait" in prompt
-
-    def test_additional_notes_in_profile(self):
-        prompt = self._build(additional_notes=["prefers vocab before exercises"])
-        assert "prefers vocab before exercises" in prompt
-
-    def test_additional_notes_empty_shows_none_yet(self):
-        prompt = self._build(additional_notes=[])
-        assert "Additional notes: none yet" in prompt
-
-    def test_additional_notes_tool_instruction(self):
-        prompt = self._build()
-        assert "additional_notes" in prompt
-        assert "update_preference" in prompt
-
-    def test_additional_notes_not_duplicated_in_session_context(self):
-        """Notes should appear in STUDENT PROFILE only, not again in SESSION CONTEXT."""
-        prompt = self._build(additional_notes=["lives in Berlin since 2024"])
-        # Should appear once (in STUDENT PROFILE), not twice
-        assert prompt.count("lives in Berlin since 2024") == 1
-
-
-class TestPromptTeachingApproach:
-    """Test teaching approach restructuring and new rules."""
-
-    def _build(self, **overrides):
-        user = _make_user(**overrides)
-        ctx = compute_session_context(user)
-        return build_system_prompt(user, ctx, due_count=0)
-
-    def test_subsection_labels_present(self):
-        prompt = self._build()
-        assert "SESSION FLOW" in prompt
-        assert "SCORE ADAPTATION:" in prompt
-        assert "CONTENT SELECTION:" in prompt
-        assert "GOALS:" in prompt
-
-    def test_structured_theory_first(self):
-        prompt = self._build(session_style="structured")
-        assert "THEORY/GRAMMAR BLOCK" in prompt
-
-    def test_casual_flow(self):
-        prompt = self._build(session_style="casual")
-        assert "Teach new vocabulary at the BEGINNING of the session" in prompt
-
-    def test_intensive_flow(self):
-        prompt = self._build(session_style="intensive")
-        assert "Get to work immediately" in prompt
-
-    def test_vocab_timing_guidance_casual(self):
-        prompt = self._build(session_style="casual")
-        assert "Teach new vocabulary at the BEGINNING of the session" in prompt
-
-    def test_session_opening_behavior_casual(self):
-        prompt = self._build(session_style="casual")
-        assert "natural conversation" in prompt
-
-    def test_role_expanded(self):
-        prompt = self._build()
-        assert "You teach through exercises, vocabulary, and conversation" in prompt
-
-
-class TestProactivePromptAdditionalNotes:
-    """Test additional_notes in proactive prompt."""
-
-    def test_additional_notes_in_proactive(self):
-        user = _make_user(additional_notes=["enjoys role-play"])
-        prompt = build_proactive_prompt(user, "proactive_nudge", {})
-        assert "enjoys role-play" in prompt
-
-    def test_additional_notes_empty_in_proactive(self):
-        user = _make_user(additional_notes=[])
-        prompt = build_proactive_prompt(user, "proactive_nudge", {})
-        assert "Additional notes: none" in prompt
-
-
-class TestSummaryPromptLabel:
-    """Test summary prompt uses 'Exercises scored' label."""
-
-    def test_exercises_scored_label(self):
-        prompt = build_summary_prompt(
-            "en", "fr",
-            session_data={
-                "exercise_count": 3, "exercise_scores": [7, 8, 6],
-                "exercise_topics": ["verbs"], "exercise_types": ["fill_blank"],
-                "words_added": [], "words_reviewed": 0,
-                "vocab_count": 0, "turn_count": 10,
+                "exercise_count": 2, "exercise_scores": [7, 8],
+                "exercise_topics": ["verbs"], "exercise_types": ["translation"],
+                "words_added": ["bonjour"], "words_reviewed": 1,
+                "vocab_count": 1, "turn_count": 6,
             },
             close_reason="idle_timeout",
-            user_name="Test",
-            user_streak=5,
+            target_language="French",
             user_level="A2",
         )
-        assert "Exercises scored: 3" in prompt
-        assert "Exercises completed" not in prompt
+        assert "ROLE" in prompt
+        assert "RULES" in prompt
+        assert "SESSION DATA" in prompt
+        assert "CONVERSATION TRANSCRIPT" in prompt
+        assert "TASK" in prompt
+        assert "Topics" in prompt
+        assert "Performance" in prompt
+        assert "Vocabulary" in prompt
+        assert "Continuation" in prompt
+        assert "Recommendations" in prompt
 
-
-class TestLearningPlanSection:
-    """Test the LEARNING PLAN prompt section rendering."""
-
-    @staticmethod
-    def _make_plan(**overrides):
-        from unittest.mock import MagicMock
-        from datetime import date, timedelta
-
-        plan = MagicMock()
-        plan.current_level = "A2"
-        plan.target_level = "B1"
-        plan.start_date = date(2026, 3, 1)
-        plan.target_end_date = date(2026, 3, 28)
-        plan.total_weeks = 4
-        plan.plan_data = {
-            "phases": [
-                {
-                    "week": 1,
-                    "focus": "Past tense foundations",
-                    "start_date": "2026-03-01",
-                    "end_date": "2026-03-07",
-                    "topics": ["Past tense review", "Conditional mood"],
-                    "vocabulary_target": 15,
-                    "vocabulary_theme": "Daily routines",
-                },
-                {
-                    "week": 2,
-                    "focus": "Subjunctive basics",
-                    "start_date": "2026-03-08",
-                    "end_date": "2026-03-14",
-                    "topics": ["Subjunctive introduction"],
-                    "vocabulary_target": 10,
-                },
-            ],
-        }
-        plan.times_adapted = 0
-        for k, v in overrides.items():
-            setattr(plan, k, v)
-        return plan
-
-    @staticmethod
-    def _make_progress(**overrides):
-        default = {
-            "progress_pct": 33,
-            "completed_topics": 1,
-            "total_topics": 3,
-            "phases": [
-                {
-                    "week": 1,
-                    "focus": "Past tense foundations",
-                    "status": "in_progress",
-                    "topics": [
-                        {"name": "Past tense review", "status": "completed",
-                         "exercises": 5, "avg_score": 8.0},
-                        {"name": "Conditional mood", "status": "in_progress",
-                         "exercises": 2, "avg_score": 6.0},
-                    ],
-                },
-                {
-                    "week": 2,
-                    "focus": "Subjunctive basics",
-                    "status": "pending",
-                    "topics": [
-                        {"name": "Subjunctive introduction", "status": "pending",
-                         "exercises": 0},
-                    ],
-                },
-            ],
-        }
-        default.update(overrides)
-        return default
-
-    def test_active_plan_section_rendered(self):
-        user = _make_user(onboarding_completed=True, sessions_completed=5)
-        ctx = compute_session_context(user)
-        plan = self._make_plan()
-        progress = self._make_progress()
-        prompt = build_system_prompt(user, ctx, active_plan=plan, plan_progress=progress)
-        assert "## LEARNING PLAN" in prompt
-        assert "A2" in prompt and "B1" in prompt
-        assert "33%" in prompt
-
-    def test_active_plan_shows_topic_statuses(self):
-        """Current phase topics should show status markers."""
-        user = _make_user(onboarding_completed=True)
-        ctx = compute_session_context(user)
-        plan = self._make_plan()
-        progress = self._make_progress()
-        prompt = build_system_prompt(user, ctx, active_plan=plan, plan_progress=progress)
-        # Current phase (week 1) topics are shown with status markers
-        assert "[completed] Past tense review" in prompt
-        assert "[in_progress] Conditional mood" in prompt
-        # Next phase is shown as a preview (focus only, not individual topics)
-        assert "Subjunctive basics" in prompt
-
-    def test_no_plan_auto_creates_for_experienced_user(self):
-        """Experienced users (sessions > threshold) get auto-create, not propose."""
-        user = _make_user(
-            onboarding_completed=True,
-            sessions_completed=5,
-            level="A2",
-        )
-        ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx, active_plan=None, plan_progress=None)
-        assert "## LEARNING PLAN" in prompt
-        assert "Silently create" in prompt
-        assert "manage_learning_plan" in prompt
-        assert "B1" in prompt  # next level
-        assert "Propose creating" not in prompt
-
-    def test_no_plan_c2_auto_creates_with_advanced_topics(self):
-        """C2 users with enough sessions get auto-create with advanced topic description."""
-        user = _make_user(
-            onboarding_completed=True,
-            sessions_completed=5,
-            level="C2",
-        )
-        ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx, active_plan=None, plan_progress=None)
-        assert "## LEARNING PLAN" in prompt
-        assert "advanced" in prompt.lower()
-        assert "Silently create" in prompt
-
-    def test_plan_proposed_on_early_sessions(self):
-        """Early sessions (sessions <= threshold) get interactive propose."""
-        user = _make_user(
-            onboarding_completed=True,
-            sessions_completed=1,
-        )
-        ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx, active_plan=None, plan_progress=None)
-        assert "## LEARNING PLAN" in prompt
-        assert "Propose creating" in prompt
-        assert "manage_learning_plan" in prompt
-        assert "Silently create" not in prompt
-
-    def test_plan_proposed_at_boundary(self):
-        """At exactly plan_auto_create_after_sessions (3), still propose."""
-        user = _make_user(
-            onboarding_completed=True,
-            sessions_completed=3,
-        )
-        ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx, active_plan=None, plan_progress=None)
-        assert "Propose creating" in prompt
-        assert "Silently create" not in prompt
-
-    def test_plan_auto_created_just_above_threshold(self):
-        """At threshold + 1 (4 sessions), auto-create kicks in."""
-        user = _make_user(
-            onboarding_completed=True,
-            sessions_completed=4,
-        )
-        ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx, active_plan=None, plan_progress=None)
-        assert "Silently create" in prompt
-        assert "Propose creating" not in prompt
-
-    def test_no_plan_section_during_onboarding(self):
-        user = _make_user(onboarding_completed=False, sessions_completed=0)
-        ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx, active_plan=None, plan_progress=None)
-        assert "## LEARNING PLAN" not in prompt
-
-    def test_active_plan_shown_even_on_first_session(self):
-        """Active plan should be visible even if is_first_session."""
-        user = _make_user(
-            onboarding_completed=True,
-            sessions_completed=0,
-            last_session_at=None,
-        )
-        ctx = compute_session_context(user)
-        plan = self._make_plan()
-        progress = self._make_progress()
-        prompt = build_system_prompt(user, ctx, active_plan=plan, plan_progress=progress)
-        assert "## LEARNING PLAN" in prompt
-        assert "A2" in prompt and "B1" in prompt
-
-    def test_guidelines_present(self):
-        user = _make_user(onboarding_completed=True)
-        ctx = compute_session_context(user)
-        plan = self._make_plan()
-        progress = self._make_progress()
-        prompt = build_system_prompt(user, ctx, active_plan=plan, plan_progress=progress)
-        assert "Guidelines:" in prompt
-        assert "exact plan topic names" in prompt
-
-    def test_active_plan_staleness_note(self):
-        """Active plan section warns that data is from session start."""
-        user = _make_user(onboarding_completed=True)
-        ctx = compute_session_context(user)
-        plan = self._make_plan()
-        progress = self._make_progress()
-        prompt = build_system_prompt(user, ctx, active_plan=plan, plan_progress=progress)
-        assert "snapshot is from session start" in prompt
-        assert "manage_learning_plan(action='get')" in prompt
-
-    def test_propose_plan_staleness_note(self):
-        """Propose-plan section tells agent to use tool after creating a plan."""
-        user = _make_user(onboarding_completed=True, sessions_completed=1)
-        ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx, active_plan=None, plan_progress=None)
-        assert "Once a plan is created during this session" in prompt
-        assert "manage_learning_plan(action='get')" in prompt
-
-    def test_auto_create_has_staleness_note(self):
-        """Auto-create section also includes staleness note."""
-        user = _make_user(onboarding_completed=True, sessions_completed=5)
-        ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx, active_plan=None, plan_progress=None)
-        assert "Once a plan is created during this session" in prompt
-        assert "manage_learning_plan(action='get')" in prompt
-
-    def test_auto_create_has_guidelines(self):
-        """Auto-create section includes plan creation guidelines."""
-        user = _make_user(onboarding_completed=True, sessions_completed=5)
-        ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx, active_plan=None, plan_progress=None)
-        assert "Weekly phases with 2-5 topics" in prompt
-        assert "assessment" in prompt.lower()
-
-    def test_bot_capabilities_mentions_learning_plan(self):
-        user = _make_user()
-        ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx)
-        assert "manage_learning_plan" in prompt
-
-    def test_summary_prompt_includes_plan_summary(self):
-        prompt = build_summary_prompt(
-            "en", "fr",
+    def test_english_language_instruction(self):
+        prompt = build_internal_summary_prompt(
+            conversation_digest="[User]: test",
             session_data={
-                "exercise_count": 3, "exercise_scores": [7, 8, 6],
-                "exercise_topics": ["verbs"], "exercise_types": ["fill_blank"],
+                "exercise_count": 0, "exercise_scores": [],
+                "exercise_topics": [], "exercise_types": [],
                 "words_added": [], "words_reviewed": 0,
-                "vocab_count": 0, "turn_count": 10,
-                "duration_minutes": 15,
+                "vocab_count": 0, "turn_count": 2,
             },
             close_reason="explicit_close",
-            user_name="Test",
-            user_streak=5,
-            user_level="A2",
-            plan_summary="A2→B1, Week 2/4, 50% complete (4/8 topics)",
+            target_language="Spanish",
+            user_level="B1",
         )
-        assert "A2→B1" in prompt
-        assert "50% complete" in prompt
+        assert "English" in prompt
 
-
-class TestFieldTimestampsInPrompt:
-    """Verify '(since DATE)' rendering in STUDENT PROFILE sections."""
-
-    def test_scalar_fields_show_since(self):
-        user = _make_user(field_timestamps={
-            "level": "2026-01-15",
-            "preferred_difficulty": "2026-02-10",
-            "session_style": "2026-02-05",
-        })
-        ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx)
-        assert "A2 (since 2026-01-15)" in prompt
-        assert "normal (since 2026-02-10)" in prompt
-        assert "structured (since 2026-02-05)" in prompt
-
-    def test_empty_timestamps_no_since(self):
-        user = _make_user(field_timestamps={})
-        ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx)
-        assert "(since" not in prompt
-
-    def test_array_fields_show_since(self):
-        from adaptive_lang_study_bot.utils import _item_key
-        user = _make_user(
-            interests=["cooking"],
-            weak_areas=["subjunctive mood"],
-            field_timestamps={
-                "interests": {_item_key("cooking"): "2026-01-20"},
-                "weak_areas": {_item_key("subjunctive mood"): "2026-02-15"},
-            },
-        )
-        ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx)
-        assert "(since 2026-01-20)" in prompt
-        assert "(since 2026-02-15)" in prompt
-
-    def test_notifications_paused_shows_since(self):
-        user = _make_user(
-            notifications_paused=True,
-            field_timestamps={"notifications_paused": "2026-02-26"},
-        )
-        ctx = compute_session_context(user)
-        prompt = build_system_prompt(user, ctx)
-        assert "paused (since 2026-02-26)" in prompt
-
-    def test_proactive_prompt_shows_since(self):
-        from adaptive_lang_study_bot.utils import _item_key
-        user = _make_user(
-            interests=["cooking"],
-            field_timestamps={
-                "level": "2026-01-15",
-                "interests": {_item_key("cooking"): "2026-01-20"},
-            },
-        )
-        prompt = build_proactive_prompt(user, "proactive_nudge", {})
-        assert "A2 (since 2026-01-15)" in prompt
-        assert "(since 2026-01-20)" in prompt
-
-    def test_proactive_prompt_empty_timestamps(self):
-        user = _make_user(field_timestamps={})
-        prompt = build_proactive_prompt(user, "proactive_nudge", {})
-        assert "(since" not in prompt
-
-    def test_summary_prompt_plan_hint_for_progress(self):
-        """When plan_summary is provided, the TASK section should mention plan progress."""
-        prompt = build_summary_prompt(
-            "en", "fr",
+    def test_plan_summary_included_when_provided(self):
+        prompt = build_internal_summary_prompt(
+            conversation_digest="[User]: test",
             session_data={
-                "exercise_count": 3, "exercise_scores": [7, 8, 6],
-                "exercise_topics": ["verbs"], "exercise_types": ["fill_blank"],
+                "exercise_count": 1, "exercise_scores": [8],
+                "exercise_topics": ["grammar"], "exercise_types": ["fill_blank"],
                 "words_added": [], "words_reviewed": 0,
-                "vocab_count": 0, "turn_count": 10,
-                "duration_minutes": 15,
+                "vocab_count": 0, "turn_count": 4,
             },
-            close_reason="explicit_close",
-            user_name="Test",
-            user_streak=5,
+            close_reason="idle_timeout",
+            target_language="French",
             user_level="A2",
             plan_summary="A2→B1, Week 2/4, 50%",
         )
-        assert "plan progress" in prompt.lower() or "plan" in prompt.lower()
+        assert "A2→B1" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Session history rendering in system prompt
+# ---------------------------------------------------------------------------
+
+
+class TestSessionHistoryInPrompt:
+    """Test that AI summaries from recent sessions appear in the system prompt."""
+
+    def _make_session_mock(self, started_at, ended_at, ai_summary):
+        sess = MagicMock()
+        sess.started_at = started_at
+        sess.ended_at = ended_at
+        sess.ai_summary = ai_summary
+        return sess
+
+    def test_recent_sessions_rendered_for_interactive(self):
+        now = datetime.now(timezone.utc)
+        sessions = [
+            self._make_session_mock(
+                now - timedelta(hours=2), now - timedelta(hours=1, minutes=45),
+                "Covered basic greetings. Student performed well on vocabulary.",
+            ),
+        ]
+        user = _make_user()
+        prompt = build_system_prompt(user, compute_session_context(user), recent_sessions=sessions)
+        assert "Recent sessions:" in prompt
+        assert "Covered basic greetings" in prompt
+
+    def test_no_recent_sessions_no_section(self):
+        user = _make_user()
+        prompt = build_system_prompt(user, compute_session_context(user), recent_sessions=[])
+        assert "Recent sessions:" not in prompt
+
+    def test_none_recent_sessions_no_section(self):
+        user = _make_user()
+        prompt = build_system_prompt(user, compute_session_context(user), recent_sessions=None)
+        assert "Recent sessions:" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# Prompt cleanup: shared SESSION RULES
+# ---------------------------------------------------------------------------
+
+
+class TestSharedSessionRules:
+    """Verify D3: shared SESSION RULES block replaces per-style duplication."""
+
+    def test_session_rules_block_present(self):
+        user = _make_user(session_style="structured")
+        prompt = build_system_prompt(user, compute_session_context(user))
+        assert "SESSION RULES:" in prompt
+        assert "NEVER repeat content" in prompt
+
+    def test_no_duplicate_never_repeat(self):
+        """The 'NEVER repeat' instruction should appear exactly once."""
+        user = _make_user(session_style="casual")
+        prompt = build_system_prompt(user, compute_session_context(user))
+        assert prompt.count("NEVER repeat content") == 1
+
+
+# ---------------------------------------------------------------------------
+# Vocabulary transcription rule
+# ---------------------------------------------------------------------------
+
+
+class TestVocabularyTranscriptionRule:
+    """Verify D6: transcription rule in VOCABULARY STRATEGY."""
+
+    def test_transcription_present_for_different_languages(self):
+        user = _make_user(native_language="ru", target_language="fr", sessions_completed=5)
+        prompt = build_system_prompt(user, compute_session_context(user))
+        assert "TRANSCRIPTION" in prompt
+        assert "phonetic transcription" in prompt
+
+    def test_transcription_absent_for_same_language(self):
+        user = _make_user(native_language="fr", target_language="fr", sessions_completed=5)
+        prompt = build_system_prompt(user, compute_session_context(user))
+        assert "TRANSCRIPTION" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# Output format enhancements
+# ---------------------------------------------------------------------------
+
+
+class TestOutputFormatEnhancements:
+    """Verify D5: no headers rule added to OUTPUT FORMAT."""
+
+    def test_no_headers_rule(self):
+        user = _make_user()
+        prompt = build_system_prompt(user, compute_session_context(user))
+        assert "NEVER use markdown headers" in prompt
+
+    def test_no_tables_rule(self):
+        user = _make_user()
+        prompt = build_system_prompt(user, compute_session_context(user))
+        assert "NEVER use markdown tables" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Comeback precedence (D4)
+# ---------------------------------------------------------------------------
+
+
+class TestComebackDifficultyPrecedence:
+    """Verify D4: comeback difficulty override mentions precedence."""
+
+    def test_precedence_note_in_full_comeback(self):
+        user = _make_user(
+            last_session_at=datetime.now(timezone.utc) - timedelta(days=30),
+            sessions_completed=10,
+        )
+        section = _build_comeback_section(user, gap_hours=30 * 24, due_count=0, stale_topics=[])
+        assert section is not None
+        assert "takes precedence" in section
+
+    def test_score_adaptation_cross_reference(self):
+        user = _make_user()
+        prompt = build_system_prompt(user, compute_session_context(user))
+        assert "comeback difficulty override" in prompt

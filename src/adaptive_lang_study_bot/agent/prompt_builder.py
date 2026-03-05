@@ -9,6 +9,29 @@ from adaptive_lang_study_bot.i18n import render_goal, render_interest
 from adaptive_lang_study_bot.utils import get_item_date, get_language_name as _get_language_name, safe_zoneinfo, score_label as _score_label, user_local_now
 
 
+def _study_duration(created_at: datetime) -> str:
+    """Human-readable duration since registration."""
+    days = (datetime.now(timezone.utc) - created_at).days
+    if days < 1:
+        return "today"
+    if days < 7:
+        return f"{days} day{'s' if days != 1 else ''}"
+    if days < 30:
+        weeks = days // 7
+        return f"{weeks} week{'s' if weeks != 1 else ''}"
+    months = days // 30
+    remaining_days = days % 30
+    if months < 12:
+        if remaining_days >= 15:
+            months += 1
+        return f"~{months} month{'s' if months != 1 else ''}"
+    years = days // 365
+    remaining_months = (days % 365) // 30
+    if remaining_months:
+        return f"~{years}y {remaining_months}m"
+    return f"~{years} year{'s' if years != 1 else ''}"
+
+
 class SessionContext(TypedDict):
     """Typed shape for the session context dict passed to build_system_prompt."""
 
@@ -332,7 +355,8 @@ def _build_comeback_section(
                 "session, use EASY difficulty regardless of the student's preferred "
                 "setting. Use simpler vocabulary, shorter sentences, more hints, and "
                 "multiple-choice formats. Do NOT assume they remember recent topics. "
-                "Start with foundational exercises appropriate for their level."
+                "Start with foundational exercises appropriate for their level.\n"
+                "This difficulty override takes precedence over TEACHING APPROACH score adaptation for this session."
             )
         priority += 1
     elif gap_days >= tuning.comeback_difficulty_adjust_days:
@@ -424,9 +448,7 @@ def _build_teaching_approach_section(
                 "- End with a brief review of what was covered.\n"
                 "- MINIMUM COVERAGE: Every session MUST cover at least one plan topic or one "
                 "weak area with both grammar explanation and vocabulary. Do not end without "
-                "completing at least one full topic cycle (theory → vocab → exercises).\n"
-                "- NEVER repeat content you already presented in this session.\n"
-                "- Be a leader: teach proactively instead of asking permission for every action."
+                "completing at least one full topic cycle (theory → vocab → exercises)."
             )
         elif user.session_style == SessionStyle.INTENSIVE:
             adaptive_lines.append(
@@ -438,9 +460,7 @@ def _build_teaching_approach_section(
                 "multiple vocabulary blocks per session.\n"
                 "- Move rapidly between exercises. Don't wait for the student to ask for more.\n"
                 "- MINIMUM COVERAGE: Every session MUST cover at least one weak area or goal-related "
-                "topic with vocabulary and exercises. Push to cover multiple topics per session.\n"
-                "- NEVER repeat content you already presented in this session.\n"
-                "- Be a leader: push the student, don't offer menus of choices."
+                "topic with vocabulary and exercises. Push to cover multiple topics per session."
             )
         else:
             # Casual or default
@@ -453,11 +473,16 @@ def _build_teaching_approach_section(
                 "during the same session. You may also introduce additional words at the END if "
                 "exercises revealed gaps.\n"
                 "- Let the conversation flow naturally — exercises should emerge from the "
-                "dialogue, not interrupt it.\n"
-                "- NEVER repeat content you already presented in this session.\n"
-                "- Be a leader: teach proactively instead of asking permission for every action. "
-                "Present exercises and vocabulary directly rather than offering menus of choices."
+                "dialogue, not interrupt it."
             )
+
+        # Shared rules for all session styles
+        adaptive_lines.append(
+            "SESSION RULES:\n"
+            "- NEVER repeat content you already presented in this session.\n"
+            "- Be a leader: teach proactively. Present exercises and vocabulary directly — "
+            "don't offer menus of choices or ask permission."
+        )
 
     # Score adaptation (skip for first session — no scores exist, and FIRST SESSION
     # GUIDE already provides the diagnostic exercise flow)
@@ -470,7 +495,7 @@ def _build_teaching_approach_section(
                 "- Adapt difficulty based on how the student performs during THIS session.\n"
                 "- If they struggle with exercises, simplify and offer more guidance.\n"
                 "- If they answer correctly and quickly, increase challenge gradually.\n"
-                "- Call get_progress_summary if you need historical score trends."
+                "- If a comeback difficulty override is present below, follow that instead."
             )
         else:
             # Onboarding: no performance tools, bake in static snapshot.
@@ -509,7 +534,6 @@ def _build_teaching_approach_section(
             "- Align exercises with the student's learning goals when set.",
             "- When learning goals exist, periodically ask about progress toward them.",
             "- Suggest vocabulary and topics directly relevant to the student's goals.",
-            "- If no learning goals are set, gently encourage setting one early in the session.",
         ]
         adaptive_lines.append("\n".join(goal_lines))
 
@@ -546,6 +570,7 @@ def _build_session_context_section(
     topic_performance: dict[str, dict] | None = None,
     active_schedules: list[dict] | None = None,
     has_perf_tools: bool = False,
+    recent_sessions: list | None = None,
 ) -> str:
     """Build the SESSION CONTEXT section of the system prompt."""
     last_activity = user.last_activity or {}
@@ -558,7 +583,11 @@ def _build_session_context_section(
     ctx_lines.append(f"\nGreeting style: {session_ctx['greeting_style']}")
     ctx_lines.append(session_ctx["greeting_note"])
 
-    # Last activity
+    # Last activity — when recent AI summaries are available (interactive), skip
+    # detailed exercise/topic/word data from last_activity to avoid duplicating
+    # what the most recent AI summary already covers.  Keep only: timing, status,
+    # close-reason notes (agent tone guidance), and struggling topics.
+    has_ai_summaries = has_perf_tools and bool(recent_sessions)
     if last_activity:
         gap_h = session_ctx["gap_hours"]
         if gap_h >= tuning.comeback_threshold_hours:
@@ -576,16 +605,21 @@ def _build_session_context_section(
             else:
                 time_ago = f"{gap_h:.1f} hours ago"
             ctx_lines.append(f"\nLast session ({time_ago}): {last_activity.get('session_summary', 'N/A')}")
-            if last_activity.get("topic"):
-                ctx_lines.append(f"Last topic: {last_activity['topic']}")
-            if last_activity.get("last_exercise"):
-                ctx_lines.append(f"Last exercise: {last_activity['last_exercise']}")
-            if last_activity.get("score") is not None:
-                ctx_lines.append(f"Last score: {_score_label(last_activity['score'])}")
-            if last_activity.get("topics_covered"):
-                ctx_lines.append(
-                    f"Topics covered last time: {', '.join(last_activity['topics_covered'])}"
-                )
+
+            # Detailed per-field data — skip when AI summaries provide richer context
+            if not has_ai_summaries:
+                if last_activity.get("topic"):
+                    ctx_lines.append(f"Last topic: {last_activity['topic']}")
+                if last_activity.get("last_exercise"):
+                    ctx_lines.append(f"Last exercise: {last_activity['last_exercise']}")
+                if last_activity.get("score") is not None:
+                    ctx_lines.append(f"Last score: {_score_label(last_activity['score'])}")
+                if last_activity.get("topics_covered"):
+                    ctx_lines.append(
+                        f"Topics covered last time: {', '.join(last_activity['topics_covered'])}"
+                    )
+
+            # Close-reason notes — always included (agent tone guidance)
             if last_activity.get("status") == "incomplete" and gap_h < 24:
                 prev_close = last_activity.get("close_reason", "")
                 topic_info = f" on '{last_activity['topic']}'" if last_activity.get("topic") else ""
@@ -619,16 +653,11 @@ def _build_session_context_section(
                         "Do NOT tease — the bot ended it. Offer to continue or start fresh."
                     )
                 elif prev_close in ("shutdown", "error"):
-                    # Only mention technical issues if the student was actively
-                    # engaged (had exercises) AND the gap is short enough that
-                    # they likely noticed.  Silent shutdowns during idle/empty
-                    # sessions should not confuse the student with apologies.
                     if prev_exercises >= 1 and gap_h < tuning.greeting_short_break_hours:
                         note = (
                             f"NOTE: Last session{topic_info} ended due to a technical issue. "
                             "Do NOT blame the student. Offer to continue or start fresh."
                         )
-                    # else: silent shutdown of low-engagement session — skip note
                 else:
                     note = (
                         f"NOTE: Last session ended mid-conversation{topic_info}. "
@@ -642,21 +671,36 @@ def _build_session_context_section(
                         )
                         note += f" Struggled with: {topics_str} — revisit with simpler exercises."
                     ctx_lines.append(note)
-            if last_activity.get("words_practiced"):
-                ctx_lines.append(
-                    f"Words practiced last time: {', '.join(_sanitize(w, tuning.prompt_word_max_len) for w in last_activity['words_practiced'])}"
-                )
-            if last_activity.get("exercise_type_scores"):
-                scores_str = ", ".join(
-                    f"{tp}: {_score_label(sc)}" for tp, sc in last_activity["exercise_type_scores"].items()
-                )
-                ctx_lines.append(f"Exercise performance last time: {scores_str}")
-            if last_activity.get("struggling_topics") and last_activity.get("status") != "incomplete":
-                struggling = last_activity["struggling_topics"]
-                topics_str = ", ".join(
-                    f"{s['topic']} ({_score_label(s.get('avg_score'))})" for s in struggling
-                )
-                ctx_lines.append(f"Topics that need extra practice: {topics_str}")
+
+            # Detailed exercise data — skip when AI summaries are available
+            if not has_ai_summaries:
+                if last_activity.get("words_practiced"):
+                    ctx_lines.append(
+                        f"Words practiced last time: {', '.join(_sanitize(w, tuning.prompt_word_max_len) for w in last_activity['words_practiced'])}"
+                    )
+                if last_activity.get("exercise_type_scores"):
+                    scores_str = ", ".join(
+                        f"{tp}: {_score_label(sc)}" for tp, sc in last_activity["exercise_type_scores"].items()
+                    )
+                    ctx_lines.append(f"Exercise performance last time: {scores_str}")
+                if last_activity.get("struggling_topics") and last_activity.get("status") != "incomplete":
+                    struggling = last_activity["struggling_topics"]
+                    topics_str = ", ".join(
+                        f"{s['topic']} ({_score_label(s.get('avg_score'))})" for s in struggling
+                    )
+                    ctx_lines.append(f"Topics that need extra practice: {topics_str}")
+
+    # Recent session summaries (AI-generated, agent-facing) — for interactive sessions
+    if has_perf_tools and recent_sessions:
+        ctx_lines.append("\nRecent sessions:")
+        for sess in reversed(recent_sessions):  # chronological order (oldest first)
+            date = sess.started_at.strftime("%Y-%m-%d %H:%M") if sess.started_at else "?"
+            duration = ""
+            if sess.ended_at and sess.started_at:
+                mins = int((sess.ended_at - sess.started_at).total_seconds() / 60)
+                duration = f", {mins}min"
+            ctx_lines.append(f"\n[{date}{duration}]")
+            ctx_lines.append(sess.ai_summary)
 
     # Session history — skip for interactive (agent can call get_exercise_history)
     if not has_perf_tools:
@@ -726,7 +770,7 @@ def _build_session_context_section(
         hours_ago = session_ctx.get("notification_hours_ago")
         time_note = f" ({hours_ago:.0f}h ago)" if hours_ago else ""
         ctx_lines.append(
-            "\n## CONTEXT: USER IS RESPONDING TO A NOTIFICATION\n"
+            "\n**NOTIFICATION REPLY CONTEXT**\n"
             f'You recently sent{time_note}: "{session_ctx["notification_text"]}"\n'
             "The user's response below is likely a reply to this. "
             "Continue naturally — don't repeat the notification."
@@ -853,16 +897,28 @@ def _build_learning_plan_section(
             "(e.g. plan has 'Past Tense Verbs' and you drill irregular past tense "
             "→ record as 'Past Tense Verbs').",
             "- If the pace assessment above shows BEHIND or AHEAD, follow the ACTION directive.",
-            "- LEVEL PROGRESSION: Level promotion happens through plans. When the plan "
-            "nears completion, assess the student's readiness for the next level by "
-            "running comprehensive exercises across plan topics. If the student "
-            "demonstrates consistent mastery (strong performance across diverse topics), "
-            "call adjust_level to promote them. The plan will auto-complete when the "
-            "level reaches the target.",
+            "- LEVEL PROGRESSION: "
+            + (
+                "This is a mastery plan (student is already at the highest level, C2). "
+                "There is no level to promote to. Focus on deepening expertise: "
+                "literary style, nuance, precision, cultural fluency. "
+                "When the plan reaches 100%, celebrate the achievement and offer "
+                "to create a new mastery plan exploring different advanced topics."
+                if active_plan.current_level == active_plan.target_level
+                else
+                "Level promotion happens through plans. When the plan "
+                "nears completion, assess the student's readiness for the next level by "
+                "running comprehensive exercises across plan topics. If the student "
+                "demonstrates consistent mastery (strong performance across diverse topics), "
+                "call adjust_level to promote them. The plan will auto-complete when the "
+                "level reaches the target."
+            ),
             "- When a plan phase is fully completed, briefly celebrate and "
             "preview the next phase to keep the student motivated.",
-            "- This plan snapshot is from session start. Use "
-            "manage_learning_plan(action='get') for up-to-date progress during the session.",
+            "- This plan snapshot is from session start. Call "
+            "manage_learning_plan(action='get') to refresh progress after completing 2-3 "
+            "exercises on plan topics, or before deciding to move to the next phase topic. "
+            "Don't refresh after every single exercise.",
         ]
 
         # Multi-session-per-day guidance
@@ -968,13 +1024,20 @@ def _build_learning_plan_section(
         ),
     }
     _style_hint = _plan_style_guidance.get(user.session_style, "")
+    _is_mastery = current_idx == len(CEFR_LEVELS) - 1
     _plan_guidelines = (
         "When creating a plan, include:\n"
         "- Weekly phases with 2-5 topics each, tailored to the student's interests\n"
         "- Vocabulary themes and targets per week\n"
-        "- A FINAL ASSESSMENT phase as the last week — covering key topics from "
-        "all prior phases. This is where you'll evaluate readiness for level promotion.\n"
-        "- Realistic expectations based on their session frequency\n"
+        + (
+            "- A FINAL REVIEW phase as the last week — covering key topics from "
+            "all prior phases, celebrating mastery and identifying areas for further exploration.\n"
+            if _is_mastery
+            else
+            "- A FINAL ASSESSMENT phase as the last week — covering key topics from "
+            "all prior phases. This is where you'll evaluate readiness for level promotion.\n"
+        )
+        + "- Realistic expectations based on their session frequency\n"
         + (f"\n{_style_hint}" if _style_hint else "")
     )
     _plan_staleness = (
@@ -992,9 +1055,14 @@ def _build_learning_plan_section(
             f"{plan_goal}. "
             "Ask about their available study time (sessions per week) before creating. "
             "If the student declines, respect that and proceed without a plan.\n"
-            "Note: Level progression (e.g. A2 → B1) requires an active learning plan. "
-            "Without a plan, the student can practice freely but their level won't change. "
-            "Mention this if the student asks about leveling up.\n"
+            + (
+                ""
+                if _is_mastery
+                else
+                "Note: Level progression (e.g. A2 → B1) requires an active learning plan. "
+                "Without a plan, the student can practice freely but their level won't change. "
+                "Mention this if the student asks about leveling up.\n"
+            ) +
             f"{_plan_guidelines}\n"
             f"{_plan_staleness}"
         )
@@ -1028,6 +1096,7 @@ def build_system_prompt(
     active_plan: "LearningPlan | None" = None,
     plan_progress: dict | None = None,
     has_web_search: bool = False,
+    recent_sessions: list | None = None,
 ) -> str:
     """Build the full system prompt for a session.
 
@@ -1117,12 +1186,14 @@ def build_system_prompt(
         "## OUTPUT FORMAT\n"
         "1. Use **bold**, *italic*, `code` for formatting.\n"
         "   For lists use numbered lines (1. 2. 3.) or plain dashes.\n"
-        "2. NEVER use markdown tables (| ... | syntax). They render as broken text. "
-        "Instead present tabular data as a simple list, e.g.:\n"
-        "   - **un appartement** — квартира\n"
-        "   - **un salon** — гостиная\n"
-        "3. Keep responses concise. Short paragraphs, clear formatting.\n"
-        "4. Use --- on its own line to split into separate messages ONLY for truly independent "
+        "2. NEVER use markdown tables (| ... | syntax) or any column-aligned formatting.\n"
+        "   They render as broken text in Telegram. Instead present data as a simple list\n"
+        "   with em-dash separators, e.g.:\n"
+        "   - **un appartement** [ён апартёмон] — квартира\n"
+        "   - **un salon** [ён салон] — гостиная\n"
+        "3. NEVER use markdown headers (##, #, ###) in messages. Use **bold text** instead.\n"
+        "4. Keep responses concise. Short paragraphs, clear formatting.\n"
+        "5. Use --- on its own line to split into separate messages ONLY for truly independent "
         "parts (e.g. feedback on completed exercise, then a new exercise). Never split "
         "mid-thought, greeting from content, or feedback from follow-up. When in doubt, don't split."
     )
@@ -1159,16 +1230,15 @@ def build_system_prompt(
     if has_perf_tools:
         n = len(tool_hints) + 1
         tool_hints.append(
-            f"{n}. Call get_exercise_history to check which topics the student hasn't practiced "
-            "recently before choosing the next exercise topic. This returns per-exercise detail: "
-            "topic, exercise type, score, words involved, and date."
+            f"{n}. Recent session summaries are included in SESSION CONTEXT below. Call "
+            "get_exercise_history only when you need per-exercise detail beyond what the "
+            "summaries provide (specific scores, words involved, exercise dates)."
         )
         tool_hints.append(
-            f"{n + 1}. Call get_progress_summary for score trends (7-day and period), per-topic "
-            "performance breakdown, vocabulary stats, and session activity. Use this at session "
-            "start to plan content, and periodically during longer sessions to adapt your approach. "
-            "This is your primary source for understanding the student's performance — "
-            "the student profile above is a static snapshot that does not update mid-session."
+            f"{n + 1}. Call get_progress_summary only when you need aggregate statistics "
+            "(7-day/30-day score trends, vocabulary state counts, session frequency) beyond "
+            "what the session summaries provide. Prefer using the session context first — "
+            "save tool calls for when you need deeper data."
         )
     if has_web_search:
         n = len(tool_hints) + 1
@@ -1186,8 +1256,10 @@ def build_system_prompt(
 
     # --- 5. Student profile ---
     ts = user.field_timestamps or {}
+    _duration = _study_duration(user.created_at)
     profile_lines = [
         f"Name: {_sanitize(user.first_name, tuning.prompt_name_max_len)}",
+        f"Studying since: {user.created_at.strftime('%Y-%m-%d')} ({_duration})",
         f"Native language: {_dated(f'{native_lang} ({user.native_language})', ts.get('native_language'))}",
         f"Target language: {_dated(f'{target_lang} ({user.target_language})', ts.get('target_language'))}"
         + (" (strengthening mode)" if is_same_language else ""),
@@ -1207,7 +1279,7 @@ def build_system_prompt(
     if has_perf_tools:
         # Interactive sessions: agent can call get_progress_summary / get_exercise_history
         # for live, detailed performance data — omit stale static snapshot.
-        profile_lines.append("Recent performance: use get_progress_summary for live data")
+        profile_lines.append("Recent performance: see session summaries below; call get_progress_summary for detailed stats")
     else:
         # Onboarding: no performance tools, keep static snapshot.
         profile_lines.append(
@@ -1220,7 +1292,10 @@ def build_system_prompt(
     # Level progression info (details in LEARNING PLAN section)
     current_idx = CEFR_LEVELS.index(user.level) if user.level in CEFR_LEVELS else 0
     if current_idx == len(CEFR_LEVELS) - 1:
-        profile_lines.append("Level: at highest level (C2)")
+        profile_lines.append(
+            "Level progression: at highest level (C2) — focus on mastery: "
+            "literary style, nuance, cultural fluency, specialized topics"
+        )
     elif not active_plan:
         profile_lines.append(
             "Level progression: requires an active learning plan."
@@ -1355,6 +1430,23 @@ def build_system_prompt(
                 f"below the typical range for {user.level}. Actively propose new vocabulary "
                 "throughout the session — don't wait for the student to ask."
             )
+        # Transcription rule (skip for same-language strengthening)
+        if not is_same_language:
+            vocab_lines.append(
+                "- TRANSCRIPTION: When presenting new vocabulary, always include approximate "
+                "phonetic transcription in the student's native language alphabet in square "
+                "brackets:\n"
+                f"  **bonjour** [бонжур] — hello\n"
+                f"  **merci** [мерси] — thank you\n"
+                "  Adapt transcription to the student's writing system. For students whose "
+                "native language uses the same alphabet as the target language, use simplified "
+                "phonetic notation (e.g. **bonjour** [bohn-ZHOOR])."
+            )
+        # Cross-reference tool sequence
+        vocab_lines.append(
+            "- See TOOL REQUIREMENTS rule 2 for the required tool call sequence when "
+            "teaching new vocabulary."
+        )
         sections.append("## VOCABULARY STRATEGY\n" + "\n".join(vocab_lines))
 
     # --- 10. Session context ---
@@ -1364,6 +1456,7 @@ def build_system_prompt(
         topic_performance=topic_performance,
         active_schedules=active_schedules,
         has_perf_tools=has_perf_tools,
+        recent_sessions=recent_sessions,
     ))
 
     # --- 11. Comeback adaptation (long absence only, skip for first session) ---
@@ -1448,9 +1541,9 @@ _PROACTIVE_TASK_INSTRUCTIONS: dict[str, str] = {
     ),
     "proactive_summary": (
         "Generate a personalized progress summary for the student. "
-        "See the PROGRESS DATA section below for comprehensive stats "
-        "(score trends, topic performance, vocabulary progress, session activity). "
-        "Include specific metrics: weekly trends, topics practiced, streak status. "
+        "Use PROGRESS DATA (topic performance, vocabulary, session activity) "
+        "and RECENT CONTEXT (session summaries) to craft a comprehensive overview. "
+        "Include specific details: topics practiced, streak status, vocabulary growth. "
         "Highlight achievements and suggest areas for improvement."
     ),
     "proactive_nudge": (
@@ -1470,6 +1563,7 @@ def build_proactive_prompt(
     plan_progress: dict | None = None,
     prefetch: dict | None = None,
     has_web_search: bool = False,
+    recent_sessions: list | None = None,
 ) -> str:
     """Build a focused system prompt for proactive notification sessions.
 
@@ -1478,22 +1572,33 @@ def build_proactive_prompt(
     """
     native_lang = _get_language_name(user.native_language)
     target_lang = _get_language_name(user.target_language)
-    recent_n = (user.recent_scores or [])[-tuning.recent_scores_display:]
+    is_same_language = user.native_language == user.target_language
+    now = datetime.now(timezone.utc)
 
     sections: list[str] = []
 
     # --- 1. Role & rules ---
+    if is_same_language:
+        lang_rule = (
+            f"Communicate entirely in {native_lang}. The student is strengthening "
+            f"their existing {native_lang} skills."
+        )
+    else:
+        lang_rule = (
+            f"Communicate in {native_lang} (the student's native language). "
+            f"Use {target_lang} only for teaching content (vocabulary, examples)."
+        )
+
     sections.append(
         "## ROLE\n"
         "You are a proactive language tutor generating a single notification message.\n\n"
         "## RULES\n"
-        f"1. Communicate in {native_lang} (the student's native language).\n"
-        f"2. Use {target_lang} only for teaching content (vocabulary, examples).\n"
-        "3. Use **bold**, *italic*, `code` for formatting. NEVER use markdown tables.\n"
-        "4. Write the notification message directly as your response.\n"
-        "5. Do NOT start a conversation — the student may not see this for hours.\n"
-        "6. Keep the message concise and self-contained.\n"
-        "7. Respect topics_to_avoid — never mention them."
+        f"- {lang_rule}\n"
+        "- Use **bold**, *italic*, `code` for formatting. NEVER use markdown tables.\n"
+        "- Write the notification message directly as your response.\n"
+        "- Do NOT start a conversation — the student may not see this for hours.\n"
+        "- Keep the message concise and self-contained.\n"
+        "- Respect topics_to_avoid — never mention them."
     )
 
     if has_web_search:
@@ -1506,22 +1611,28 @@ def build_proactive_prompt(
             "Incorporate found content naturally into the notification to make it engaging."
         )
 
-    # --- 2. Student profile (compact) ---
+    # --- 2. Student profile ---
     ts = user.field_timestamps or {}
+    _duration = _study_duration(user.created_at)
     profile_lines = [
         f"Name: {_sanitize(user.first_name, tuning.prompt_name_max_len)}",
-        f"Native language: {_dated(native_lang, ts.get('native_language'))}",
+        f"Studying since: {user.created_at.strftime('%Y-%m-%d')} ({_duration})",
+        f"Native language: {native_lang}",
         f"Target language: {_dated(target_lang, ts.get('target_language'))}",
         f"Level: {_dated(user.level, ts.get('level'))}",
         f"Streak: {user.streak_days} days",
+        f"Sessions completed: {user.sessions_completed}",
         f"Vocabulary: {user.vocabulary_count} words",
-        f"Interests: {', '.join(_dated_item(render_interest(_sanitize(i)), ts, 'interests', i) for i in user.interests) if user.interests else 'not set'}",
-        f"Learning goals: {'; '.join(_dated_item(render_goal(_sanitize(g), target_language=target_lang), ts, 'learning_goals', g) for g in user.learning_goals) if user.learning_goals else 'none set'}",
-        f"Weak areas: {', '.join(_dated_item(_sanitize(i), ts, 'weak_areas', i) for i in user.weak_areas) if user.weak_areas else 'none identified'}",
-        f"Recent performance (last {tuning.recent_scores_display}): {', '.join(_score_label(s) for s in recent_n) if recent_n else 'no scores yet'}",
-        f"Topics to avoid: {', '.join(_dated_item(_sanitize(i), ts, 'topics_to_avoid', i) for i in user.topics_to_avoid) if user.topics_to_avoid else 'none'}",
-        f"Additional notes: {'; '.join(_dated_item(_sanitize(i), ts, 'additional_notes', i) for i in user.additional_notes) if user.additional_notes else 'none'}",
+        f"Session style: {user.session_style}" if user.session_style else "Session style: not set",
+        f"Difficulty: {user.preferred_difficulty}" if user.preferred_difficulty else "Difficulty: normal",
+        f"Interests: {', '.join(render_interest(_sanitize(i)) for i in user.interests) if user.interests else 'not set'}",
+        f"Learning goals: {'; '.join(render_goal(_sanitize(g), target_language=target_lang) for g in user.learning_goals) if user.learning_goals else 'none set'}",
+        f"Weak areas: {', '.join(_sanitize(i) for i in user.weak_areas) if user.weak_areas else 'none identified'}",
+        f"Strong areas: {', '.join(_sanitize(i) for i in user.strong_areas) if user.strong_areas else 'none identified'}",
+        f"Topics to avoid: {', '.join(_sanitize(i) for i in user.topics_to_avoid) if user.topics_to_avoid else 'none'}",
     ]
+    if user.additional_notes:
+        profile_lines.append(f"Notes: {'; '.join(_sanitize(n) for n in user.additional_notes)}")
     sections.append("## STUDENT PROFILE\n" + "\n".join(profile_lines))
 
     # --- 2b. Time context ---
@@ -1533,14 +1644,54 @@ def build_proactive_prompt(
         else "afternoon" if local_hour < tuning.time_of_day_afternoon_end
         else "evening"
     )
+    gap_hours = (now - user.last_session_at).total_seconds() / 3600 if user.last_session_at else None
+    if gap_hours is None:
+        gap_str = "Last session: never (new student)"
+    elif gap_hours >= 48:
+        gap_str = f"Last session: {gap_hours / 24:.1f} days ago"
+    else:
+        gap_str = f"Last session: {gap_hours:.1f} hours ago"
     sections.append(
         "## TIME CONTEXT\n"
         f"Date: {local_now.strftime('%Y-%m-%d')}\n"
         f"Time: {time_of_day} ({local_now.strftime('%A')}), {local_now.strftime('%H:%M')}\n"
-        f"Timezone: {user.timezone or 'UTC'}"
+        f"Timezone: {user.timezone or 'UTC'}\n"
+        f"{gap_str}"
     )
 
-    # --- 3. Task instructions ---
+    # --- 3. Recent context (AI summaries + last activity) ---
+    ctx_lines: list[str] = []
+
+    # Recent AI session summaries — rich continuity context
+    if recent_sessions:
+        ctx_lines.append("Recent sessions:")
+        for sess in reversed(recent_sessions):  # chronological order (oldest first)
+            date = sess.started_at.strftime("%Y-%m-%d %H:%M") if sess.started_at else "?"
+            duration = ""
+            if sess.ended_at and sess.started_at:
+                mins = int((sess.ended_at - sess.started_at).total_seconds() / 60)
+                duration = f", {mins}min"
+            ctx_lines.append(f"\n[{date}{duration}]")
+            ctx_lines.append(sess.ai_summary)
+
+    # Last activity snapshot — compact summary when no AI summaries available
+    last_activity = user.last_activity or {}
+    if last_activity and not recent_sessions:
+        summary = last_activity.get("session_summary", "N/A")
+        ctx_lines.append(f"Last session summary: {summary}")
+        if last_activity.get("topic"):
+            ctx_lines.append(f"Last topic: {last_activity['topic']}")
+        if last_activity.get("struggling_topics"):
+            struggling = last_activity["struggling_topics"]
+            topics_str = ", ".join(
+                f"{s['topic']} ({_score_label(s.get('avg_score'))})" for s in struggling
+            )
+            ctx_lines.append(f"Topics needing practice: {topics_str}")
+
+    if ctx_lines:
+        sections.append("## RECENT CONTEXT\n" + "\n".join(ctx_lines))
+
+    # --- 4. Task instructions ---
     task_template = _PROACTIVE_TASK_INSTRUCTIONS.get(
         session_type,
         _PROACTIVE_TASK_INSTRUCTIONS["proactive_nudge"],
@@ -1554,12 +1705,12 @@ def build_proactive_prompt(
     lang_reminder = f"\n\nIMPORTANT: Write the entire notification message in {native_lang}."
     sections.append(f"## TASK\n{task_text}{lang_reminder}")
 
-    # --- 4. Trigger context ---
+    # --- 5. Trigger context ---
     if safe_data:
         ctx_lines = [f"- {k}: {_sanitize(str(v))}" for k, v in safe_data.items()]
         sections.append("## TRIGGER CONTEXT\n" + "\n".join(ctx_lines))
 
-    # --- 4b. Pre-fetched data sections ---
+    # --- 6. Pre-fetched data sections ---
     pf = prefetch or {}
 
     if pf.get("due_vocabulary"):
@@ -1579,32 +1730,19 @@ def build_proactive_prompt(
 
     if pf.get("progress_summary"):
         ps = pf["progress_summary"]
-        lines = ["## PROGRESS DATA"]
-
-        # Score trends
-        lines.append("### Score Trends")
-        s7 = ps.get("score_7d", {})
-        s30 = ps.get("score_30d", {})
-        if s7.get("count", 0) > 0:
-            lines.append(f"- Last 7 days: {_score_label(s7.get('avg', 0))}, {s7['count']} exercises")
-        else:
-            lines.append("- Last 7 days: no exercises")
-        if s30.get("count", 0) > 0:
-            lines.append(f"- Last 30 days: {_score_label(s30.get('avg', 0))}, {s30['count']} exercises")
-        else:
-            lines.append("- Last 30 days: no exercises")
+        lines = []
 
         # Topic performance
         topic_perf = ps.get("topic_performance", [])
         if topic_perf:
-            lines.append("### Topic Performance")
+            lines.append("### Topic Performance (last 30 days)")
             for tp in topic_perf[:10]:
                 lines.append(
                     f"- {_sanitize(str(tp.get('topic', '?')), 50)}: "
                     f"{_score_label(tp.get('avg_score'))} ({tp.get('exercise_count', 0)} exercises)"
                 )
 
-        # Vocabulary
+        # Vocabulary breakdown
         vocab = ps.get("vocabulary", {})
         total_vocab = sum(vocab.get(k, 0) for k in ("new", "learning", "review", "relearning"))
         lines.append("### Vocabulary")
@@ -1619,15 +1757,19 @@ def build_proactive_prompt(
         lines.append("### Session Activity")
         lines.append(f"- This week: {sw} sessions")
 
-        sections.append("\n".join(lines))
+        if lines:
+            sections.append("## PROGRESS DATA\n" + "\n".join(lines))
 
-    # --- 5. Learning plan context (compact, for proactive_summary) ---
-    if active_plan and plan_progress and session_type == "proactive_summary":
+    # --- 7. Learning plan context (all proactive types) ---
+    if active_plan and plan_progress:
+        current_week = max(1, min(
+            active_plan.total_weeks,
+            (user_local_now(user).date() - active_plan.start_date).days // 7 + 1,
+        ))
         sections.append(
-            "## LEARNING PLAN CONTEXT\n"
+            "## LEARNING PLAN\n"
             f"Active plan: {active_plan.current_level} → {active_plan.target_level}, "
-            f"Week {max(1, min(active_plan.total_weeks, ((user_local_now(user).date() - active_plan.start_date).days // 7 + 1)))}"
-            f"/{active_plan.total_weeks}, "
+            f"Week {current_week}/{active_plan.total_weeks}, "
             f"{plan_progress['progress_pct']}% complete "
             f"({plan_progress['completed_topics']}/{plan_progress['total_topics']} topics)."
         )
@@ -1636,228 +1778,105 @@ def build_proactive_prompt(
 
 
 # ---------------------------------------------------------------------------
-# Session summary prompts
+# Internal AI summary prompts (agent-facing, not shown to user)
 # ---------------------------------------------------------------------------
 
-_SUMMARY_CLOSE_REASON_HINTS: dict[str, str] = {
-    "idle_timeout": (
-        "The session ended because the student stopped responding. "
-        "Be honest about what was accomplished. If very little was done, "
-        "encourage them to continue next time. Do NOT pretend a minimal-effort "
-        "session was a great achievement. Do NOT comment on session duration."
-    ),
-    "explicit_close": (
-        "The student chose to end the session. "
-        "Acknowledge their effort for completing a session."
-    ),
-    "turn_limit": (
-        "The session reached its message limit (length). "
-        "Acknowledge their productivity — they used the full session."
-    ),
-    "cost_limit": (
-        "The session reached its usage limit (cost). "
-        "Acknowledge their productivity — they had an intensive session."
-    ),
-}
 
-
-def build_summary_prompt(
-    native_language: str,
-    target_language: str,
+def build_internal_summary_prompt(
     *,
+    conversation_digest: str,
     session_data: dict,
     close_reason: str,
-    user_name: str,
-    user_streak: int,
+    target_language: str,
     user_level: str,
-    user_timezone: str = "UTC",
     plan_summary: str | None = None,
-    level_progress: str | None = None,
 ) -> str:
-    """Build a focused system prompt for AI session summary generation.
+    """Build a prompt for generating an internal session summary.
 
-    The prompt instructs the agent to produce a brief, warm session summary
-    in the student's native language. Two branches:
-
-    - **Progress case**: summarize exercises, topics, vocabulary, scores.
-    - **No-progress case**: generate an encouraging CTA message.
+    The output is agent-facing metadata stored in ``sessions.ai_summary`` and
+    injected into the next session's system prompt for continuity.  Written in
+    English regardless of the student's native language.
     """
-    native_lang = _get_language_name(native_language)
-    target_lang = _get_language_name(target_language)
-
     sections: list[str] = []
 
     # --- 1. Role ---
     sections.append(
         "## ROLE\n"
-        "You are generating a brief session summary for a language learner."
+        "You are generating an internal teaching session summary. "
+        "This summary will be read by the tutor AI in the next session "
+        "to maintain continuity. It is NOT shown to the student."
     )
 
     # --- 2. Rules ---
-    close_hint = _SUMMARY_CLOSE_REASON_HINTS.get(close_reason, "")
-    rules = (
+    sections.append(
         "## RULES\n"
-        f"1. Write ENTIRELY in {native_lang} (the student's native language).\n"
-        f"2. You may include {target_lang} words only when referencing specific "
-        "vocabulary the student practiced.\n"
-        "3. Use **bold** for key achievements and topic names, *italic* for recommendations "
-        "and encouragement. NEVER use markdown tables.\n"
-        "4. Structure the summary clearly: start with a warm acknowledgment of what was done, "
-        "then mention specific topics/words, then give a recommendation for next time. "
-        "Keep each part concise (3-5 sentences total).\n"
-        "5. Be honest and constructive. Acknowledge what was accomplished. "
-        "If little was done, say so directly and provide specific recommendations. "
-        "Never guilt-trip, but do not pretend minimal effort was a great achievement.\n"
-        "6. Do NOT repeat obvious facts like 'your session has ended'.\n"
-        "7. Write the summary as a direct message to the student — start IMMEDIATELY "
-        "with the content. NEVER begin with ANY header, title, label, or introductory "
-        "phrase. Forbidden patterns include (but are not limited to): "
-        "'Резюме сессии ...', 'Вот краткое резюме ...', 'Вот резюме ...', "
-        "'Summary for ...:', 'Here is a summary ...', or ANY similar preamble in ANY "
-        "language. The very first word must be part of the actual message to the student "
-        "(e.g. start with praise, a greeting, or a comment about their work).\n"
-        "8. If your summary has distinct parts (achievements vs encouragement), "
-        "you may separate them with --- on its own line to send as separate messages.\n"
-        "9. Do NOT comment on session duration or how long the student spent. "
-        "Only mention exercises the student actually completed and scored. "
-        "If an exercise was posed but never answered, you may note it was "
-        "left unanswered — do NOT report its score.\n"
-        "10. NEVER include numeric scores or averages (like '8.2/10' or 'средний балл: 8') "
-        "in the summary. Use qualitative language instead.\n"
-        "11. NEVER ask for more information or clarification. You have ALL the data "
-        "you need in the SESSION DATA section below. Generate the best summary you can "
-        "from the available data. If some details are missing, work with what you have — "
-        "do NOT request additional input."
+        "1. Write ENTIRELY in English regardless of the student's language.\n"
+        "2. Maximum 400 words. Be concise and structured.\n"
+        "3. Use labeled sections (Topics, Performance, Vocabulary, Continuation, "
+        "Recommendations, Observations).\n"
+        "4. Do NOT include numeric scores or averages — use qualitative labels "
+        "(excellent, good, needs work, struggling).\n"
+        "5. Do NOT include pleasantries, greetings, or formatting for human readers.\n"
+        "6. Focus on information useful for the NEXT session's planning."
     )
-    if close_hint:
-        rules += f"\n- Tone: {close_hint}"
-    sections.append(rules)
 
     # --- 3. Session data ---
     exercise_count = session_data.get("exercise_count", 0)
-    vocab_count = session_data.get("vocab_count", 0)
     exercise_scores = session_data.get("exercise_scores", [])
     exercise_topics = session_data.get("exercise_topics", [])
     exercise_types = session_data.get("exercise_types", [])
     words_added = session_data.get("words_added", [])
     words_reviewed = session_data.get("words_reviewed", 0)
-    turn_count = session_data.get("turn_count", 0)
-
-    local_now = datetime.now(timezone.utc).astimezone(safe_zoneinfo(user_timezone))
-    local_hour = local_now.hour
-    time_of_day = (
-        "night" if local_hour < tuning.time_of_day_night_end
-        else "morning" if local_hour < tuning.time_of_day_morning_end
-        else "afternoon" if local_hour < tuning.time_of_day_afternoon_end
-        else "evening"
-    )
+    duration_minutes = session_data.get("duration_minutes", 0)
 
     data_lines = [
-        f"Student: {_sanitize(user_name, tuning.prompt_name_max_len)} (level {user_level}, streak {user_streak} days)",
-        f"Current time: {local_now.strftime('%Y-%m-%d %H:%M')} ({time_of_day}, {local_now.strftime('%A')})",
-        f"Messages exchanged: {turn_count}",
+        f"Target language: {_get_language_name(target_language)}",
+        f"Student level: {user_level}",
+        f"Duration: {duration_minutes} minutes",
+        f"Close reason: {close_reason}",
     ]
     if exercise_count:
-        data_lines.append(
-            f"Exercises scored: {exercise_count} (based on record_exercise_result calls — "
-            "may include exercises the student did not fully complete)"
-        )
-    # Per-exercise results (qualitative labels — no raw numbers)
+        data_lines.append(f"Exercises completed: {exercise_count}")
     if exercise_scores:
-        result_parts: list[str] = []
-        for i, score in enumerate(exercise_scores):
-            topic = exercise_topics[i] if i < len(exercise_topics) else None
-            ex_type = exercise_types[i] if i < len(exercise_types) else None
-            label = _score_label(score)
-            if topic and ex_type:
-                result_parts.append(f"{topic} ({ex_type}): {label}")
-            elif topic:
-                result_parts.append(f"{topic}: {label}")
-            else:
-                result_parts.append(label)
-        data_lines.append(f"Exercise results: {', '.join(result_parts)}")
-    elif exercise_topics:
+        labels = [_score_label(s) for s in exercise_scores]
+        data_lines.append(f"Exercise results: {', '.join(labels)}")
+    if exercise_topics:
         unique_topics = list(dict.fromkeys(exercise_topics))
-        data_lines.append(f"Topics covered: {', '.join(unique_topics)}")
-    if exercise_types and not exercise_scores:
+        data_lines.append(f"Topics: {', '.join(unique_topics)}")
+    if exercise_types:
         unique_types = list(dict.fromkeys(exercise_types))
         data_lines.append(f"Exercise types: {', '.join(unique_types)}")
-    if vocab_count:
-        data_lines.append(f"New vocabulary added: {vocab_count} word(s)")
     if words_added:
-        data_lines.append(f"Words learned: {', '.join(words_added)}")
+        data_lines.append(f"New vocabulary: {', '.join(words_added)}")
     if words_reviewed:
-        data_lines.append(f"Vocabulary words reviewed via exercises: {words_reviewed}")
+        data_lines.append(f"Words reviewed via exercises: {words_reviewed}")
     if plan_summary:
         data_lines.append(f"Learning plan: {plan_summary}")
-    if level_progress:
-        data_lines.append(f"Level progress: {level_progress}")
 
     sections.append("## SESSION DATA\n" + "\n".join(data_lines))
 
-    # --- 4. Task ---
-    has_progress = bool(exercise_count or vocab_count or words_reviewed)
-    is_minimal_progress = (
-        has_progress
-        and exercise_count <= 1
-        and vocab_count <= 1
-        and words_reviewed <= 1
-        and close_reason == "idle_timeout"
+    # --- 4. Conversation transcript ---
+    if conversation_digest:
+        sections.append(f"## CONVERSATION TRANSCRIPT\n{conversation_digest}")
+
+    # --- 5. Task ---
+    sections.append(
+        "## TASK\n"
+        "Summarize this session under these headings:\n\n"
+        "**Topics**: What was covered — grammar points, themes, plan topics.\n\n"
+        "**Performance**: Exercise patterns — what was strong, what was weak, "
+        "any notable struggles or breakthroughs.\n\n"
+        "**Vocabulary**: Words taught and how well they were retained. "
+        "Note any words the student confused or struggled with.\n\n"
+        "**Continuation**: What was in progress when the session ended — "
+        "unfinished exercises, pending topics, mid-explanation content. "
+        "Note any exercises that were posed but not answered.\n\n"
+        "**Recommendations**: What the next session should prioritize — "
+        "topics to revisit, areas needing more practice, suggested exercises.\n\n"
+        "**Observations**: Any user preferences, behavioral patterns, or "
+        "context discovered during this session (e.g. 'student prefers shorter "
+        "exercises', 'gets frustrated with conjugation drills', 'mentioned "
+        "upcoming trip to Lyon')."
     )
-
-    no_header_reminder = (
-        "Remember: do NOT start with any header or introductory phrase — "
-        "jump straight into the message content."
-    )
-
-    plan_hint = (
-        "If a learning plan is active, briefly mention how this session "
-        "contributed to plan progress (e.g. which plan topics were covered). "
-    ) if plan_summary else ""
-
-    level_hint = (
-        "If plan progress info is provided, briefly mention how this session "
-        "contributed to the student's journey toward their next level (without numeric scores). "
-    ) if level_progress else ""
-
-    if has_progress and not is_minimal_progress:
-        task = (
-            "Summarize the student's session using this structure:\n"
-            "1. Open with a warm, personal sentence acknowledging their effort "
-            "(reference specific topics or exercise types they worked on).\n"
-            "2. Highlight what went well — mention **specific words** they learned "
-            "or topics where they showed strength. Use bold for key items.\n"
-            "3. If there are areas to improve, mention them constructively "
-            "(e.g. 'next time, try focusing on...').\n"
-            + plan_hint
-            + level_hint
-            + "4. End with a *specific, actionable recommendation* for the next session "
-            "(use italics for emphasis).\n"
-            "Do NOT use bullet points or numbered lists in the output — write flowing sentences. "
-            "The structure above is for your planning only. "
-            "Do NOT include numeric scores or averages. "
-            + no_header_reminder
-        )
-    elif is_minimal_progress:
-        task = (
-            "The student barely engaged in this session — they completed very "
-            "little work before the session ended. Be honest: acknowledge what "
-            "they did (if anything) and provide a specific, actionable recommendation — "
-            "suggest a concrete exercise type or topic for next time. "
-            "Encourage them to aim for at least 3-4 exercises per session "
-            "to build momentum. Keep it constructive (2-3 sentences). "
-            + no_header_reminder
-        )
-    else:
-        task = (
-            "The student chatted but didn't complete any exercises or vocabulary work. "
-            "Be direct: note that they didn't practice and suggest a specific activity "
-            "to try next time (an exercise type, vocabulary review via /words, or a "
-            "focused study topic). Keep it brief and actionable (2-3 sentences). "
-            + no_header_reminder
-        )
-
-    lang_reminder = f"\n\nIMPORTANT: Write the entire summary in {native_lang}."
-    sections.append(f"## TASK\n{task}{lang_reminder}")
 
     return "\n\n".join(sections)

@@ -14,7 +14,7 @@ Try the live bot: [@personal_lang_study_bot](https://t.me/personal_lang_study_bo
 - **Vocabulary tracking** — words are stored per-user with FSRS spaced repetition. The bot schedules reviews at optimal intervals.
 - **Web search-powered discussions** — the agent can search the web (via Tavily) for news, articles, and cultural content in the target language. Users can ask for news-based lessons, current event discussions, or topic exploration. Available in both interactive sessions and proactive notifications.
 - **Proactive notifications** — 11 event triggers including streak-at-risk alerts, vocabulary review reminders, weekly progress summaries, and re-engagement nudges. Notifications can include web-searched content relevant to the user's interests. The bot remembers what it sent — when a user replies to a notification, the session automatically continues from that context. Users control schedules via natural language or `/settings`.
-- **Auto session management** — sessions end automatically when the lesson reaches a natural conclusion. The agent calls an `end_session` tool, delivers a farewell, and the user receives a formatted summary with achievements and recommendations.
+- **Auto session management** — sessions end automatically when the lesson reaches a natural conclusion. The agent calls an `end_session` tool, delivers a farewell, and the user receives a formatted summary with achievements and recommendations. An internal AI summary is generated in the background and injected into the next session's system prompt for continuity.
 - **Two-tier system** — Free (Haiku 4.5) and Premium (Sonnet 4.6) with different limits. No billing — admin grants premium via the Gradio panel.
 - **17 target languages** — English, French, Spanish, Italian, German, Portuguese, Russian, Chinese, Japanese, Korean, Arabic, Turkish, Dutch, Polish, Swedish, Ukrainian, Hindi. Users can learn any of these.
 - **7 UI languages** — English, Russian, Spanish, French, German, Portuguese, Italian. All bot UI, notifications, and session messages are rendered in the user's native language via an i18n system with JSON locale files.
@@ -112,7 +112,7 @@ All configuration is via environment variables (loaded by `pydantic-settings` fr
 |-----------|------|---------|
 | Model | claude-haiku-4-5 | claude-sonnet-4-6 |
 | Max turns/session | 20 | 35 |
-| Max sessions/day | 5 | 15 |
+| Max sessions/day | 3 | 5 |
 | Session idle timeout | 6 min | 10 min |
 | Thinking mode | adaptive | adaptive |
 | Effort | low | low |
@@ -163,7 +163,7 @@ Any other text message starts or continues an interactive study session with the
 │ Agent Session (per user)                                       │
 │   ClaudeSDKClient ──────────────────> Anthropic API            │
 │    ├── System Prompt (15 sections)     (Haiku / Sonnet)        │
-│    ├── MCP Server (7-13 tools) ──────> PostgreSQL              │
+│    ├── MCP Server (8-14 tools) ──────> PostgreSQL              │
 │    └── Hooks (PostToolUse, UserPromptSubmit, Stop)             │
 │              │ on close                                        │
 │              ▼                                                 │
@@ -231,9 +231,10 @@ src/adaptive_lang_study_bot/
 ### Key design decisions
 
 - **Per-session closures** — each agent session creates its own tool and hook functions. Tools capture a session factory and user ID (each tool call gets its own short-lived DB session). This ensures complete data isolation between concurrent users.
-- **Long-lived sessions** — each user gets one `ClaudeSDKClient` that persists across messages until closed (by turn/cost limit, idle timeout, agent-initiated `end_session`, or `/end`). A new session builds a fresh system prompt from the user's current DB profile snapshot.
+- **Long-lived sessions** — each user gets one `ClaudeSDKClient` that persists across messages until closed (by turn/cost limit, idle timeout, agent-initiated `end_session`, or `/end`). A new session builds a fresh system prompt from the user's current DB profile snapshot. A 120-second cooldown prevents new sessions immediately after close (skipped for onboarding).
+- **Session continuity via AI summaries** — after each session, a background LLM call generates a structured internal summary (topics, performance, vocabulary, continuation points). These summaries are stored in the `sessions.ai_summary` column and injected into the next session's system prompt, giving the agent rich context about recent sessions without duplicating raw exercise data.
 - **Hybrid personalization** — the system prompt carries the user profile snapshot (read-only context), while MCP tools handle all DB writes (exercises, vocabulary, preferences). Session style (structured/intensive/casual) modulates prompt generation across multiple sections: session flow, exercise preferences, plan construction guidelines, and minimum coverage rules.
-- **Learning plans** — structured multi-week plans (2-8 weeks) with phases, focus topics, and vocabulary targets. Progress is derived on-the-fly from exercise results (`compute_plan_progress`) — no stored per-topic state. The agent adapts plans when the student is ahead or behind schedule. Level progression is plan-anchored: the agent assesses readiness and calls `adjust_level` after plan completion, rather than automatic score thresholds. When all topics are completed but the user hasn't reached the target CEFR level, a consolidation phase is auto-added targeting the weakest topics at a higher mastery bar.
+- **Learning plans** — structured multi-week plans (2-8 weeks) with phases, focus topics, and vocabulary targets. Progress is derived on-the-fly from exercise results (`compute_plan_progress`) — no stored per-topic state. The agent adapts plans when the student is ahead or behind schedule. Level progression is plan-anchored: the agent assesses readiness and calls `adjust_level` after plan completion, rather than automatic score thresholds. When all topics are completed but the user hasn't reached the target CEFR level, a consolidation phase is auto-added targeting the weakest topics at a higher mastery bar. Mastery plans (where current and target levels are the same) auto-complete and delete at 100%.
 - **Three-tier notifications** — template ($0 cost, random variant from locale files), LLM (short-lived proactive session with optional web search generates personalized message), or hybrid (try LLM, fall back to template). Free users get 2 LLM notifications/day, premium get 8. A post-session cooldown prevents notifications from firing immediately after a session ends.
 - **Notification reply context** — when a user replies to a proactive notification, the system prompt includes the notification text as context, so the agent naturally continues from that topic rather than starting fresh.
 - **Re-engagement triggers** — escalating nudge system for post-onboarding (24h → 3d → 7d → 14d), lapsed users (gentle → compelling → miss-you), and dormant users (weekly nudges for 21-45 days inactive), with automatic stop after final attempt.
@@ -263,6 +264,7 @@ Used for locking, rate limiting, and deduplication:
 | Key pattern | TTL | Purpose |
 |-------------|-----|---------|
 | `session:active:{id}` | 7-12 min | Track active sessions, enforce one-per-user |
+| `session:cooldown:{id}` | 120s | Post-session cooldown before new session (skipped for onboarding) |
 | `ratelimit:user:{id}:*` | 60s | Per-user rate limiting |
 | `notif:dedup:{user_id}:{type}:{date}` | 24h | Prevent duplicate notifications |
 | `notif:llm_count:{user_id}:{date}` | 24h | Track daily LLM notification count per user |

@@ -59,6 +59,13 @@ def t(key: str, lang: str, **kwargs: object) -> str:
     if isinstance(value, list):
         if not value:
             return key
+        # Fast path: try a single random pick (succeeds in the common case)
+        pick = random.choice(value)
+        try:
+            return pick.format(**kwargs)
+        except KeyError:
+            pass
+        # Slow path: some variants need kwargs we don't have — try all
         shuffled = random.sample(value, len(value))
         for variant in shuffled:
             try:

@@ -1,3 +1,4 @@
+import asyncio
 import time
 import uuid
 from datetime import datetime, timezone
@@ -377,12 +378,16 @@ async def run_post_session(
             new_celebrations = [m for m in pending if m not in old_pending]
 
             if bot is not None and new_celebrations:
-                sent_celebrations: list[str] = []
-                for celebration_msg in new_celebrations:
-                    try:
-                        await bot.send_message(user_id, celebration_msg)
-                        sent_celebrations.append(celebration_msg)
-                    except Exception:
+                results = await asyncio.gather(
+                    *(bot.send_message(user_id, msg) for msg in new_celebrations),
+                    return_exceptions=True,
+                )
+                sent_celebrations = [
+                    msg for msg, result in zip(new_celebrations, results)
+                    if not isinstance(result, BaseException)
+                ]
+                for msg, result in zip(new_celebrations, results):
+                    if isinstance(result, BaseException):
                         logger.debug("Could not send immediate celebration to user {}", user_id)
 
                 # Only remove celebrations that were actually delivered.

@@ -30,8 +30,8 @@ from adaptive_lang_study_bot.agent.hooks import (
 )
 from adaptive_lang_study_bot.agent.pool import session_pool
 from adaptive_lang_study_bot.agent.prompt_builder import (
+    build_internal_summary_prompt,
     build_proactive_prompt,
-    build_summary_prompt,
     build_system_prompt,
     compute_session_context,
 )
@@ -43,7 +43,7 @@ from adaptive_lang_study_bot.agent.tools import (
     web_search_available,
 )
 from adaptive_lang_study_bot.cache.client import get_redis
-from adaptive_lang_study_bot.cache.keys import NOTIF_COOLDOWN_KEY, NOTIF_COOLDOWN_TTL
+from adaptive_lang_study_bot.cache.keys import NOTIF_COOLDOWN_KEY, NOTIF_COOLDOWN_TTL, SESSION_COOLDOWN_KEY
 from adaptive_lang_study_bot.cache.session_lock import (
     acquire_session_lock,
     refresh_session_lock,
@@ -79,7 +79,7 @@ from adaptive_lang_study_bot.metrics import (
     SESSIONS_CREATED,
 )
 from adaptive_lang_study_bot.pipeline.post_session import run_post_session
-from adaptive_lang_study_bot.utils import strip_mcp_prefix
+from adaptive_lang_study_bot.utils import strip_mcp_prefix, user_local_now
 
 # Remove CLAUDECODE env var once at import time so nested SDK subprocesses
 # can start (instead of popping it on every session creation).
@@ -193,7 +193,25 @@ async def run_proactive_llm_session(
         plan_progress = None
         prefetch: dict = {}
 
+        recent_sessions: list = []
+
         async with async_session_factory() as db:
+            # Fetch recent AI summaries for all proactive types — gives context
+            recent_sessions = await SessionRepo.get_recent_with_summaries(
+                db, user_id, limit=tuning.session_history_in_prompt_count,
+            )
+
+            # Fetch learning plan for all proactive types
+            active_plan = await LearningPlanRepo.get_active(db, user_id)
+            if active_plan:
+                topic_stats = await fetch_plan_topic_stats(db, user_id, active_plan)
+                plan_progress = compute_plan_progress(
+                    active_plan.plan_data or {},
+                    active_plan.total_weeks,
+                    active_plan.start_date,
+                    topic_stats,
+                )
+
             if session_type == SessionType.PROACTIVE_REVIEW:
                 cards = await VocabularyRepo.get_due(db, user_id, limit=10)
                 prefetch["due_vocabulary"] = [
@@ -202,16 +220,6 @@ async def run_proactive_llm_session(
                     for c in cards
                 ]
             elif session_type == SessionType.PROACTIVE_SUMMARY:
-                active_plan = await LearningPlanRepo.get_active(db, user_id)
-                if active_plan:
-                    topic_stats = await fetch_plan_topic_stats(db, user_id, active_plan)
-                    plan_progress = compute_plan_progress(
-                        active_plan.plan_data or {},
-                        active_plan.total_weeks,
-                        active_plan.start_date,
-                        topic_stats,
-                    )
-
                 score_7d = await ExerciseResultRepo.get_score_summary(db, user_id, days=7)
                 score_30d = await ExerciseResultRepo.get_score_summary(db, user_id, days=30)
                 topic_perf = await ExerciseResultRepo.get_topic_stats(db, user_id, days=30)
@@ -237,6 +245,7 @@ async def run_proactive_llm_session(
             active_plan=active_plan, plan_progress=plan_progress,
             prefetch=prefetch,
             has_web_search=has_web,
+            recent_sessions=recent_sessions,
         )
 
         # 5. Create DB session record
@@ -351,18 +360,20 @@ async def run_proactive_llm_session(
             logger.warning("Failed to update proactive session record for user {}", user_id)
 
     tier = UserTier(user.tier)
-    SESSIONS_CREATED.labels(tier=tier.value, session_type=session_type).inc()
+    if sdk_started:
+        SESSIONS_CREATED.labels(tier=tier.value, session_type=session_type).inc()
     if accumulated_cost > 0:
         SESSION_COST_USD.labels(tier=tier.value, session_type=session_type).observe(accumulated_cost)
 
     # Extract message from LLM text output
     message_text = "\n".join(text_parts).strip() or None
 
-    # Convert any Markdown in LLM output to Telegram HTML, enforce length limit
+    # Enforce length limit on raw text BEFORE HTML conversion to avoid
+    # slicing mid-tag (e.g. "<b>tex..." which causes Telegram parse errors).
     if message_text:
-        message_text = markdown_to_telegram_html(message_text)
         if len(message_text) > tuning.notification_max_length:
             message_text = message_text[:tuning.notification_max_length - 3] + "..."
+        message_text = markdown_to_telegram_html(message_text)
 
     if message_text is None:
         logger.warning(
@@ -378,53 +389,46 @@ async def run_proactive_llm_session(
     return message_text, accumulated_cost
 
 
-async def run_summary_llm_session(
-    native_language: str,
-    target_language: str,
+async def run_internal_summary_session(
+    *,
+    conversation_digest: str,
     session_data: dict,
     close_reason: str,
-    user_name: str,
-    user_streak: int,
+    target_language: str,
     user_level: str,
-    user_timezone: str = "UTC",
     plan_summary: str | None = None,
-    level_progress: str | None = None,
 ) -> tuple[str | None, float]:
-    """Run a short-lived LLM session to generate an AI session summary.
+    """Run a background LLM session to generate an internal AI summary.
 
-    Returns ``(summary_text, cost_usd)``.  *summary_text* is ``None`` when
-    the session fails or the agent returns nothing.
+    The summary is agent-facing metadata (English, structured) stored in
+    ``sessions.ai_summary`` and injected into the next session's system prompt
+    for continuity.  NOT shown to the student.
 
-    Tool-less, no DB writes, no Redis lock. Uses a proactive pool slot.
+    Returns ``(summary_text, cost_usd)``.
     """
     accumulated_cost = 0.0
     client: ClaudeSDKClient | None = None
     sdk_started = False
 
-    # Acquire proactive pool slot (non-blocking)
     acquired = await session_pool.acquire_proactive()
     if not acquired:
-        logger.debug("No proactive pool slots for summary generation")
+        logger.debug("No proactive pool slots for internal summary generation")
         return None, 0.0
 
     try:
-        system_prompt = build_summary_prompt(
-            native_language,
-            target_language,
+        system_prompt = build_internal_summary_prompt(
+            conversation_digest=conversation_digest,
             session_data=session_data,
             close_reason=close_reason,
-            user_name=user_name,
-            user_streak=user_streak,
+            target_language=target_language,
             user_level=user_level,
-            user_timezone=user_timezone,
             plan_summary=plan_summary,
-            level_progress=level_progress,
         )
 
         options = ClaudeAgentOptions(
             model=tuning.proactive_model,
-            max_turns=tuning.summary_max_turns,
-            thinking={"type": tuning.summary_thinking},
+            max_turns=tuning.internal_summary_max_turns,
+            thinking={"type": "disabled"},
             effort=tuning.summary_effort,
             permission_mode="bypassPermissions",
             system_prompt=system_prompt,
@@ -432,11 +436,11 @@ async def run_summary_llm_session(
         client = ClaudeSDKClient(options)
 
         text_parts: list[str] = []
-        async with asyncio.timeout(tuning.summary_session_timeout_seconds):
+        async with asyncio.timeout(tuning.internal_summary_timeout_seconds):
             await client.__aenter__()
             sdk_started = True
             await client.query(
-                "Generate the session summary now using ONLY the session data "
+                "Generate the internal session summary now using ONLY the data "
                 "provided above. Do NOT ask for additional information."
             )
             async for msg in client.receive_response():
@@ -449,26 +453,28 @@ async def run_summary_llm_session(
 
         summary_text = "\n".join(text_parts).strip() or None
         if summary_text:
+            # Enforce char limit
+            summary_text = summary_text[:tuning.internal_summary_max_chars]
             logger.info(
-                "AI session summary generated (cost=${:.4f})",
-                accumulated_cost,
+                "Internal AI summary generated (cost=${:.4f}, len={})",
+                accumulated_cost, len(summary_text),
             )
         return summary_text, accumulated_cost
 
     except TimeoutError:
-        logger.warning("Summary LLM session timed out")
+        logger.warning("Internal summary LLM session timed out")
         return None, accumulated_cost
     except Exception:
-        logger.warning("Summary LLM session failed", exc_info=True)
+        logger.warning("Internal summary LLM session failed", exc_info=True)
         return None, accumulated_cost
     finally:
         if client is not None and sdk_started:
-            await _close_standalone_sdk_client(client, "Summary")
+            await _close_standalone_sdk_client(client, "InternalSummary")
 
         try:
             await session_pool.release_proactive()
         except Exception:
-            logger.warning("Failed to release proactive pool slot for summary")
+            logger.warning("Failed to release proactive pool slot for internal summary")
 
 
 def _collect_session_data(managed: "ManagedSession") -> dict:
@@ -498,6 +504,73 @@ def _collect_session_data(managed: "ManagedSession") -> dict:
     }
 
 
+def _build_conversation_digest(log: list[dict]) -> str:
+    """Build a compact text transcript from :pyattr:`ManagedSession.conversation_log`.
+
+    Individual entries are capped at ``tuning.digest_entry_max_chars`` and the total
+    digest at ``tuning.digest_max_chars`` to prevent oversized prompts when users
+    paste long texts or the agent generates lengthy exercise sets.
+    """
+    _ROLE_PREFIX = {"user": "[User]", "assistant": "[Tutor]", "tool_call": "[Tool]"}
+
+    lines: list[str] = []
+    total = 0
+    for entry in log:
+        prefix = _ROLE_PREFIX.get(entry.get("role", ""), "[?]")
+        text = entry.get("text", "")
+        if len(text) > tuning.digest_entry_max_chars:
+            text = text[:tuning.digest_entry_max_chars] + "...[truncated]"
+        line = f"{prefix}: {text}"
+        if total + len(line) > tuning.digest_max_chars:
+            lines.append("[...transcript truncated]")
+            break
+        lines.append(line)
+        total += len(line) + 1  # +1 for newline
+
+    return "\n".join(lines)
+
+
+async def _generate_and_store_internal_summary(
+    session_id: uuid.UUID,
+    conversation_digest: str,
+    session_data: dict,
+    close_reason: str,
+    target_language: str,
+    user_level: str,
+    plan_summary: str | None = None,
+) -> None:
+    """Background task: generate an internal AI summary and store it on the session.
+
+    Safe for fire-and-forget via ``asyncio.create_task`` — all exceptions are
+    caught internally.
+    """
+    try:
+        text, cost = await run_internal_summary_session(
+            conversation_digest=conversation_digest,
+            session_data=session_data,
+            close_reason=close_reason,
+            target_language=target_language,
+            user_level=user_level,
+            plan_summary=plan_summary,
+        )
+        if text:
+            async with async_session_factory() as db:
+                await SessionRepo.set_ai_summary(db, session_id, text)
+                if cost > 0:
+                    # Add internal summary cost to the session record
+                    await db.execute(
+                        update(Session)
+                        .where(Session.id == session_id)
+                        .values(cost_usd=Session.cost_usd + cost)
+                    )
+                await db.commit()
+    except Exception:
+        logger.warning(
+            "Failed to generate/store internal summary for session {}",
+            session_id, exc_info=True,
+        )
+
+
 def _build_summary_cta_keyboard(
     lang: str,
     *,
@@ -521,15 +594,6 @@ def _build_summary_cta_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-# Close reasons that should use AI-generated summaries.
-_AI_SUMMARY_REASONS = frozenset({
-    CloseReason.TURN_LIMIT,
-    CloseReason.COST_LIMIT,
-    CloseReason.IDLE_TIMEOUT,
-    CloseReason.EXPLICIT_CLOSE,
-})
-
-
 async def _generate_and_send_summary(
     bot: Bot,
     user_id: int,
@@ -537,13 +601,13 @@ async def _generate_and_send_summary(
     session_data: dict,
     close_reason: str,
     managed: "ManagedSession",
-    user_name: str,
-    user_streak: int,
-    user_level: str,
-    target_language: str,
     skip_if_active_fn: "Callable[[], bool] | None" = None,
 ) -> None:
-    """Generate AI summary and send to user. Falls back to enriched template.
+    """Generate template summary and send to user.
+
+    Uses template-only (no LLM) for instant, reliable delivery.
+    The detailed AI summary is generated separately via
+    :func:`_generate_and_store_internal_summary` and stored for the next session.
 
     When *skip_if_active_fn* is provided and returns ``True`` right before
     sending, the summary is silently dropped.  This prevents stale summaries
@@ -559,54 +623,7 @@ async def _generate_and_send_summary(
             or session_data.get("words_reviewed", 0)
         )
 
-        # Fetch plan context and level progress for the summary (best-effort)
-        plan_summary: str | None = None
-        level_progress: str | None = None
-        try:
-            async with async_session_factory() as db:
-                active_plan = await LearningPlanRepo.get_active(db, user_id)
-                if active_plan:
-                    topic_stats = await fetch_plan_topic_stats(db, user_id, active_plan)
-                    progress = compute_plan_progress(
-                        active_plan.plan_data or {},
-                        active_plan.total_weeks,
-                        active_plan.start_date,
-                        topic_stats,
-                    )
-                    plan_summary = (
-                        f"{active_plan.current_level}\u2192{active_plan.target_level}, "
-                        f"Week {progress.get('current_week', '?')}/{active_plan.total_weeks}, "
-                        f"{progress.get('progress_pct', 0)}% complete "
-                        f"({progress.get('completed_topics', 0)}/{progress.get('total_topics', 0)} topics)"
-                    )
-                    level_progress = (
-                        f"on track toward {active_plan.target_level} "
-                        f"({progress.get('progress_pct', 0)}% plan complete)"
-                    )
-                else:
-                    level_progress = "no active plan \u2014 level progression requires a learning plan"
-        except Exception:
-            logger.debug("Failed to fetch plan context for summary (user={})", user_id)
-
-        # Try AI summary
-        summary_text: str | None = None
-        if close_reason in _AI_SUMMARY_REASONS:
-            summary_text, _cost = await run_summary_llm_session(
-                native_language=lang,
-                target_language=target_language,
-                session_data=session_data,
-                close_reason=close_reason,
-                user_name=user_name,
-                user_streak=user_streak,
-                user_level=user_level,
-                user_timezone=managed.user_timezone,
-                plan_summary=plan_summary,
-                level_progress=level_progress,
-            )
-
-        # Fallback to enriched template
-        if summary_text is None:
-            summary_text = _build_template_summary(managed, session_data)
+        summary_text = _build_template_summary(managed, session_data)
 
         # If the user has already started a new session, drop the stale summary.
         if skip_if_active_fn is not None and skip_if_active_fn():
@@ -733,6 +750,8 @@ class ManagedSession:
     idle_warned: bool = False   # One-shot: idle timeout approaching
     last_message_debug: dict[str, object] | None = None
     exit_stack: AsyncExitStack = field(default_factory=AsyncExitStack)
+    conversation_log: list[dict] = field(default_factory=list)  # For internal AI summary
+    plan_summary: str | None = None  # Compact plan context for internal AI summary
 
 
 async def _force_close_sdk_client(client: ClaudeSDKClient) -> None:
@@ -949,23 +968,46 @@ class SessionManager:
 
             if close_reason is not None:
                 session_data = _collect_session_data(managed)
+                conversation_digest = _build_conversation_digest(managed.conversation_log)
+                db_session_id = managed.db_session_id
                 await self._close_session(user_id, reason=close_reason)
+                # Notify the user that their last message wasn't processed
                 if self._bot:
+                    try:
+                        await self._bot.send_message(
+                            user_id, t("session.message_not_processed", lang),
+                        )
+                    except Exception:
+                        logger.debug("Failed to send message-not-processed notice to user {}", user_id)
                     summary_task = asyncio.create_task(
                         _generate_and_send_summary(
                             self._bot, user_id, lang, session_data,
                             close_reason, managed,
-                            managed.first_name, managed.user_streak,
-                            managed.user_level, managed.target_language,
                         )
                     )
                     try:
                         await asyncio.wait_for(asyncio.shield(summary_task), timeout=20.0)
                     except (asyncio.TimeoutError, Exception):
                         summary_task.add_done_callback(_log_task_exception)
+                # Launch internal AI summary in background
+                self._dispatch_internal_summary(
+                    db_session_id, conversation_digest, session_data,
+                    close_reason, managed.target_language, managed.user_level,
+                    plan_summary=managed.plan_summary,
+                )
                 return None  # Summary with CTA sent; caller should not respond
 
         if need_new_session:
+            # Check post-session cooldown (gives internal summary time to complete)
+            try:
+                redis = await get_redis()
+                cooldown_ttl = await redis.ttl(SESSION_COOLDOWN_KEY.format(user_id=user_id))
+                if cooldown_ttl and cooldown_ttl > 0:
+                    minutes = max(1, round(cooldown_ttl / 60))
+                    return [t("session.cooldown", lang, minutes=minutes)]
+            except Exception:
+                pass  # If Redis is unavailable, skip cooldown check
+
             limit_error = await self._check_daily_limits(
                 user_id, user.timezone or "UTC", lang, tier, limits,
             )
@@ -981,6 +1023,7 @@ class SessionManager:
         # the cleanup loop could have closed it while we waited.
         # If the session was replaced, create a new one and retry so we always
         # hold the CORRECT session's lock during processing (not the old one).
+        tools_before_count = len(managed.tools_called)
         max_retries = 3
         for _attempt in range(max_retries):
             async with managed.lock:
@@ -991,23 +1034,30 @@ class SessionManager:
             managed = await self._create_session(user, tier)
             if managed is None:
                 return [t("session.busy", lang)]
+            tools_before_count = 0  # fresh session, no prior tools
         else:
             return [t("session.busy", lang)]
 
-        # Check if agent requested session end via end_session tool
-        if any(strip_mcp_prefix(tc) == "end_session" for tc in managed.tools_called):
+        # Check if agent requested session end via end_session tool in THIS message
+        new_tools = managed.tools_called[tools_before_count:]
+        if any(strip_mcp_prefix(tc) == "end_session" for tc in new_tools):
             session_data = _collect_session_data(managed)
+            conversation_digest = _build_conversation_digest(managed.conversation_log)
+            db_session_id = managed.db_session_id
             await self._close_session(user_id, reason=CloseReason.EXPLICIT_CLOSE)
             if self._bot:
                 task = asyncio.create_task(
                     _generate_and_send_summary(
                         self._bot, user_id, lang, session_data,
                         CloseReason.EXPLICIT_CLOSE, managed,
-                        managed.first_name, managed.user_streak,
-                        managed.user_level, managed.target_language,
                     )
                 )
                 task.add_done_callback(_log_task_exception)
+            self._dispatch_internal_summary(
+                db_session_id, conversation_digest, session_data,
+                CloseReason.EXPLICIT_CLOSE, managed.target_language, managed.user_level,
+                plan_summary=managed.plan_summary,
+            )
             return response_chunks
 
         self._inject_limit_warnings(managed, limits, lang, response_chunks)
@@ -1044,14 +1094,13 @@ class SessionManager:
             # last_session_at concurrently.
             async with async_session_factory() as db:
                 fresh_user = await UserRepo.get(db, user_id)
-            if fresh_user is not None:
-                user = fresh_user
+                if fresh_user is not None:
+                    user = fresh_user
 
-            session_type = SessionType.ONBOARDING if not user.onboarding_completed else SessionType.INTERACTIVE
+                session_type = SessionType.ONBOARDING if not user.onboarding_completed else SessionType.INTERACTIVE
 
-            # Compute session context and system prompt
-            session_ctx = compute_session_context(user)
-            async with async_session_factory() as db:
+                # Compute session context and system prompt
+                session_ctx = compute_session_context(user)
                 due_count = await VocabularyRepo.count_due(db, user_id)
                 if user.sessions_completed > 0:
                     stale_topics, topic_performance = await _compute_stale_topics(db, user_id)
@@ -1070,6 +1119,11 @@ class SessionManager:
                         active_plan.start_date,
                         topic_stats,
                     )
+
+                # Fetch recent sessions with AI summaries for prompt context
+                recent_summaries = await SessionRepo.get_recent_with_summaries(
+                    db, user_id, limit=tuning.session_history_in_prompt_count,
+                )
 
                 # Clear consumed celebrations so they aren't shown again
                 needs_commit = False
@@ -1107,6 +1161,7 @@ class SessionManager:
                 active_plan=active_plan,
                 plan_progress=plan_progress,
                 has_web_search=web_search_available() and tier == UserTier.PREMIUM,
+                recent_sessions=recent_summaries,
             )
 
             # Create DB session record
@@ -1172,6 +1227,16 @@ class SessionManager:
             client = ClaudeSDKClient(options)
             await exit_stack.enter_async_context(client)
 
+            # Build compact plan summary for internal AI summary context
+            _plan_summary: str | None = None
+            if active_plan and plan_progress:
+                _plan_summary = (
+                    f"{active_plan.current_level} → {active_plan.target_level}, "
+                    f"week {max(1, min(active_plan.total_weeks, ((user_local_now(user).date() - active_plan.start_date).days // 7 + 1)))}"
+                    f"/{active_plan.total_weeks}, "
+                    f"{plan_progress['progress_pct']}% complete"
+                )
+
             managed = ManagedSession(
                 client=client,
                 user_id=user_id,
@@ -1188,6 +1253,7 @@ class SessionManager:
                 session_type=session_type,
                 lock_token=lock_token,
                 exit_stack=exit_stack,
+                plan_summary=_plan_summary,
             )
 
             # Inform hooks about limits for wrap-up injection
@@ -1240,6 +1306,9 @@ class SessionManager:
             if managed.hook_state is not None:
                 managed.hook_state.accumulated_cost = managed.accumulated_cost
 
+            # Capture user message for internal summary digest
+            managed.conversation_log.append({"role": "user", "text": text})
+
             await managed.client.query(text)
 
             async for msg in managed.client.receive_response():
@@ -1247,8 +1316,14 @@ class SessionManager:
                     for block in msg.content:
                         if isinstance(block, TextBlock):
                             response_chunks.append(block.text)
+                            managed.conversation_log.append(
+                                {"role": "assistant", "text": block.text},
+                            )
                         elif isinstance(block, ToolUseBlock):
                             managed.tools_called.append(block.name)
+                            managed.conversation_log.append(
+                                {"role": "tool_call", "text": strip_mcp_prefix(block.name)},
+                            )
                 elif isinstance(msg, ResultMessage):
                     managed.accumulated_cost += msg.total_cost_usd or 0
                     managed.turn_count = (
@@ -1315,6 +1390,32 @@ class SessionManager:
 
         return response_chunks
 
+    def _dispatch_internal_summary(
+        self,
+        session_id: uuid.UUID,
+        conversation_digest: str,
+        session_data: dict,
+        close_reason: str,
+        target_language: str,
+        user_level: str,
+        plan_summary: str | None = None,
+    ) -> None:
+        """Fire-and-forget background task for internal AI summary generation."""
+        if not conversation_digest:
+            return
+        task = asyncio.create_task(
+            _generate_and_store_internal_summary(
+                session_id=session_id,
+                conversation_digest=conversation_digest,
+                session_data=session_data,
+                close_reason=close_reason,
+                target_language=target_language,
+                user_level=user_level,
+                plan_summary=plan_summary,
+            )
+        )
+        task.add_done_callback(_log_task_exception)
+
     async def _close_session(self, user_id: int, *, reason: str = CloseReason.UNKNOWN) -> None:
         """Close a session: remove from dict and release all resources."""
         managed = self._sessions.pop(user_id, None)
@@ -1365,8 +1466,18 @@ class SessionManager:
                 "session_end",
                 ex=NOTIF_COOLDOWN_TTL,
             )
+            # Set session cooldown — gives background AI summary time to complete
+            # before the user can start a new session.  Skip for onboarding
+            # sessions: they're typically short and the cooldown is unnecessarily
+            # punitive for first-time users.
+            if managed.session_type != SessionType.ONBOARDING:
+                await redis.set(
+                    SESSION_COOLDOWN_KEY.format(user_id=user_id),
+                    "1",
+                    ex=tuning.session_cooldown_seconds,
+                )
         except Exception:
-            logger.debug("Failed to set post-session notification cooldown for user {}", user_id)
+            logger.debug("Failed to set post-session cooldowns for user {}", user_id)
 
         # Update session record in DB
         try:
@@ -1475,18 +1586,24 @@ class SessionManager:
 
                 for user_id, managed in to_close:
                     # Collect session data before releasing resources (data survives SDK close)
-                    if self._bot and not managed.is_proactive:
+                    if not managed.is_proactive:
                         session_data = _collect_session_data(managed)
-                        task = asyncio.create_task(
-                            _generate_and_send_summary(
-                                self._bot, user_id, managed.native_language,
-                                session_data, CloseReason.IDLE_TIMEOUT, managed,
-                                managed.first_name, managed.user_streak,
-                                managed.user_level, managed.target_language,
-                                skip_if_active_fn=lambda _u=user_id: _u in self._sessions,
+                        conversation_digest = _build_conversation_digest(managed.conversation_log)
+                        db_session_id = managed.db_session_id
+                        if self._bot:
+                            task = asyncio.create_task(
+                                _generate_and_send_summary(
+                                    self._bot, user_id, managed.native_language,
+                                    session_data, CloseReason.IDLE_TIMEOUT, managed,
+                                    skip_if_active_fn=lambda _u=user_id: _u in self._sessions,
+                                )
                             )
+                            task.add_done_callback(_log_task_exception)
+                        self._dispatch_internal_summary(
+                            db_session_id, conversation_digest, session_data,
+                            CloseReason.IDLE_TIMEOUT, managed.target_language, managed.user_level,
+                            plan_summary=managed.plan_summary,
                         )
-                        task.add_done_callback(_log_task_exception)
                     await self._release_session(user_id, managed, reason=CloseReason.IDLE_TIMEOUT)
 
             except asyncio.CancelledError:

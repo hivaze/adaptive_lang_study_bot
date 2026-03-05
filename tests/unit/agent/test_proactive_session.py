@@ -66,6 +66,16 @@ def _patch_infrastructure():
             "adaptive_lang_study_bot.agent.session_manager.SessionRepo.update_end",
             new_callable=AsyncMock,
         ),
+        "session_repo_summaries": patch(
+            "adaptive_lang_study_bot.agent.session_manager.SessionRepo.get_recent_with_summaries",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        "plan_repo_active": patch(
+            "adaptive_lang_study_bot.agent.session_manager.LearningPlanRepo.get_active",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
         "build_prompt": patch(
             "adaptive_lang_study_bot.agent.session_manager.build_proactive_prompt",
             return_value="System prompt",
@@ -161,6 +171,7 @@ class TestRunProactiveLLMSession:
              patches["lock_acquire"], patches["lock_release"], \
              patches["session_factory"] as mock_factory, \
              patches["session_repo_create"], patches["session_repo_update"], \
+             patches["session_repo_summaries"], patches["plan_repo_active"], \
              patches["build_prompt"], \
              patches["sdk_client_cls"] as mock_sdk_cls, patches["pop_env"]:
 
@@ -185,6 +196,7 @@ class TestRunProactiveLLMSession:
              patches["lock_acquire"], patches["lock_release"], \
              patches["session_factory"] as mock_factory, \
              patches["session_repo_create"], patches["session_repo_update"], \
+             patches["session_repo_summaries"], patches["plan_repo_active"], \
              patches["build_prompt"], \
              patches["sdk_client_cls"] as mock_sdk_cls, patches["pop_env"]:
 
@@ -208,6 +220,7 @@ class TestRunProactiveLLMSession:
              patches["lock_acquire"], patches["lock_release"], \
              patches["session_factory"] as mock_factory, \
              patches["session_repo_create"], patches["session_repo_update"], \
+             patches["session_repo_summaries"], patches["plan_repo_active"], \
              patches["build_prompt"], \
              patches["sdk_client_cls"] as mock_sdk_cls, patches["pop_env"]:
 
@@ -235,6 +248,7 @@ class TestRunProactiveLLMSession:
              patches["lock_acquire"], patches["lock_release"], \
              patches["session_factory"] as mock_factory, \
              patches["session_repo_create"], patches["session_repo_update"], \
+             patches["session_repo_summaries"], patches["plan_repo_active"], \
              patches["build_prompt"], \
              patches["sdk_client_cls"] as mock_sdk_cls, patches["pop_env"]:
 
@@ -255,6 +269,7 @@ class TestRunProactiveLLMSession:
              patches["lock_acquire"], patches["lock_release"], \
              patches["session_factory"] as mock_factory, \
              patches["session_repo_create"], patches["session_repo_update"], \
+             patches["session_repo_summaries"], patches["plan_repo_active"], \
              patches["build_prompt"], \
              patches["sdk_client_cls"] as mock_sdk_cls, patches["pop_env"]:
 
@@ -278,6 +293,7 @@ class TestRunProactiveLLMSession:
              patches["lock_acquire"], patches["lock_release"], \
              patches["session_factory"] as mock_factory, \
              patches["session_repo_create"], patches["session_repo_update"], \
+             patches["session_repo_summaries"], patches["plan_repo_active"], \
              patches["build_prompt"], \
              patches["sdk_client_cls"] as mock_sdk_cls, patches["pop_env"]:
 
@@ -303,6 +319,7 @@ class TestRunProactiveLLMSession:
              patches["lock_acquire"], patches["lock_release"], \
              patches["session_factory"] as mock_factory, \
              patches["session_repo_create"], patches["session_repo_update"], \
+             patches["session_repo_summaries"], patches["plan_repo_active"], \
              patches["build_prompt"], \
              patches["sdk_client_cls"] as mock_sdk_cls, patches["pop_env"]:
 

@@ -7,13 +7,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from adaptive_lang_study_bot.agent.hooks import SessionHookState, build_session_hooks
-from adaptive_lang_study_bot.agent.prompt_builder import build_summary_prompt
 from adaptive_lang_study_bot.agent.session_manager import (
+    _build_conversation_digest,
     _build_summary_cta_keyboard,
     _build_template_summary,
     _collect_session_data,
 )
-from adaptive_lang_study_bot.enums import CloseReason
 
 
 # ---------------------------------------------------------------------------
@@ -160,128 +159,7 @@ class TestHookStateEnrichment:
 
 
 # ---------------------------------------------------------------------------
-# Summary prompt builder
-# ---------------------------------------------------------------------------
-
-
-class TestBuildSummaryPrompt:
-    def test_progress_case_mentions_topics(self):
-        prompt = build_summary_prompt(
-            "ru",
-            "en",
-            session_data={
-                "exercise_count": 3,
-                "exercise_scores": [7, 8, 6],
-                "exercise_topics": ["verbs", "nouns"],
-                "exercise_types": ["translation"],
-                "words_added": ["hello"],
-                "words_reviewed": 0,
-                "vocab_count": 1,
-                "turn_count": 10,
-                "duration_minutes": 5,
-            },
-            close_reason=CloseReason.IDLE_TIMEOUT,
-            user_name="Alice",
-            user_streak=7,
-            user_level="B1",
-        )
-        assert "verbs" in prompt
-        assert "nouns" in prompt
-        assert "hello" in prompt
-        assert "Summarize" in prompt
-
-    def test_no_progress_case_suggests_exercises(self):
-        prompt = build_summary_prompt(
-            "en",
-            "fr",
-            session_data={
-                "exercise_count": 0,
-                "exercise_scores": [],
-                "exercise_topics": [],
-                "exercise_types": [],
-                "words_added": [],
-                "words_reviewed": 0,
-                "vocab_count": 0,
-                "turn_count": 3,
-                "duration_minutes": 2,
-            },
-            close_reason=CloseReason.EXPLICIT_CLOSE,
-            user_name="Bob",
-            user_streak=0,
-            user_level="A1",
-        )
-        assert "exercise" in prompt.lower() or "/words" in prompt
-        assert "guilt" not in prompt.lower() or "guilt-trip" in prompt.lower()
-
-    def test_close_reason_shapes_tone(self):
-        base_data = {
-            "exercise_count": 0,
-            "exercise_scores": [],
-            "exercise_topics": [],
-            "exercise_types": [],
-            "words_added": [],
-            "words_reviewed": 0,
-            "vocab_count": 0,
-            "turn_count": 3,
-            "duration_minutes": 2,
-        }
-        idle_prompt = build_summary_prompt(
-            "en", "fr",
-            session_data=base_data,
-            close_reason=CloseReason.IDLE_TIMEOUT,
-            user_name="X", user_streak=0, user_level="A1",
-        )
-        turn_prompt = build_summary_prompt(
-            "en", "fr",
-            session_data=base_data,
-            close_reason=CloseReason.TURN_LIMIT,
-            user_name="X", user_streak=0, user_level="A1",
-        )
-        assert "stopped responding" in idle_prompt.lower()
-        assert "productivity" in turn_prompt.lower()
-
-    def test_no_header_rule_present(self):
-        prompt = build_summary_prompt(
-            "ru",
-            "en",
-            session_data={
-                "exercise_count": 2,
-                "exercise_scores": [7, 8],
-                "exercise_topics": ["verbs"],
-                "exercise_types": ["translation"],
-                "words_added": [],
-                "words_reviewed": 0,
-                "vocab_count": 0,
-                "turn_count": 5,
-                "duration_minutes": 3,
-            },
-            close_reason=CloseReason.IDLE_TIMEOUT,
-            user_name="Сергей",
-            user_streak=3,
-            user_level="A2",
-        )
-        assert "NEVER begin with ANY header" in prompt
-        assert "jump straight into the message content" in prompt
-
-    def test_native_language_instruction(self):
-        prompt = build_summary_prompt(
-            "ru",
-            "en",
-            session_data={
-                "exercise_count": 0, "exercise_scores": [],
-                "exercise_topics": [], "exercise_types": [],
-                "words_added": [], "words_reviewed": 0,
-                "vocab_count": 0,
-                "turn_count": 1, "duration_minutes": 1,
-            },
-            close_reason=CloseReason.IDLE_TIMEOUT,
-            user_name="X", user_streak=0, user_level="A1",
-        )
-        assert "Russian" in prompt
-
-
-# ---------------------------------------------------------------------------
-# Template summary (enriched fallback)
+# Template summary
 # ---------------------------------------------------------------------------
 
 
@@ -434,3 +312,45 @@ class TestSummaryCTAKeyboard:
         assert len(buttons) == 2
         assert buttons[0][0].callback_data == "cta:session"
         assert buttons[1][0].callback_data == "cta:words"
+
+
+# ---------------------------------------------------------------------------
+# Conversation digest builder
+# ---------------------------------------------------------------------------
+
+
+class TestBuildConversationDigest:
+    def test_empty_log(self):
+        assert _build_conversation_digest([]) == ""
+
+    def test_basic_conversation(self):
+        log = [
+            {"role": "user", "text": "Bonjour"},
+            {"role": "assistant", "text": "Salut! Comment ça va?"},
+            {"role": "user", "text": "Ça va bien"},
+        ]
+        digest = _build_conversation_digest(log)
+        assert "[User]: Bonjour" in digest
+        assert "[Tutor]: Salut!" in digest
+        assert "[User]: Ça va bien" in digest
+
+    def test_tool_calls_included(self):
+        log = [
+            {"role": "user", "text": "Teach me a word"},
+            {"role": "tool_call", "text": "search_vocabulary"},
+            {"role": "assistant", "text": "Here's a new word!"},
+        ]
+        digest = _build_conversation_digest(log)
+        assert "[Tool]: search_vocabulary" in digest
+
+    def test_long_conversation_fully_preserved(self):
+        log = []
+        for i in range(20):
+            log.append({"role": "user", "text": f"Message {i}"})
+            log.append({"role": "assistant", "text": f"Reply {i}"})
+
+        digest = _build_conversation_digest(log)
+        # All messages preserved — no truncation
+        assert "Message 0" in digest
+        assert "Message 10" in digest
+        assert "Reply 19" in digest

@@ -274,6 +274,8 @@
   "session.verify_error": "Dein Sitzungslimit konnte nicht überprüft werden. Bitte versuche es gleich noch einmal.",
   "session.cost_verify_error": "Dein Sitzungslimit konnte nicht überprüft werden. Bitte versuche es gleich noch einmal.",
   "session.busy": "Der Bot ist gerade stark ausgelastet. Bitte versuche es in 1–2 Minuten erneut.",
+  "session.cooldown": "Ich schreibe gerade meine Notizen von unserer letzten Sitzung fertig. Ich bin in etwa {minutes} Minute(n) bereit!",
+  "session.message_not_processed": "Deine letzte Nachricht wurde nicht verarbeitet, da die Sitzung ihr Limit erreicht hat. Du kannst sie erneut senden, wenn du eine neue Sitzung startest.",
   "session.error_retry": "Etwas ist schiefgelaufen. Bitte sende deine Nachricht erneut, um eine neue Sitzung zu starten — dein Fortschritt ist gespeichert.",
   "session.no_response": "Es tut mir leid, ich konnte keine Antwort generieren. Bitte versuche es erneut.",
   "session.turn_limit_warn": "Unsere Lektionen haben eine begrenzte Länge, also lass uns diese langsam abschließen. Dein Fortschritt ist gespeichert — du kannst jederzeit eine neue Lektion starten, wenn du dein Tageslimit nicht erreicht hast.",

@@ -49,6 +49,27 @@ from adaptive_lang_study_bot.utils import compute_next_trigger, safe_zoneinfo, s
 _USER_MUTABLE_FIELDS = {"interests", "learning_goals", "preferred_difficulty", "session_style", "topics_to_avoid", "notifications_paused", "additional_notes"}
 
 
+async def _record_plan_completion(
+    db: AsyncSession,
+    user_id: int,
+    current_level: str,
+    target_level: str,
+) -> None:
+    """Stamp plan completion in milestones JSONB for long-term history."""
+    user = await UserRepo.get(db, user_id)
+    if not user:
+        return
+    milestones = dict(user.milestones or {})
+    completed: list[dict] = milestones.get("completed_plans", [])
+    completed.append({
+        "from": current_level,
+        "to": target_level,
+        "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+    })
+    milestones["completed_plans"] = completed[-20:]  # cap history
+    await UserRepo.update_milestones(db, user_id, milestones)
+
+
 def web_search_available() -> bool:
     """Check if web search tool can be created (library installed + API key set)."""
     return _TAVILY_AVAILABLE and bool(settings.tavily_api_key)
@@ -670,10 +691,8 @@ def create_session_tools(
                 reviewed_words: list[str] = []
                 if words:
                     fsrs_rating = _score_to_fsrs_rating(normalized_score)
-                    for w in words:
-                        vocab = await VocabularyRepo.get_by_word_ci(db_session, user_id, w)
-                        if vocab is None:
-                            continue
+                    vocab_rows = await VocabularyRepo.get_by_words_ci(db_session, user_id, words)
+                    for vocab in vocab_rows:
                         try:
                             fsrs_result = review_card(vocab, fsrs_rating)
                             await VocabularyRepo.update_fsrs(
@@ -695,7 +714,7 @@ def create_session_tools(
                             )
                             reviewed_words.append(vocab.word)
                         except Exception:
-                            logger.warning("FSRS auto-review failed for word '{}' user {}", w, user_id)
+                            logger.warning("FSRS auto-review failed for word '{}' user {}", vocab.word, user_id)
 
                 await db_session.commit()
             except SQLAlchemyError:
@@ -1073,6 +1092,9 @@ def create_session_tools(
                 score_period = await ExerciseResultRepo.get_score_summary(
                     db_session, user_id, days=days,
                 )
+                score_alltime = await ExerciseResultRepo.get_score_summary(
+                    db_session, user_id, days=None,
+                )
                 topic_stats = await ExerciseResultRepo.get_topic_stats(
                     db_session, user_id, days=days,
                 )
@@ -1094,6 +1116,7 @@ def create_session_tools(
                 "score_trends": {
                     "last_7_days": score_7d,
                     "last_{}_days".format(days): score_period,
+                    "all_time": score_alltime,
                 },
                 "topic_performance": topic_stats,
                 "vocabulary": {
@@ -1161,7 +1184,23 @@ def create_session_tools(
                     # Auto-extend with consolidation phase if 100% but level not reached
                     if progress["progress_pct"] == 100:
                         user = await UserRepo.get(db_session, user_id)
-                        if user and await _maybe_add_consolidation_phase(
+                        if user and plan.current_level == plan.target_level:
+                            # Mastery plan (e.g. C2→C2): auto-complete at 100%
+                            await _record_plan_completion(
+                                db_session, user_id, plan.current_level, plan.target_level,
+                            )
+                            await LearningPlanRepo.delete(db_session, user_id)
+                            await db_session.commit()
+                            return _ok({
+                                "has_plan": False,
+                                "plan_completed": True,
+                                "message": (
+                                    f"Mastery plan completed! All {plan.target_level}-level "
+                                    f"topics covered. The student can create a new plan "
+                                    f"to explore different advanced topics."
+                                ),
+                            })
+                        elif user and await _maybe_add_consolidation_phase(
                             db_session, plan, progress, topic_stats, user.level,
                         ):
                             # Re-fetch updated plan and recompute
@@ -1457,7 +1496,7 @@ def create_session_tools(
             query = str(args.get("query", "")).strip()
             if not query:
                 return _err("Query cannot be empty")
-            query = query[:400]
+            query = query[:tuning.web_search_max_query_length]
 
             max_results = min(
                 int(args.get("max_results", tuning.web_search_max_results)),
@@ -1631,6 +1670,10 @@ def create_session_tools(
                         if active_plan.target_level in CEFR_LEVELS else 0
                     )
                     if new_idx >= target_idx:
+                        await _record_plan_completion(
+                            db_session, user_id,
+                            active_plan.current_level, active_plan.target_level,
+                        )
                         await LearningPlanRepo.delete(db_session, user_id)
                         plan_note = (
                             f"Learning plan completed — reached target level "

@@ -216,3 +216,99 @@ class TestOverlappingTags:
         assert "</b></i>" not in result
         # Must contain both bold and valid HTML
         assert "<b>" in result
+
+
+class TestTable:
+    def test_simple_table(self):
+        text = (
+            "| A | B |\n"
+            "|---|---|\n"
+            "| 1 | 2 |\n"
+        )
+        result = markdown_to_telegram_html(text)
+        assert "<pre>" in result
+        assert "</pre>" in result
+        # Separator row should be gone
+        assert "---" not in result
+        # Data should be present
+        assert "A" in result
+        assert "1" in result
+
+    def test_table_with_surrounding_text(self):
+        text = (
+            "Here is a table:\n\n"
+            "| Name | Value |\n"
+            "|------|-------|\n"
+            "| foo  | bar   |\n"
+            "\nEnd."
+        )
+        result = markdown_to_telegram_html(text)
+        assert "Here is a table:" in result
+        assert "<pre>" in result
+        assert "End." in result
+
+    def test_table_preserves_alignment(self):
+        text = (
+            "| Short | LongerHeader |\n"
+            "|-------|-------------|\n"
+            "| a     | b            |\n"
+        )
+        result = markdown_to_telegram_html(text)
+        # Both columns should have consistent spacing inside <pre>
+        assert "<pre>" in result
+        # Header and data rows present
+        assert "Short" in result
+        assert "LongerHeader" in result
+
+    def test_table_no_markdown_inside(self):
+        """Bold/italic markers inside table cells should not be converted."""
+        text = (
+            "| **bold** | *italic* |\n"
+            "|----------|----------|\n"
+            "| data     | more     |\n"
+        )
+        result = markdown_to_telegram_html(text)
+        # Inside <pre>, markdown should be raw (not converted to HTML tags)
+        assert "<pre>" in result
+        assert "<b>" not in result
+        assert "<i>" not in result
+
+    def test_realistic_conjugation_table(self):
+        """The exact type of table from the user's bug report."""
+        text = (
+            "| Лицо | Окончание | Пример: habiter |\n"
+            "|------|-----------|-------------------|\n"
+            "| je | -e | j'habite |\n"
+            "| tu | -es | tu habites |\n"
+            "| nous | -ons | nous habitons |\n"
+        )
+        result = markdown_to_telegram_html(text)
+        assert "<pre>" in result
+        assert "</pre>" in result
+        assert "Лицо" in result
+        assert "j'habite" in result
+        assert "|" not in result
+
+
+class TestBackslashEscapes:
+    def test_escaped_underscores(self):
+        assert markdown_to_telegram_html(r"\_\_\_") == "___"
+
+    def test_escaped_asterisk(self):
+        assert markdown_to_telegram_html(r"\*not italic\*") == "*not italic*"
+
+    def test_escaped_pipe(self):
+        assert markdown_to_telegram_html(r"a \| b") == "a | b"
+
+    def test_escaped_hash(self):
+        assert markdown_to_telegram_html(r"\# not a header") == "# not a header"
+
+    def test_backslash_in_code_not_stripped(self):
+        """Backslash escapes inside code should not be processed."""
+        result = markdown_to_telegram_html(r"`\_\_\_`")
+        assert r"\_\_\_" in result
+
+    def test_exercise_blanks(self):
+        text = r"1. Nous \_\_\_ (habiter) à Paris."
+        result = markdown_to_telegram_html(text)
+        assert "Nous ___ (habiter)" in result

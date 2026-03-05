@@ -278,6 +278,100 @@ class TestCountSinceBatch:
 
 
 # ---------------------------------------------------------------------------
+# AI summary
+# ---------------------------------------------------------------------------
+
+class TestAISummary:
+
+    async def test_set_ai_summary(self, db_session: AsyncSession, make_user):
+        user = await make_user()
+        sess = await SessionRepo.create(
+            db_session, user_id=user.telegram_id, session_type="interactive",
+        )
+        assert sess.ai_summary is None
+
+        await SessionRepo.set_ai_summary(db_session, sess.id, "Topics: grammar\nPerformance: good")
+        await db_session.refresh(sess)
+        assert sess.ai_summary == "Topics: grammar\nPerformance: good"
+
+    async def test_set_ai_summary_overwrites(self, db_session: AsyncSession, make_user):
+        user = await make_user()
+        sess = await SessionRepo.create(
+            db_session, user_id=user.telegram_id, session_type="interactive",
+        )
+        await SessionRepo.set_ai_summary(db_session, sess.id, "first")
+        await SessionRepo.set_ai_summary(db_session, sess.id, "second")
+        await db_session.refresh(sess)
+        assert sess.ai_summary == "second"
+
+    async def test_get_recent_with_summaries(self, db_session: AsyncSession, make_user):
+        user = await make_user()
+
+        # Session without summary — should be excluded
+        await SessionRepo.create(
+            db_session, user_id=user.telegram_id, session_type="interactive",
+        )
+
+        # Session with summary — should be included
+        s2 = await SessionRepo.create(
+            db_session, user_id=user.telegram_id, session_type="interactive",
+        )
+        await SessionRepo.set_ai_summary(db_session, s2.id, "summary text")
+
+        results = await SessionRepo.get_recent_with_summaries(
+            db_session, user.telegram_id, limit=3,
+        )
+        assert len(results) == 1
+        assert results[0].id == s2.id
+        assert results[0].ai_summary == "summary text"
+
+    async def test_get_recent_with_summaries_limit(self, db_session: AsyncSession, make_user):
+        user = await make_user()
+
+        # Create 4 sessions with summaries
+        for i in range(4):
+            s = await SessionRepo.create(
+                db_session, user_id=user.telegram_id, session_type="interactive",
+            )
+            await SessionRepo.set_ai_summary(db_session, s.id, f"summary {i}")
+
+        results = await SessionRepo.get_recent_with_summaries(
+            db_session, user.telegram_id, limit=2,
+        )
+        assert len(results) == 2
+
+    async def test_get_recent_with_summaries_excludes_proactive(
+        self, db_session: AsyncSession, make_user,
+    ):
+        user = await make_user()
+
+        # Proactive session with summary — should be excluded
+        s1 = await SessionRepo.create(
+            db_session, user_id=user.telegram_id, session_type="proactive_review",
+        )
+        await SessionRepo.set_ai_summary(db_session, s1.id, "proactive summary")
+
+        # Interactive session with summary — should be included
+        s2 = await SessionRepo.create(
+            db_session, user_id=user.telegram_id, session_type="interactive",
+        )
+        await SessionRepo.set_ai_summary(db_session, s2.id, "interactive summary")
+
+        results = await SessionRepo.get_recent_with_summaries(
+            db_session, user.telegram_id, limit=3,
+        )
+        assert len(results) == 1
+        assert results[0].id == s2.id
+
+    async def test_get_recent_with_summaries_empty(self, db_session: AsyncSession, make_user):
+        user = await make_user()
+        results = await SessionRepo.get_recent_with_summaries(
+            db_session, user.telegram_id, limit=3,
+        )
+        assert results == []
+
+
+# ---------------------------------------------------------------------------
 # CHECK constraints
 # ---------------------------------------------------------------------------
 

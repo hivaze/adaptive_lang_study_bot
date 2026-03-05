@@ -274,6 +274,8 @@
   "session.verify_error": "Impossibile verificare il limite di sessioni. Riprova tra un momento.",
   "session.cost_verify_error": "Impossibile verificare il limite di sessioni. Riprova tra un momento.",
   "session.busy": "Il bot è molto richiesto in questo momento. Riprova tra 1-2 minuti.",
+  "session.cooldown": "Sto finendo i miei appunti dalla nostra ultima sessione. Sarò pronto tra circa {minutes} minuto/i!",
+  "session.message_not_processed": "Il tuo ultimo messaggio non è stato elaborato perché la sessione ha raggiunto il suo limite. Puoi rinviarlo quando avvii una nuova sessione.",
   "session.error_retry": "Qualcosa è andato storto. Invia di nuovo il tuo messaggio per avviare una nuova sessione — i tuoi progressi sono salvati.",
   "session.no_response": "Mi dispiace, non sono riuscito a generare una risposta. Riprova.",
   "session.turn_limit_warn": "Le nostre lezioni hanno una durata limitata, quindi iniziamo a concludere questa con calma. I tuoi progressi sono salvati — puoi sempre iniziare una nuova lezione se non hai raggiunto il limite giornaliero.",

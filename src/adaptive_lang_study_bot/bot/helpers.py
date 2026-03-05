@@ -29,6 +29,17 @@ _ITALIC_RE = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)")
 _HEADER_RE = re.compile(r"^#{1,6}\s+(.+)$", re.MULTILINE)
 _HR_RE = re.compile(r"^-{3,}\s*$", re.MULTILINE)
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+# Matches a contiguous block of markdown table lines (header + separator + data rows).
+_TABLE_RE = re.compile(
+    r"(?:^[ \t]*\|.+\|[ \t]*\n)+"
+    r"(?:^[ \t]*\|[-| :]+\|[ \t]*\n)"
+    r"(?:^[ \t]*\|.+\|[ \t]*\n)*",
+    re.MULTILINE,
+)
+# Matches the separator row (e.g. |---|---|) used to detect and strip it.
+_TABLE_SEP_RE = re.compile(r"^[ \t]*\|[-| :]+\|[ \t]*$")
+# Backslash escapes: \* \_ \| \` \[ \] \( \) \# \~ \> \! \- \+ \.
+_BACKSLASH_ESCAPE_RE = re.compile(r"\\([*_|`\[\]()#~>!\-+.])")
 
 # Matches HTML open/close tags (b, i, u, s, a, code, pre).
 _HTML_TAG_RE = re.compile(r"<(/?)([a-z]+)(?:\s[^>]*)?>")
@@ -104,12 +115,43 @@ def _fix_tag_nesting(html: str) -> str:
     return out
 
 
+def _convert_table(match: re.Match) -> str:
+    """Convert a markdown table to a <pre> block preserving column alignment."""
+    lines = match.group(0).strip().splitlines()
+    # Parse rows, skip separator line
+    rows: list[list[str]] = []
+    for line in lines:
+        if _TABLE_SEP_RE.match(line):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        rows.append(cells)
+    if not rows:
+        return match.group(0)
+    # Compute column widths
+    n_cols = max(len(r) for r in rows)
+    col_widths = [0] * n_cols
+    for row in rows:
+        for i, cell in enumerate(row):
+            if i < n_cols:
+                col_widths[i] = max(col_widths[i], len(cell))
+    # Format rows with padding
+    formatted: list[str] = []
+    for row in rows:
+        parts = []
+        for i in range(n_cols):
+            cell = row[i] if i < len(row) else ""
+            parts.append(cell.ljust(col_widths[i]))
+        formatted.append("  ".join(parts).rstrip())
+    return "<pre>" + "\n".join(formatted) + "</pre>"
+
+
 def markdown_to_telegram_html(text: str) -> str:
     """Convert common Markdown formatting to Telegram HTML.
 
     Handles: code blocks, inline code, bold+italic, bold, italic, headers,
-    horizontal rules, and links.  Operates in a safe order — code spans are
-    replaced with placeholders first so their contents are not mangled.
+    horizontal rules, links, tables, and backslash escapes.  Operates in a
+    safe order — code spans and tables are replaced with placeholders first
+    so their contents are not mangled.
     """
     placeholders: dict[str, str] = {}
 
@@ -119,24 +161,38 @@ def markdown_to_telegram_html(text: str) -> str:
         placeholders[token] = f"<{tag}>{inner}</{tag}>"
         return token
 
+    def _protect_raw(html: str) -> str:
+        token = f"\x00PH{uuid.uuid4().hex}\x00"
+        placeholders[token] = html
+        return token
+
     # 1. Protect code blocks (``` ... ```)
     text = _CODE_BLOCK_RE.sub(lambda m: _protect(m, "pre"), text)
     # 2. Protect inline code (` ... `)
     text = _INLINE_CODE_RE.sub(lambda m: _protect(m, "code"), text)
-    # 3. Bold+italic (***text***) — must come before bold/italic
+    # 3. Convert markdown tables to <pre> and protect them
+    text = _TABLE_RE.sub(lambda m: _protect_raw(_convert_table(m)), text)
+    # 4. Strip backslash escapes and protect the literal characters
+    def _protect_escape(m: re.Match) -> str:
+        token = f"\x00PH{uuid.uuid4().hex}\x00"
+        placeholders[token] = m.group(1)
+        return token
+
+    text = _BACKSLASH_ESCAPE_RE.sub(_protect_escape, text)
+    # 5. Bold+italic (***text***) — must come before bold/italic
     text = _BOLD_ITALIC_RE.sub(r"<b><i>\1</i></b>", text)
-    # 4. Bold (**text**)
+    # 6. Bold (**text**)
     text = _BOLD_RE.sub(r"<b>\1</b>", text)
-    # 5. Italic (*text*) — only after bold is consumed
+    # 7. Italic (*text*) — only after bold is consumed
     text = _ITALIC_RE.sub(r"<i>\1</i>", text)
-    # 6. Headers (## text → bold)
+    # 8. Headers (## text → bold)
     text = _HEADER_RE.sub(r"<b>\1</b>", text)
-    # 7. Horizontal rules (--- → remove)
+    # 9. Horizontal rules (--- → remove)
     text = _HR_RE.sub("", text)
-    # 8. Links [text](url)
+    # 10. Links [text](url)
     text = _LINK_RE.sub(r'<a href="\2">\1</a>', text)
 
-    # Restore protected code spans
+    # Restore protected code spans and tables
     for token, replacement in placeholders.items():
         text = text.replace(token, replacement)
 

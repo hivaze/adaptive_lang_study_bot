@@ -274,6 +274,8 @@
   "session.verify_error": "Não foi possível verificar seu limite de sessões. Por favor, tente novamente em instantes.",
   "session.cost_verify_error": "Não foi possível verificar seu limite de sessões. Por favor, tente novamente em instantes.",
   "session.busy": "O bot está com alta demanda no momento. Por favor, tente novamente em 1-2 minutos.",
+  "session.cooldown": "Estou finalizando minhas anotações da nossa última sessão. Estarei pronto em cerca de {minutes} minuto(s)!",
+  "session.message_not_processed": "Sua última mensagem não foi processada porque a sessão atingiu seu limite. Você pode reenviá-la quando iniciar uma nova sessão.",
   "session.error_retry": "Algo deu errado. Por favor, envie sua mensagem novamente para iniciar uma nova sessão — seu progresso está salvo.",
   "session.no_response": "Desculpe, não consegui gerar uma resposta. Por favor, tente novamente.",
   "session.turn_limit_warn": "Nossas lições têm duração limitada, então vamos finalizando esta aos poucos. Seu progresso está salvo — você sempre pode começar uma nova lição se não tiver atingido o limite diário.",

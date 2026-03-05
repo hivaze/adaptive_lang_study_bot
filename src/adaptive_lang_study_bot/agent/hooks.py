@@ -38,8 +38,8 @@ _HINT_MODERATE = (
 )
 
 
-def _extract_json_field(tool_output: Any, field: str, default: Any = None) -> Any:
-    """Extract a field from tool output JSON, handling SDK envelope variations.
+def _parse_tool_output(tool_output: Any) -> dict | None:
+    """Parse tool output JSON once, handling SDK envelope variations.
 
     Known formats:
     - dict: ``{"content": [{"type": "text", "text": "<json>"}]}``
@@ -47,19 +47,24 @@ def _extract_json_field(tool_output: Any, field: str, default: Any = None) -> An
     - str: raw JSON string
     """
     try:
-        data = None
         if isinstance(tool_output, dict):
             content_list = tool_output.get("content", [])
             if content_list and isinstance(content_list[0], dict):
-                data = json.loads(content_list[0].get("text", "{}"))
+                return json.loads(content_list[0].get("text", "{}"))
         elif isinstance(tool_output, list):
             if tool_output and isinstance(tool_output[0], dict):
-                data = json.loads(tool_output[0].get("text", "{}"))
+                return json.loads(tool_output[0].get("text", "{}"))
         elif isinstance(tool_output, str):
-            data = json.loads(tool_output)
-        return data.get(field, default) if data else default
+            return json.loads(tool_output)
     except (ValueError, TypeError, KeyError, IndexError):
-        return default
+        pass
+    return None
+
+
+def _extract_json_field(tool_output: Any, field: str, default: Any = None) -> Any:
+    """Extract a field from tool output JSON (convenience wrapper)."""
+    data = _parse_tool_output(tool_output)
+    return data.get(field, default) if data else default
 
 
 def _extract_score(tool_output: Any) -> int | None:
@@ -147,12 +152,14 @@ def build_session_hooks(user_id: int) -> tuple[dict[str, list[HookMatcher]], Ses
             if isinstance(ex_type, str) and ex_type.strip():
                 state.exercise_types.append(ex_type.strip()[:100])
 
-            # Track auto-reviewed vocabulary words from exercise
-            reviewed = _extract_field(tool_output, "vocabulary_reviewed")
+            # Parse tool output once and extract all needed fields
+            parsed_output = _parse_tool_output(tool_output)
+
+            reviewed = parsed_output.get("vocabulary_reviewed") if parsed_output else None
             if isinstance(reviewed, list):
                 state.words_reviewed += len(reviewed)
 
-            score = _extract_score(tool_output)
+            score = parsed_output.get("score") if parsed_output else None
             if score is None and tool_output:
                 logger.warning(
                     "Failed to extract score from record_exercise_result output [user={}], "

@@ -274,6 +274,8 @@
   "session.verify_error": "Couldn't verify your session limit. Please try again in a moment.",
   "session.cost_verify_error": "Couldn't verify your session limit. Please try again in a moment.",
   "session.busy": "The bot is experiencing high demand right now. Please try again in 1-2 minutes.",
+  "session.cooldown": "Just finishing up my notes from our last session. I'll be ready in about {minutes} minute(s)!",
+  "session.message_not_processed": "Your last message wasn't processed because the session reached its limit. You can resend it when you start a new session.",
   "session.error_retry": "Something went wrong. Please send your message again to start a new session — your progress is saved.",
   "session.no_response": "I'm sorry, I couldn't generate a response. Please try again.",
   "session.turn_limit_warn": "Our lessons are limited in length, so let's start wrapping up this one. Your progress is saved — you can always start a new lesson anytime if you haven't reached your daily limit.",

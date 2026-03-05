@@ -433,6 +433,22 @@ class VocabularyRepo:
         return result.scalar_one_or_none()
 
     @staticmethod
+    async def get_by_words_ci(
+        session: AsyncSession, user_id: int, words: list[str],
+    ) -> list[Vocabulary]:
+        """Batch case-insensitive word lookup. Returns all matching vocab rows."""
+        if not words:
+            return []
+        lower_words = [w.lower() for w in words]
+        result = await session.execute(
+            select(Vocabulary).where(
+                Vocabulary.user_id == user_id,
+                func.lower(Vocabulary.word).in_(lower_words),
+            ),
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
     async def get_due(
         session: AsyncSession,
         user_id: int,
@@ -696,6 +712,38 @@ class SessionRepo:
             .where(Session.id == session_id)
             .values(pipeline_status=status, pipeline_issues=issues),
         )
+
+    @staticmethod
+    async def set_ai_summary(
+        session: AsyncSession,
+        session_id: uuid.UUID,
+        ai_summary: str,
+    ) -> None:
+        await session.execute(
+            update(Session)
+            .where(Session.id == session_id)
+            .values(ai_summary=ai_summary),
+        )
+
+    @staticmethod
+    async def get_recent_with_summaries(
+        session: AsyncSession,
+        user_id: int,
+        *,
+        limit: int = 3,
+    ) -> list[Session]:
+        """Fetch recent interactive/onboarding sessions that have an AI summary."""
+        result = await session.execute(
+            select(Session)
+            .where(
+                Session.user_id == user_id,
+                Session.ai_summary.isnot(None),
+                Session.session_type.in_(["interactive", "onboarding"]),
+            )
+            .order_by(Session.started_at.desc())
+            .limit(limit),
+        )
+        return result.scalars().all()
 
     @staticmethod
     async def get_recent(
@@ -1218,20 +1266,19 @@ class ExerciseResultRepo:
         session: AsyncSession,
         user_id: int,
         *,
-        days: int = 30,
+        days: int | None = 30,
     ) -> dict:
-        """Aggregate score statistics for a time period."""
-        cutoff = _utcnow() - timedelta(days=days)
+        """Aggregate score statistics for a time period (None = all time)."""
+        conditions = [ExerciseResult.user_id == user_id]
+        if days is not None:
+            conditions.append(ExerciseResult.created_at >= _utcnow() - timedelta(days=days))
         result = await session.execute(
             select(
                 func.count(),
                 func.avg(ExerciseResult.score),
                 func.min(ExerciseResult.score),
                 func.max(ExerciseResult.score),
-            ).where(
-                ExerciseResult.user_id == user_id,
-                ExerciseResult.created_at >= cutoff,
-            ),
+            ).where(*conditions),
         )
         row = result.one()
         return {

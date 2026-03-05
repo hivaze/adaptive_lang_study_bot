@@ -25,7 +25,7 @@ poetry add <package>                           # add dependency
 
 ```
 src/adaptive_lang_study_bot/
-├── config.py              # Settings (pydantic-settings), BotTuning (centralized magic numbers), TIER_LIMITS
+├── config.py              # Settings (pydantic-settings), BotTuning (centralized magic numbers, session cooldown, digest limits), TIER_LIMITS
 ├── enums.py               # StrEnum: UserTier, SessionType, SessionStyle, Difficulty, CloseReason, NotificationTier, NotificationStatus, ScheduleType, ScheduleStatus, PipelineStatus, AccessRequestStatus
 ├── utils.py               # Helpers: score_label, user_local_now, safe_zoneinfo, compute_next_trigger, get_language_name, strip_mcp_prefix, is_user_admin, compute_new_streak, summarize_tool_usage, stamp_field/stamp_fields/get_item_date (field timestamps)
 ├── i18n.py                # t(key, lang, **kwargs) with JSON locale fallback
@@ -36,17 +36,17 @@ src/adaptive_lang_study_bot/
 │   ├── tools.py           # 12 core + 2 optional web MCP tools (web_search, web_extract; conditional on Tavily), _SESSION_TYPE_TOOLS, _USER_MUTABLE_FIELDS, compute_plan_progress(), fetch_plan_topic_stats(), _maybe_add_consolidation_phase()
 │   ├── hooks.py           # PostToolUse (adaptive hints), UserPromptSubmit (turn limit), Stop hooks
 │   ├── prompt_builder.py  # build_system_prompt(), build_proactive_prompt(), compute_session_context()
-│   ├── session_manager.py # SessionManager (interactive) + run_proactive_llm_session() + run_summary_llm_session() (standalone)
+│   ├── session_manager.py # SessionManager (interactive) + run_proactive_llm_session() + run_internal_summary_session() (standalone)
 │   └── pool.py            # SessionPool: asyncio.Semaphore (500 interactive, 50 proactive)
 ├── bot/
 │   ├── app.py             # Bot + Dispatcher setup, middleware/router registration, startup/shutdown
-│   ├── helpers.py         # get_user_lang, safe_edit_text, build_filterable_keyboard, split_agent_sections, markdown_to_telegram_html
+│   ├── helpers.py         # get_user_lang, safe_edit_text, build_filterable_keyboard, split_agent_sections, markdown_to_telegram_html (tables, backslash escapes)
 │   ├── middlewares/       # DBSession → Auth → RateLimit (order matters)
 │   └── routers/           # start, chat, settings, review, stats, debug
 ├── db/
 │   ├── engine.py          # SQLAlchemy async engine + session factory
-│   ├── models.py          # 9 ORM models: User, Vocabulary, Session, Schedule, ExerciseResult, Notification, LearningPlan, VocabularyReviewLog, AccessRequest
-│   ├── repositories.py    # Static-method repos with explicit AsyncSession param
+│   ├── models.py          # 9 ORM models: User, Vocabulary, Session (ai_summary), Schedule, ExerciseResult, Notification, LearningPlan, VocabularyReviewLog, AccessRequest
+│   ├── repositories.py    # Static-method repos with explicit AsyncSession param (batch vocab lookup, AI summary CRUD)
 │   └── migrations/        # Alembic
 ├── cache/
 │   ├── client.py          # Redis pool
@@ -97,7 +97,7 @@ Each `ClaudeSDKClient` instance spawns a Claude CLI subprocess. Sessions are ass
 
 ### Two-tier system
 
-Free vs premium tiers (admin-assigned, no billing). Defined in `config.py:TIER_LIMITS` as `dict[UserTier, TierLimits]`. Affects: model (haiku/sonnet), turn limits (20/35), cost caps (per-session and daily), idle timeout (6/10 min), thinking (adaptive for both), effort (low), notification limits (2/8 LLM/day), rate limits (5/20 msg/min).
+Free vs premium tiers (admin-assigned, no billing). Defined in `config.py:TIER_LIMITS` as `dict[UserTier, TierLimits]`. Affects: model (haiku/sonnet), turn limits (20/35), session limits (3/5 per day), cost caps (per-session and daily), idle timeout (6/10 min), thinking (adaptive for both), effort (low), notification limits (2/8 LLM/day), rate limits (5/20 msg/min).
 
 ### Concurrency model
 
@@ -125,6 +125,7 @@ Redis is NOT used as a traditional cache — it provides distributed coordinatio
 | Purpose | Key pattern (see `cache/keys.py`) | Mechanism |
 |---------|-----------------------------------|-----------|
 | Session lock (one per user) | `session:active:{user_id}` | SET NX + owner token + Lua release |
+| Session cooldown | `session:cooldown:{user_id}` | SET with 120s TTL (post-session cooldown, skipped for onboarding) |
 | Rate limiting | `ratelimit:user:{user_id}:minute` | Increment with TTL |
 | Notification dedup | `notif:dedup:{user_id}:{type}:{date}` | SET with daily TTL |
 | LLM notification counter | `notif:llm_count:{user_id}:{date}` | Increment with daily TTL |
@@ -192,6 +193,8 @@ The bot is a single async process. All stateful objects are module-level singlet
 - `hook_state: SessionHookState` — accumulates exercise scores, tool calls, turn count within session
 - `lock: asyncio.Lock` — serializes message processing for this user
 - `lock_token: str` — Redis session lock owner token for ownership-verified refresh/release
+- `conversation_log: list[dict]` — records user messages, assistant text, and tool calls for internal AI summary digest
+- `plan_summary: str | None` — compact plan context string for internal AI summary
 - Cost, turn count, warning flags (`limit_warned`, `cost_warned`, `idle_warned` — one-shot bools)
 
 Session tools and hooks are **closures** — not objects. Created per session in `create_session_tools()` / `build_session_hooks()`, they capture `(session_factory, user_id)` and are garbage-collected when `ManagedSession` is destroyed.
@@ -241,7 +244,7 @@ SDK spawns Claude CLI as subprocess. Nesting guard removed at import time in `se
 |------|-------------|-------|-------|-------|---------|-------|
 | Interactive | `SessionManager._create_session()` | Tier-based (haiku/sonnet) | PostToolUse + UserPromptSubmit + Stop | 8-14 (session-type filtered) | Idle timeout (6/10 min) | Long-lived, multi-turn, reused across messages |
 | Proactive | `run_proactive_llm_session()` | haiku (`tuning.proactive_model`) | None | 0-2 (web_search, web_extract; conditional on Tavily) | 30s hard timeout | Standalone function, single query, generates text directly |
-| Summary | `run_summary_llm_session()` | haiku (`tuning.proactive_model`) | None | None (tool-less) | 15s timeout, max 3 turns | Generates session-end summary, no DB writes |
+| Internal Summary | `run_internal_summary_session()` | haiku (`tuning.proactive_model`) | None | None (tool-less) | 60s timeout, max 3 turns | Agent-facing session summary stored in DB, not shown to user |
 
 ### SDK client lifecycle (interactive)
 
@@ -252,7 +255,8 @@ acquire pool slot → acquire Redis lock → build system prompt → create DB s
 → ClaudeSDKClient(options) → enter via AsyncExitStack → store as ManagedSession
 ... (multi-turn: query → receive_response → TextBlock/ToolUseBlock/ResultMessage) ...
 → on close: exit_stack.aclose() (kills subprocess) → release Redis lock → release pool slot
-→ update DB session → asyncio.create_task(run_post_session(...))
+→ set session cooldown (120s, skipped for onboarding) → update DB session
+→ asyncio.create_task(run_post_session(...)) + asyncio.create_task(_generate_and_store_internal_summary(...))
 ```
 
 ### Tool return format
@@ -278,16 +282,16 @@ return {
 
 ### System prompt structure
 
-**Interactive** (`build_system_prompt`) — up to 15 sections: ROLE, RULES, OUTPUT FORMAT, TOOL REQUIREMENTS, STUDENT PROFILE, FIRST SESSION GUIDE (conditional, new users only — added alongside teaching approach, not replacing it), TEACHING APPROACH (style-aware: session flow, exercise preferences, and minimum coverage rules vary by session style), LEVEL GUIDANCE (per-CEFR, conditional), EXERCISE TYPES (style-specific exercise preferences), VOCABULARY STRATEGY (conditional), SESSION CONTEXT (greeting style, last activity, session history, topic performance, celebrations, notification reply context), COMEBACK ADAPTATION (conditional, gap ≥ 48h), SCHEDULING INSTRUCTIONS, LEARNING PLAN (conditional — three modes: active plan with progress/pace/directives + style-specific execution guidance, propose plan interactively for early sessions ≤ `plan_auto_create_after_sessions`, auto-create plan silently for experienced users > threshold; plan construction guidelines are style-aware), BOT CAPABILITIES.
+**Interactive** (`build_system_prompt`) — up to 15 sections: ROLE, RULES, OUTPUT FORMAT, TOOL REQUIREMENTS, STUDENT PROFILE, FIRST SESSION GUIDE (conditional, new users only — added alongside teaching approach, not replacing it), TEACHING APPROACH (style-aware: session flow, exercise preferences, and minimum coverage rules vary by session style; shared SESSION RULES block for all styles), LEVEL GUIDANCE (per-CEFR, conditional), EXERCISE TYPES (style-specific exercise preferences), VOCABULARY STRATEGY (conditional), SESSION CONTEXT (greeting style, last activity — detailed fields suppressed when AI summaries available, recent AI session summaries for continuity, topic performance, celebrations, notification reply context), COMEBACK ADAPTATION (conditional, gap ≥ 48h; difficulty override takes precedence over score adaptation), SCHEDULING INSTRUCTIONS, LEARNING PLAN (conditional — three modes: active plan with progress/pace/directives + style-specific execution guidance, propose plan interactively for early sessions ≤ `plan_auto_create_after_sessions`, auto-create plan silently for experienced users > threshold; plan construction guidelines are style-aware; mastery plans auto-complete at 100%), BOT CAPABILITIES.
 
 **Session styles** affect prompt generation across multiple sections:
 - **Structured**: theory/grammar block first every session (based on plan topic or weak areas), grammar-focused exercises, plans ordered by grammar concepts, minimum one full topic cycle (theory → vocab → exercises) per session.
 - **Intensive**: goal-driven, weakness-focused, vocabulary-heavy (5-8 words per batch), fast pace, plans prioritize goals and weak areas with higher vocab targets, minimum one weak area or goal topic per session.
 - **Casual**: free conversation on student's favorite topics, exercises emerge organically from dialogue, plans framed around interests and conversational themes, flexible and adaptive.
 
-**Proactive** (`build_proactive_prompt`) — 5-6 sections + conditional LEARNING PLAN CONTEXT for proactive_summary: ROLE+RULES, TOOLS (conditional, when web_search available), STUDENT PROFILE (compact), TIME CONTEXT, TASK (per-session-type instructions from `_PROACTIVE_TASK_INSTRUCTIONS`), TRIGGER CONTEXT, LEARNING PLAN CONTEXT (conditional, proactive_summary only). Agent generates notification text directly, optionally using web_search/web_extract tools to enrich content.
+**Proactive** (`build_proactive_prompt`) — 5-7 sections: ROLE+RULES, TOOLS (conditional, when web_search available), STUDENT PROFILE (compact), TIME CONTEXT, TASK (per-session-type instructions from `_PROACTIVE_TASK_INSTRUCTIONS`), TRIGGER CONTEXT, LEARNING PLAN CONTEXT (conditional, all proactive types when plan exists), RECENT SESSIONS (conditional, AI summaries from recent sessions). Agent generates notification text directly, optionally using web_search/web_extract tools to enrich content.
 
-**Summary** (`build_summary_prompt`) — 4 sections: ROLE, RULES (close-reason-aware tone), SESSION DATA (exercise counts, topics, words, duration, plan progress), TASK (progress vs no-progress branch, includes plan progress hint).
+**Internal Summary** (`build_internal_summary_prompt`) — 5 sections: ROLE, RULES (English, structured, no scores), SESSION DATA (exercise counts/topics/types, vocab, duration), CONVERSATION TRANSCRIPT (full digest), TASK (6 labeled sections: Topics, Performance, Vocabulary, Continuation, Recommendations, Observations). User-facing summaries use template only (`_build_template_summary`).
 
 SDK exception types: `CLINotFoundError`, `ProcessError`, `ClaudeSDKError`.
 
@@ -337,7 +341,7 @@ Key design choices (read code for details):
 - FSRS state denormalized in vocabulary (`fsrs_due` column) for efficient due-card queries
 - Schedules use RRULE strings; `next_trigger_at` is the polled field
 - Notification preferences inlined in users table (avoids JOIN on proactive tick)
-- Learning plans: one per user (UNIQUE constraint), JSONB `plan_data` stores phases/topics, progress derived from exercise results via `compute_plan_progress()` (no stored per-topic state). Level progression is plan-anchored: the agent uses `adjust_level` after assessment, not automatic sliding-window. Auto-consolidation: when plan reaches 100% completion but user level < target, `_maybe_add_consolidation_phase()` appends a consolidation phase targeting weakest topics at `consolidation_mastery_score` threshold (triggered via `manage_learning_plan(action='get')`). Consolidation phases use `consolidation_added_at` date for fresh-exercise-only stat counting via `fetch_plan_topic_stats()`.
+- Learning plans: one per user (UNIQUE constraint), JSONB `plan_data` stores phases/topics, progress derived from exercise results via `compute_plan_progress()` (no stored per-topic state). Level progression is plan-anchored: the agent uses `adjust_level` after assessment, not automatic sliding-window. Mastery plans (current_level == target_level) auto-complete and delete at 100%. Auto-consolidation: when plan reaches 100% completion but user level < target, `_maybe_add_consolidation_phase()` appends a consolidation phase targeting weakest topics at `consolidation_mastery_score` threshold (triggered via `manage_learning_plan(action='get')`). Consolidation phases use `consolidation_added_at` date for fresh-exercise-only stat counting via `fetch_plan_topic_stats()`.
 - Field timestamps: `users.field_timestamps` JSONB tracks when profile fields were set/changed (date-only, user-local). Scalar fields use field name → ISO date string. Array fields use `sha256(item)[:8]` hex hash → ISO date string (avoids duplicating item text). Utilities: `stamp_field()`, `stamp_fields()`, `get_item_date()` in `utils.py`. Rendered as "(since DATE)" in system/proactive prompts. Language switch resets timestamps.
 
 ## Sensitive Files

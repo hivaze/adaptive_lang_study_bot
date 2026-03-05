@@ -161,10 +161,14 @@ class BotTuning:
     proactive_model: str = "claude-haiku-4-5"
     proactive_thinking: str = "disabled"
 
-    # -- Summary sessions --
-    summary_session_timeout_seconds: float = 30.0
-    summary_max_turns: int = 3
-    summary_thinking: str = "adaptive"
+    # -- Internal AI summary (agent-facing, background) --
+    internal_summary_timeout_seconds: float = 60.0
+    internal_summary_max_turns: int = 3
+    internal_summary_max_chars: int = 2000
+    digest_max_chars: int = 30_000  # total conversation digest cap for summary model
+    digest_entry_max_chars: int = 2000  # per-entry cap in conversation digest
+    session_cooldown_seconds: int = 120  # post-session cooldown before new session
+    session_history_in_prompt_count: int = 3  # AI summaries to include in system prompt
 
     # -- Effort levels --
     interactive_effort: str = "low"
@@ -207,6 +211,7 @@ class BotTuning:
     # -- Web search --
     max_searches_per_session: int = 5  # shared counter for search + extract calls
     web_search_max_results: int = 5
+    web_search_max_query_length: int = 400  # truncate search queries
     web_search_timeout_seconds: float = 10.0
     web_extract_max_content_chars: int = 5000  # truncate extracted page content
 
@@ -269,7 +274,7 @@ TIER_LIMITS: dict[UserTier, TierLimits] = {
     UserTier.FREE: TierLimits(
         model="claude-haiku-4-5",
         max_turns_per_session=20,
-        max_sessions_per_day=5,
+        max_sessions_per_day=3,
         max_cost_per_day_usd=2.00,
         session_idle_timeout_seconds=360,
         thinking_type="adaptive",
@@ -281,7 +286,7 @@ TIER_LIMITS: dict[UserTier, TierLimits] = {
     UserTier.PREMIUM: TierLimits(
         model="claude-sonnet-4-6",
         max_turns_per_session=35,
-        max_sessions_per_day=15,
+        max_sessions_per_day=5,
         max_cost_per_day_usd=8.00,
         session_idle_timeout_seconds=600,
         thinking_type="adaptive",
