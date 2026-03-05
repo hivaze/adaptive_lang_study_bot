@@ -1302,6 +1302,50 @@ def build_system_prompt(
         )
     sections.append("## STUDENT PROFILE\n" + "\n".join(profile_lines))
 
+    # --- 5b. Learning journey (skip for new/early users) ---
+    if user.sessions_completed >= 5:
+        journey_lines: list[str] = []
+        milestones = user.milestones or {}
+
+        # Completed plans history
+        completed_plans = milestones.get("completed_plans", [])
+        if completed_plans:
+            plans_str = ", ".join(
+                f"{p['from']}→{p['to']} ({p['date']})" for p in completed_plans
+            )
+            journey_lines.append(f"Completed plans: {plans_str}")
+
+        # Level history from field_timestamps
+        level_ts = ts.get("level")
+        if level_ts and user.created_at:
+            reg_level = "A1"  # default, overridden if plans exist
+            if completed_plans:
+                reg_level = completed_plans[0]["from"]
+            if reg_level != user.level:
+                journey_lines.append(
+                    f"Level progression: {reg_level} → {user.level} (current level since {level_ts})"
+                )
+
+        # All-time stats from milestones
+        all_time_sessions = user.sessions_completed
+        days_studying = (datetime.now(timezone.utc) - user.created_at).days
+        if days_studying > 0:
+            avg_sessions_per_week = round(all_time_sessions / (days_studying / 7), 1)
+            journey_lines.append(
+                f"Pace: {avg_sessions_per_week} sessions/week over {_duration}"
+            )
+
+        # Fired milestones summary
+        fired_streaks = milestones.get("fired_streaks", [])
+        if fired_streaks:
+            journey_lines.append(f"Best streak achieved: {max(fired_streaks)} days")
+        fired_vocab = milestones.get("fired_vocab", [])
+        if fired_vocab:
+            journey_lines.append(f"Vocabulary milestones reached: {', '.join(str(v) for v in fired_vocab)} words")
+
+        if journey_lines:
+            sections.append("## LEARNING JOURNEY\n" + "\n".join(journey_lines))
+
     # --- First session guide (replaces teaching approach / exercise types for new users) ---
     if is_first_session:
         sections.append(

@@ -1331,6 +1331,14 @@ def create_session_tools(
                         "adaptation_log": [],
                     }
 
+                    # Record completion of existing plan before superseding
+                    old_plan = await LearningPlanRepo.get_active(db_session, user_id)
+                    if old_plan:
+                        await _record_plan_completion(
+                            db_session, user_id,
+                            old_plan.current_level, old_plan.target_level,
+                        )
+
                     # create() deletes any existing plan for this user
                     new_plan = await LearningPlanRepo.create(
                         db_session,

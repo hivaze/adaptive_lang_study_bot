@@ -48,6 +48,7 @@ def _make_user(**overrides):
     user.notifications_paused = False
     user.additional_notes = []
     user.field_timestamps = {}
+    user.created_at = datetime.now(timezone.utc) - timedelta(days=60)
     for k, v in overrides.items():
         setattr(user, k, v)
     return user

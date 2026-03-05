@@ -4,6 +4,7 @@ Verifies that user-controlled fields are sanitized before interpolation
 into system prompts (collapses whitespace/newlines, truncates).
 """
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 from adaptive_lang_study_bot.agent.prompt_builder import (
@@ -123,6 +124,7 @@ class TestSanitizationInPrompt:
         user.notifications_paused = False
         user.additional_notes = []
         user.field_timestamps = {}
+        user.created_at = datetime.now(timezone.utc) - timedelta(days=30)
         for k, v in overrides.items():
             setattr(user, k, v)
         return user
