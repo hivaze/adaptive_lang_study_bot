@@ -174,7 +174,8 @@ async def run_post_session(
                 updates["field_timestamps"] = ts
                 pending.append(
                     t("pipeline.difficulty_adjusted", native_lang,
-                      old=user.preferred_difficulty, new=difficulty)
+                      old=t(f"settings.btn_{user.preferred_difficulty}", native_lang),
+                      new=t(f"settings.btn_{difficulty}", native_lang))
                 )
                 pending = pending[-tuning.pending_celebrations_cap:]
 

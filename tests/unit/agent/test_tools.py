@@ -36,12 +36,13 @@ class TestToolConstants:
             if session_type != SessionType.INTERACTIVE:
                 assert len(tools) <= len(interactive)
 
-    def test_proactive_sessions_have_no_tools(self):
-        """Proactive sessions are tool-less — data is pre-fetched into the prompt."""
+    def test_proactive_sessions_only_have_web_tools(self):
+        """Proactive sessions only have web_search and web_extract tools."""
+        allowed = {"web_search", "web_extract"}
         for session_type, tools in _SESSION_TYPE_TOOLS.items():
             if session_type.startswith("proactive"):
-                assert tools == set(), (
-                    f"{session_type} should have empty tool set, got {tools}"
+                assert tools <= allowed, (
+                    f"{session_type} should only have web tools, got {tools - allowed}"
                 )
 
     def test_onboarding_has_core_tools(self):
@@ -299,11 +300,11 @@ class TestWebTools:
         assert "web_search" not in _SESSION_TYPE_TOOLS[SessionType.ONBOARDING]
         assert "web_extract" not in _SESSION_TYPE_TOOLS[SessionType.ONBOARDING]
 
-    def test_web_tools_not_in_proactive(self):
+    def test_web_tools_in_proactive(self):
         for st in (SessionType.PROACTIVE_REVIEW, SessionType.PROACTIVE_QUIZ,
                    SessionType.PROACTIVE_SUMMARY, SessionType.PROACTIVE_NUDGE):
-            assert "web_search" not in _SESSION_TYPE_TOOLS[st]
-            assert "web_extract" not in _SESSION_TYPE_TOOLS[st]
+            assert "web_search" in _SESSION_TYPE_TOOLS[st]
+            assert "web_extract" in _SESSION_TYPE_TOOLS[st]
 
     def test_web_tools_not_in_assessment(self):
         assert "web_search" not in _SESSION_TYPE_TOOLS[SessionType.ASSESSMENT]

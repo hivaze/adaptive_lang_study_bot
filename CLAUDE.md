@@ -33,7 +33,7 @@ src/adaptive_lang_study_bot/
 ├── metrics.py             # Prometheus counters/gauges/histograms (16 metrics)
 ├── locales/               # JSON locale files (en, ru, es, fr, de, pt, it)
 ├── agent/
-│   ├── tools.py           # 10 core + 2 optional web MCP tools (web_search, web_extract; conditional on Tavily), _SESSION_TYPE_TOOLS, _USER_MUTABLE_FIELDS, compute_plan_progress(), fetch_plan_topic_stats(), _maybe_add_consolidation_phase()
+│   ├── tools.py           # 11 core + 2 optional web MCP tools (web_search, web_extract; conditional on Tavily), _SESSION_TYPE_TOOLS, _USER_MUTABLE_FIELDS, compute_plan_progress(), fetch_plan_topic_stats(), _maybe_add_consolidation_phase()
 │   ├── hooks.py           # PostToolUse (adaptive hints), UserPromptSubmit (turn limit), Stop hooks
 │   ├── prompt_builder.py  # build_system_prompt(), build_proactive_prompt(), compute_session_context()
 │   ├── session_manager.py # SessionManager (interactive) + run_proactive_llm_session() + run_summary_llm_session() (standalone)
@@ -89,7 +89,7 @@ Each `ClaudeSDKClient` instance spawns a Claude CLI subprocess. Sessions are ass
 
 1. **System prompt** (`prompt_builder.py`) — full string override, built fresh per session from a DB snapshot of the user's profile. Up to 15 sections for interactive (role, rules, output format, tool requirements, student profile, first session guide, teaching approach, level guidance, exercise types, vocab strategy, session context, comeback adaptation, scheduling, learning plan, bot capabilities). Some are conditional: first session guide (new users only), level guidance, vocab strategy, comeback adaptation (gap ≥ 48h), learning plan (three modes: active plan with progress, propose plan interactively on early sessions ≤ `plan_auto_create_after_sessions`, auto-create plan silently for experienced users). Proactive prompts are compact (5 sections + conditional learning plan context for proactive_summary: role+rules, profile, time context, task, trigger context).
 
-2. **MCP tools** (`tools.py`) — 10 core tools + 2 optional web tools (`web_search`, `web_extract`; conditional on Tavily library + `TAVILY_API_KEY`) registered via `@tool` + `create_sdk_mcp_server()`. Each tool is a closure capturing `(session_factory, user_id)` — creates its own short-lived DB session per call. Tools are filtered by `_SESSION_TYPE_TOOLS[session_type]` before MCP server creation — the SDK never sees disallowed tools.
+2. **MCP tools** (`tools.py`) — 11 core tools + 2 optional web tools (`web_search`, `web_extract`; conditional on Tavily library + `TAVILY_API_KEY`) registered via `@tool` + `create_sdk_mcp_server()`. Each tool is a closure capturing `(session_factory, user_id)` — creates its own short-lived DB session per call. Tools are filtered by `_SESSION_TYPE_TOOLS[session_type]` before MCP server creation — the SDK never sees disallowed tools.
 
 3. **Hooks** (`hooks.py`) — per-session `SessionHookState` tracks exercise scores, tool calls, turn count. `PostToolUse` injects adaptive difficulty hints after exercises (cheap behavior steering — no extra LLM call). `UserPromptSubmit` injects wrap-up hint at 80% of turn limit.
 
@@ -239,8 +239,8 @@ SDK spawns Claude CLI as subprocess. Nesting guard removed at import time in `se
 
 | Type | Entry point | Model | Hooks | Tools | Timeout | Notes |
 |------|-------------|-------|-------|-------|---------|-------|
-| Interactive | `SessionManager._create_session()` | Tier-based (haiku/sonnet) | PostToolUse + UserPromptSubmit + Stop | 6-12 (session-type filtered) | Idle timeout (6/10 min) | Long-lived, multi-turn, reused across messages |
-| Proactive | `run_proactive_llm_session()` | haiku (`tuning.proactive_model`) | None | None (tool-less) | 30s hard timeout | Standalone function, single query, generates text directly |
+| Interactive | `SessionManager._create_session()` | Tier-based (haiku/sonnet) | PostToolUse + UserPromptSubmit + Stop | 7-13 (session-type filtered) | Idle timeout (6/10 min) | Long-lived, multi-turn, reused across messages |
+| Proactive | `run_proactive_llm_session()` | haiku (`tuning.proactive_model`) | None | 0-2 (web_search, web_extract; conditional on Tavily) | 30s hard timeout | Standalone function, single query, generates text directly |
 | Summary | `run_summary_llm_session()` | haiku (`tuning.proactive_model`) | None | None (tool-less) | 15s timeout, max 3 turns | Generates session-end summary, no DB writes |
 
 ### SDK client lifecycle (interactive)
@@ -280,7 +280,7 @@ return {
 
 **Interactive** (`build_system_prompt`) — up to 15 sections: ROLE, RULES, OUTPUT FORMAT, TOOL REQUIREMENTS, STUDENT PROFILE, FIRST SESSION GUIDE (conditional, new users only — added alongside teaching approach, not replacing it), TEACHING APPROACH, LEVEL GUIDANCE (per-CEFR, conditional), EXERCISE TYPES, VOCABULARY STRATEGY (conditional), SESSION CONTEXT (greeting style, last activity, session history, topic performance, celebrations, notification reply context), COMEBACK ADAPTATION (conditional, gap ≥ 48h), SCHEDULING INSTRUCTIONS, LEARNING PLAN (conditional — three modes: active plan with progress/pace/directives, propose plan interactively for early sessions ≤ `plan_auto_create_after_sessions`, auto-create plan silently for experienced users > threshold), BOT CAPABILITIES.
 
-**Proactive** (`build_proactive_prompt`) — 5 sections + conditional LEARNING PLAN CONTEXT for proactive_summary: ROLE+RULES, STUDENT PROFILE (compact), TIME CONTEXT, TASK (per-session-type instructions from `_PROACTIVE_TASK_INSTRUCTIONS`), TRIGGER CONTEXT, LEARNING PLAN CONTEXT (conditional, proactive_summary only). Agent generates notification text directly (no tools).
+**Proactive** (`build_proactive_prompt`) — 5-6 sections + conditional LEARNING PLAN CONTEXT for proactive_summary: ROLE+RULES, TOOLS (conditional, when web_search available), STUDENT PROFILE (compact), TIME CONTEXT, TASK (per-session-type instructions from `_PROACTIVE_TASK_INSTRUCTIONS`), TRIGGER CONTEXT, LEARNING PLAN CONTEXT (conditional, proactive_summary only). Agent generates notification text directly, optionally using web_search/web_extract tools to enrich content.
 
 **Summary** (`build_summary_prompt`) — 4 sections: ROLE, RULES (close-reason-aware tone), SESSION DATA (exercise counts, topics, words, duration, qualitative level progress), TASK (progress vs no-progress branch, includes level trajectory hint).
 
@@ -301,7 +301,7 @@ These rules MUST be maintained when modifying code:
 **Security boundaries** (in `tools.py`):
 - `_USER_MUTABLE_FIELDS`: only `{interests, learning_goals, preferred_difficulty, session_style, topics_to_avoid, notifications_paused, additional_notes}` can be modified via `update_preference`
 - `_SESSION_TYPE_TOOLS`: defines which tools each session type can access — disallowed tools are excluded from MCP server entirely
-- `manage_learning_plan` write actions (`create`, `adapt`) only in interactive/onboarding; proactive sessions are tool-less
+- `manage_learning_plan` write actions (`create`, `adapt`) only in interactive/onboarding; proactive sessions only have web_search/web_extract (conditional on Tavily)
 - Array caps enforced: interests ≤ 8, learning_goals ≤ 8, topics_to_avoid ≤ 8, additional_notes ≤ 10, weak/strong areas ≤ 10
 
 **One session per user**: Redis SET NX lock. `SessionManager` for interactive, `run_proactive_llm_session()` as standalone function for proactive.

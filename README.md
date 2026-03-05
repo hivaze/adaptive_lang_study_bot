@@ -11,7 +11,9 @@ Try the live bot: [@personal_lang_study_bot](https://t.me/personal_lang_study_bo
 - **Adaptive exercises** — the AI generates exercises tailored to the user's level (A1-C2), interests, weak areas, and preferred difficulty. No static exercise bank.
 - **Learning plans** — structured multi-week study plans with phases, topics, and vocabulary targets. Progress is derived from exercise results. The agent adapts plans when the student is ahead or behind schedule.
 - **Vocabulary tracking** — words are stored per-user with FSRS spaced repetition. The bot schedules reviews at optimal intervals.
-- **Proactive notifications** — streak-at-risk alerts, vocabulary review reminders, weekly progress summaries. Users control schedules via natural language or `/settings`.
+- **Web search-powered discussions** — the agent can search the web (via Tavily) for news, articles, and cultural content in the target language. Users can ask for news-based lessons, current event discussions, or topic exploration. Available in both interactive sessions and proactive notifications.
+- **Proactive notifications** — 11 event triggers including streak-at-risk alerts, vocabulary review reminders, weekly progress summaries, and re-engagement nudges. Notifications can include web-searched content relevant to the user's interests. The bot remembers what it sent — when a user replies to a notification, the session automatically continues from that context. Users control schedules via natural language or `/settings`.
+- **Auto session management** — sessions end automatically when the lesson reaches a natural conclusion. The agent calls an `end_session` tool, delivers a farewell, and the user receives a formatted summary with achievements and recommendations.
 - **Two-tier system** — Free (Haiku 4.5) and Premium (Sonnet 4.6) with different limits. No billing — admin grants premium via the Gradio panel.
 - **17 target languages** — English, French, Spanish, Italian, German, Portuguese, Russian, Chinese, Japanese, Korean, Arabic, Turkish, Dutch, Polish, Swedish, Ukrainian, Hindi. Users can learn any of these.
 - **7 UI languages** — English, Russian, Spanish, French, German, Portuguese, Italian. All bot UI, notifications, and session messages are rendered in the user's native language via an i18n system with JSON locale files.
@@ -160,7 +162,7 @@ Any other text message starts or continues an interactive study session with the
 │ Agent Session (per user)                                       │
 │   ClaudeSDKClient ──────────────────> Anthropic API            │
 │    ├── System Prompt (15 sections)     (Haiku / Sonnet)        │
-│    ├── MCP Server (10-12 tools) ─────> PostgreSQL              │
+│    ├── MCP Server (7-13 tools) ──────> PostgreSQL              │
 │    └── Hooks (PostToolUse, UserPromptSubmit, Stop)             │
 │              │ on close                                        │
 │              ▼                                                 │
@@ -170,7 +172,7 @@ Any other text message starts or continues an interactive study session with the
 │ PROACTIVE ENGINE                                               │
 │ APScheduler 60s --> 11 Triggers --> Dispatcher                 │
 │                                     ├── template --> Telegram  │
-│                                     └── LLM ─────-> Anthropic  │
+│                                     └── LLM (+ web tools) ──> Anthropic│
 │                                                                │
 │ Health Alerts + Stats Reports ──────> Telegram (admins)        │
 │ Prometheus metrics :9090                                       │
@@ -228,10 +230,11 @@ src/adaptive_lang_study_bot/
 ### Key design decisions
 
 - **Per-session closures** — each agent session creates its own tool and hook functions. Tools capture a session factory and user ID (each tool call gets its own short-lived DB session). This ensures complete data isolation between concurrent users.
-- **Long-lived sessions** — each user gets one `ClaudeSDKClient` that persists across messages until closed (by turn/cost limit, idle timeout, or `/end`). A new session builds a fresh system prompt from the user's current DB profile snapshot.
+- **Long-lived sessions** — each user gets one `ClaudeSDKClient` that persists across messages until closed (by turn/cost limit, idle timeout, agent-initiated `end_session`, or `/end`). A new session builds a fresh system prompt from the user's current DB profile snapshot.
 - **Hybrid personalization** — the system prompt carries the user profile snapshot (read-only context), while MCP tools handle all DB writes (exercises, vocabulary, preferences).
 - **Learning plans** — structured multi-week plans (2-8 weeks) with phases, focus topics, and vocabulary targets. Progress is derived on-the-fly from exercise results (`compute_plan_progress`) — no stored per-topic state. The agent adapts plans when the student is ahead or behind schedule. When all topics are completed but the user hasn't reached the target CEFR level, a consolidation phase is auto-added targeting the weakest topics at the level-up score threshold.
-- **Three-tier notifications** — template ($0 cost, random variant from locale files), LLM (short-lived proactive session generates personalized message), or hybrid (try LLM, fall back to template). Free users get 2 LLM notifications/day, premium get 8.
+- **Three-tier notifications** — template ($0 cost, random variant from locale files), LLM (short-lived proactive session with optional web search generates personalized message), or hybrid (try LLM, fall back to template). Free users get 2 LLM notifications/day, premium get 8. A post-session cooldown prevents notifications from firing immediately after a session ends.
+- **Notification reply context** — when a user replies to a proactive notification, the system prompt includes the notification text as context, so the agent naturally continues from that topic rather than starting fresh.
 - **Re-engagement triggers** — escalating nudge system for post-onboarding (24h → 3d → 7d → 14d), lapsed users (gentle → compelling → miss-you), and dormant users (weekly nudges for 21-45 days inactive), with automatic stop after final attempt.
 - **Localized UI** — all user-facing messages (bot UI, notifications, session summaries, warnings) rendered via `i18n.t()` in the user's native language.
 - **Post-session pipeline** — after each session, a pure-Python pipeline validates data integrity, updates streaks, auto-adjusts difficulty, and detects milestones.

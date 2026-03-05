@@ -296,16 +296,18 @@ _SESSION_TYPE_TOOLS: dict[SessionType, set[str]] = {
         "add_vocabulary", "get_due_vocabulary",
         "manage_schedule", "search_vocabulary", "get_exercise_history",
         "get_progress_summary", "manage_learning_plan",
+        "end_session",
         "web_search", "web_extract",
     },
     SessionType.ONBOARDING: {
         "get_user_profile", "update_preference", "record_exercise_result",
         "add_vocabulary", "search_vocabulary", "manage_schedule",
+        "end_session",
     },
-    SessionType.PROACTIVE_REVIEW: set(),
-    SessionType.PROACTIVE_QUIZ: set(),
-    SessionType.PROACTIVE_SUMMARY: set(),
-    SessionType.PROACTIVE_NUDGE: set(),
+    SessionType.PROACTIVE_REVIEW: {"web_search", "web_extract"},
+    SessionType.PROACTIVE_QUIZ: {"web_search", "web_extract"},
+    SessionType.PROACTIVE_SUMMARY: {"web_search", "web_extract"},
+    SessionType.PROACTIVE_NUDGE: {"web_search", "web_extract"},
     SessionType.ASSESSMENT: set(),
 }
 
@@ -1608,6 +1610,20 @@ def create_session_tools(
 
         web_extract_tool = web_extract
 
+    # --- end_session tool ---
+
+    @tool(
+        "end_session",
+        "End the current session. Call this when you believe the lesson is complete "
+        "(e.g. after 3+ exercises, student says goodbye, or natural conclusion). "
+        "After calling this tool, give a brief warm farewell message. "
+        "The session will close automatically and the student will receive a summary.",
+        {},
+    )
+    async def end_session(args: dict[str, Any]) -> dict[str, Any]:
+        """Signal that the session should end."""
+        return _ok({"status": "session_end_requested"})
+
     # --- Build list and permission check ---
 
     all_tools = [
@@ -1621,6 +1637,7 @@ def create_session_tools(
         get_exercise_history,
         get_progress_summary,
         manage_learning_plan,
+        end_session,
     ]
     if web_search_tool is not None:
         all_tools.append(web_search_tool)
@@ -1641,53 +1658,3 @@ def create_langbot_server(tools: list) -> Any:
         version="1.0.0",
         tools=tools,
     )
-
-
-async def fetch_news_for_proactive(
-    target_language: str,
-    interests: list[str] | None = None,
-) -> str | None:
-    """Fetch news content for proactive prompt injection.
-
-    Returns a formatted text snippet with news results, or None on failure.
-    Used by ``run_proactive_llm_session()`` to enrich proactive notifications
-    with real-world content — the proactive flow is tool-less, so this is
-    called before the LLM session and injected into the prompt.
-    """
-    if not web_search_available():
-        return None
-
-    # Build a query from target language + interests
-    interest_part = ""
-    if interests:
-        interest_part = f" about {', '.join(interests[:3])}"
-    query = f"news{interest_part} in {target_language}"
-
-    try:
-        client = AsyncTavilyClient(api_key=settings.tavily_api_key)
-        raw = await asyncio.wait_for(
-            client.search(
-                query=query,
-                topic="news",
-                max_results=3,
-                include_answer=False,
-            ),
-            timeout=tuning.web_search_timeout_seconds,
-        )
-    except Exception:
-        logger.debug("Proactive news fetch failed for language={}", target_language)
-        return None
-
-    results = raw.get("results", [])
-    if not results:
-        return None
-
-    lines: list[str] = []
-    for r in results[:3]:
-        title = r.get("title", "").strip()
-        content = r.get("content", "").strip()[:500]
-        url = r.get("url", "")
-        if title and content:
-            lines.append(f"- **{title}**\n  {content}\n  Source: {url}")
-
-    return "\n\n".join(lines) if lines else None

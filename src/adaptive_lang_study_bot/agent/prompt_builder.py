@@ -1017,9 +1017,10 @@ def build_system_prompt(
         "Scores are internal metrics. Give only qualitative feedback: "
         "praise, encouragement, gentle correction.\n"
         "8. When the student wants to end the session (e.g. 'let's stop', 'bye', "
-        "'that's enough for today'), give a brief warm closing message and remind "
-        "them to tap /end to finish the session and see their summary. "
-        "Do NOT just say goodbye — the session stays open until /end is used.\n"
+        "'that's enough for today'), or when the lesson reaches a natural conclusion "
+        "(e.g. after completing the planned exercises), call the end_session tool. "
+        "Then give a brief warm closing message — the session will close automatically "
+        "and the student will receive a summary.\n"
         "9. Use an informal, friendly tone — like a helpful friend, not a formal teacher. "
         "Keep it warm and casual.\n"
         f"10. Level changes require sustained performance over {tuning.level_recent_window} exercises. "
@@ -1378,6 +1379,7 @@ def build_proactive_prompt(
     active_plan: "LearningPlan | None" = None,
     plan_progress: dict | None = None,
     prefetch: dict | None = None,
+    has_web_search: bool = False,
 ) -> str:
     """Build a focused system prompt for proactive notification sessions.
 
@@ -1398,11 +1400,21 @@ def build_proactive_prompt(
         f"1. Communicate in {native_lang} (the student's native language).\n"
         f"2. Use {target_lang} only for teaching content (vocabulary, examples).\n"
         "3. Use **bold**, *italic*, `code` for formatting. NEVER use markdown tables.\n"
-        "4. Write the notification message directly as your response. Do NOT call any tools.\n"
+        "4. Write the notification message directly as your response.\n"
         "5. Do NOT start a conversation — the student may not see this for hours.\n"
         "6. Keep the message concise and self-contained.\n"
         "7. Respect topics_to_avoid — never mention them."
     )
+
+    if has_web_search:
+        sections.append(
+            "## TOOLS\n"
+            "You have access to web_search and web_extract tools. "
+            "Use web_search to find real-world content (news, articles, cultural material) "
+            f"in {target_lang} relevant to the student's interests or learning topics. "
+            "Use web_extract to get the full text of a specific URL. "
+            "Incorporate found content naturally into the notification to make it engaging."
+        )
 
     # --- 2. Student profile (compact) ---
     ts = user.field_timestamps or {}
@@ -1519,16 +1531,6 @@ def build_proactive_prompt(
 
         sections.append("\n".join(lines))
 
-    # --- 4c. News context (injected by proactive engine via web search) ---
-    if pf.get("news_context"):
-        sections.append(
-            "## NEWS CONTEXT\n"
-            "Recent content found for the student's target language and interests. "
-            "Use this material to create an engaging notification with real-world "
-            "content for discussion or practice.\n\n"
-            + str(pf["news_context"])
-        )
-
     # --- 5. Learning plan context (compact, for proactive_summary) ---
     if active_plan and plan_progress and session_type == "proactive_summary":
         sections.append(
@@ -1608,8 +1610,11 @@ def build_summary_prompt(
         f"1. Write ENTIRELY in {native_lang} (the student's native language).\n"
         f"2. You may include {target_lang} words only when referencing specific "
         "vocabulary the student practiced.\n"
-        "3. Use **bold**, *italic*, `code` for formatting. NEVER use markdown tables.\n"
-        "4. Keep the summary concise: 2-4 sentences maximum.\n"
+        "3. Use **bold** for key achievements and topic names, *italic* for recommendations "
+        "and encouragement. NEVER use markdown tables.\n"
+        "4. Structure the summary clearly: start with a warm acknowledgment of what was done, "
+        "then mention specific topics/words, then give a recommendation for next time. "
+        "Keep each part concise (3-5 sentences total).\n"
         "5. Be honest and constructive. Acknowledge what was accomplished. "
         "If little was done, say so directly and provide specific recommendations. "
         "Never guilt-trip, but do not pretend minimal effort was a great achievement.\n"
@@ -1727,13 +1732,20 @@ def build_summary_prompt(
 
     if has_progress and not is_minimal_progress:
         task = (
-            "Summarize the student's session achievements in 2-4 sentences. "
-            "Mention specific topics they practiced and words they learned. "
-            "Give qualitative feedback on their performance (praise, encouragement, "
-            "areas to improve) — do NOT include numeric scores or averages. "
+            "Summarize the student's session using this structure:\n"
+            "1. Open with a warm, personal sentence acknowledging their effort "
+            "(reference specific topics or exercise types they worked on).\n"
+            "2. Highlight what went well — mention **specific words** they learned "
+            "or topics where they showed strength. Use bold for key items.\n"
+            "3. If there are areas to improve, mention them constructively "
+            "(e.g. 'next time, try focusing on...').\n"
             + plan_hint
             + level_hint
-            + "End with a specific recommendation for what to focus on next time. "
+            + "4. End with a *specific, actionable recommendation* for the next session "
+            "(use italics for emphasis).\n"
+            "Do NOT use bullet points or numbered lists in the output — write flowing sentences. "
+            "The structure above is for your planning only. "
+            "Do NOT include numeric scores or averages. "
             + no_header_reminder
         )
     elif is_minimal_progress:

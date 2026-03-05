@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from html import escape as esc
 
 from aiogram import Router
-from aiogram.enums import ChatAction
+from aiogram.enums import ChatAction, ParseMode
 
 from aiogram.filters import Command
 from aiogram.types import (
@@ -796,6 +796,7 @@ async def on_schedule_pref_selected(
 async def _auto_start_first_session(message: Message, user: User, lang: str) -> None:
     """Start the first interactive session automatically after onboarding."""
     try:
+        await message.answer(t("start.features_overview", lang), parse_mode=ParseMode.HTML)
         await message.answer(t("start.first_session_starting", lang))
         await message.chat.do(ChatAction.TYPING)
 

@@ -956,20 +956,20 @@ class TestBuildProactivePrompt:
         assert "DUE VOCABULARY" not in prompt
         assert "PROGRESS DATA" not in prompt
 
-    def test_news_context_included_when_present(self):
+    def test_web_search_tools_section_when_enabled(self):
         user = _make_user()
-        news = "- **Tech News**: AI is changing language learning\n  Source: https://example.com"
         prompt = build_proactive_prompt(
             user, "proactive_nudge", {},
-            prefetch={"news_context": news},
+            has_web_search=True,
         )
-        assert "NEWS CONTEXT" in prompt
-        assert "Tech News" in prompt
+        assert "TOOLS" in prompt
+        assert "web_search" in prompt
+        assert "web_extract" in prompt
 
-    def test_no_news_context_when_absent(self):
+    def test_no_tools_section_by_default(self):
         user = _make_user()
         prompt = build_proactive_prompt(user, "proactive_nudge", {})
-        assert "NEWS CONTEXT" not in prompt
+        assert "## TOOLS" not in prompt
 
 
 class TestWebSearchPromptHint:

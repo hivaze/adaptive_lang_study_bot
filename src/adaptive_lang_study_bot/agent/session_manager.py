@@ -39,10 +39,11 @@ from adaptive_lang_study_bot.agent.tools import (
     compute_plan_progress,
     create_langbot_server,
     create_session_tools,
-    fetch_news_for_proactive,
     fetch_plan_topic_stats,
     web_search_available,
 )
+from adaptive_lang_study_bot.cache.client import get_redis
+from adaptive_lang_study_bot.cache.keys import NOTIF_COOLDOWN_KEY, NOTIF_COOLDOWN_TTL
 from adaptive_lang_study_bot.cache.session_lock import (
     acquire_session_lock,
     refresh_session_lock,
@@ -155,8 +156,8 @@ async def run_proactive_llm_session(
     Returns ``(message_text, cost_usd)``.  *message_text* is ``None`` when
     the session fails or the LLM returns no text.
 
-    Tool-less: all required data is pre-fetched and embedded in the prompt.
-    The LLM's text output is extracted directly (no MCP tools needed).
+    Optionally equipped with web_search/web_extract tools (when Tavily is
+    available) so the LLM can enrich notifications with real-world content.
 
     This is a standalone function — proactive sessions are short-lived and
     do not go through :class:`SessionManager` (no idle cleanup, no user
@@ -180,6 +181,7 @@ async def run_proactive_llm_session(
 
     accumulated_cost = 0.0
     num_turns = 0
+    tool_calls_count = 0
     text_parts: list[str] = []
     db_session_id = uuid.uuid4()
     client: ClaudeSDKClient | None = None
@@ -228,19 +230,13 @@ async def run_proactive_llm_session(
                     "sessions_this_week": sessions_week["session_count"],
                 }
 
-        # 3b. Optionally fetch news for proactive prompt enrichment
-        news_context = await fetch_news_for_proactive(
-            target_language=user.target_language or "",
-            interests=user.interests,
-        )
-        if news_context:
-            prefetch["news_context"] = news_context
-
         # 4. Build proactive system prompt
+        has_web = web_search_available()
         system_prompt = build_proactive_prompt(
             user, session_type, trigger_data,
             active_plan=active_plan, plan_progress=plan_progress,
             prefetch=prefetch,
+            has_web_search=has_web,
         )
 
         # 5. Create DB session record
@@ -254,7 +250,26 @@ async def run_proactive_llm_session(
             )
             await db.commit()
 
-        # 6. Create SDK client (haiku, no hooks, no tools)
+        # 6. Create SDK client with optional web tools
+        mcp_kwargs: dict = {}
+        if has_web:
+            all_tools, can_use_tool = create_session_tools(
+                session_factory=async_session_factory,
+                user_id=user_id,
+                session_id=str(db_session_id),
+                session_type=session_type,
+                user_timezone=user.timezone or "UTC",
+                user_tier=UserTier(user.tier),
+            )
+            tools = [t for t in all_tools if can_use_tool(t.name)]
+            if tools:
+                server = create_langbot_server(tools)
+                allowed_names = [f"mcp__langbot__{t.name}" for t in tools]
+                mcp_kwargs = {
+                    "mcp_servers": {"langbot": server},
+                    "allowed_tools": allowed_names,
+                }
+
         options = ClaudeAgentOptions(
             model=tuning.proactive_model,
             max_turns=tuning.proactive_max_turns,
@@ -262,6 +277,7 @@ async def run_proactive_llm_session(
             effort=tuning.proactive_effort,
             permission_mode="bypassPermissions",
             system_prompt=system_prompt,
+            **mcp_kwargs,
         )
         client = ClaudeSDKClient(options)
 
@@ -271,13 +287,17 @@ async def run_proactive_llm_session(
             sdk_started = True
             await client.query(
                 "Generate the notification message now. Write it directly as your response. "
-                "Use Markdown formatting (**bold**, *italic*, `code`). Do NOT call any tools."
+                "Use Markdown formatting (**bold**, *italic*, `code`). "
+                "You may use web_search/web_extract tools if available to enrich "
+                "the message with real-world content."
             )
             async for msg in client.receive_response():
                 if isinstance(msg, AssistantMessage):
                     for block in msg.content:
                         if isinstance(block, TextBlock):
                             text_parts.append(block.text)
+                        elif isinstance(block, ToolUseBlock):
+                            tool_calls_count += 1
                 elif isinstance(msg, ResultMessage):
                     accumulated_cost += msg.total_cost_usd or 0
                     if msg.num_turns is not None:
@@ -319,7 +339,7 @@ async def run_proactive_llm_session(
                     db_session_id,
                     cost_usd=accumulated_cost,
                     num_turns=num_turns,
-                    tool_calls_count=0,
+                    tool_calls_count=tool_calls_count,
                 )
                 await db.execute(
                     update(Session)
@@ -975,6 +995,21 @@ class SessionManager:
         else:
             return [t("session.busy", lang)]
 
+        # Check if agent requested session end via end_session tool
+        if any(strip_mcp_prefix(tc) == "end_session" for tc in managed.tools_called):
+            session_data = _collect_session_data(managed)
+            await self._close_session(user_id, reason=CloseReason.EXPLICIT_CLOSE)
+            if self._bot:
+                task = asyncio.create_task(
+                    _generate_and_send_summary(
+                        self._bot, user_id, lang, session_data,
+                        CloseReason.EXPLICIT_CLOSE, managed,
+                        managed.first_name, managed.user_streak,
+                        managed.user_level, managed.target_language,
+                    )
+                )
+                task.add_done_callback(_log_task_exception)
+            return response_chunks
 
         self._inject_limit_warnings(managed, limits, lang, response_chunks)
         return response_chunks
@@ -1322,6 +1357,17 @@ class SessionManager:
             _kill_sdk_subprocess(managed.client)
 
         await self._release_lock_and_pool(user_id, managed.is_proactive, lock_token=managed.lock_token)
+
+        # Set notification cooldown to prevent proactive messages immediately after session end
+        try:
+            redis = await get_redis()
+            await redis.set(
+                NOTIF_COOLDOWN_KEY.format(user_id=user_id),
+                "session_end",
+                ex=NOTIF_COOLDOWN_TTL,
+            )
+        except Exception:
+            logger.debug("Failed to set post-session notification cooldown for user {}", user_id)
 
         # Update session record in DB
         try:
