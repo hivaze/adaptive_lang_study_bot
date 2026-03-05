@@ -30,25 +30,6 @@ class SessionContext(TypedDict):
 # per session and for testability.
 # ---------------------------------------------------------------------------
 
-_STYLE_INSTRUCTIONS: dict[str, str] = {
-    SessionStyle.CASUAL: (
-        "SESSION STYLE: Casual. Use a relaxed pace, conversational tone, "
-        "and informal corrections. Let the conversation flow naturally. "
-        "Include fun examples, humor, and cultural tidbits. "
-        "Don't force a rigid exercise structure."
-    ),
-    SessionStyle.STRUCTURED: (
-        "SESSION STYLE: Structured. Organize the session into clear segments: "
-        "warm-up, main exercise, review. Provide grammar explanations with examples. "
-        "Follow systematic topic progression. Use numbered exercises."
-    ),
-    SessionStyle.INTENSIVE: (
-        "SESSION STYLE: Intensive. Maximize exercise density. Minimal chitchat. "
-        "Move rapidly between exercises. Present multiple exercise types in sequence. "
-        "Push for faster responses. Focus on volume and efficiency."
-    ),
-}
-
 _DIFFICULTY_INSTRUCTIONS: dict[str, str] = {
     Difficulty.EASY: (
         "DIFFICULTY: Easy. Use simpler vocabulary and shorter sentences. "
@@ -431,21 +412,52 @@ def _build_teaching_approach_section(
 
     # Session flow (skip for first session — FIRST SESSION GUIDE provides the flow)
     if not is_first_session:
-        adaptive_lines.append(
-            "SESSION FLOW:\n"
-            "- At the start of a session (after greeting), ask what the student wants to "
-            "focus on today — unless their learning goals, recent context, or additional "
-            "notes already suggest a clear direction. If you already know what they need, "
-            "lead with it directly instead of asking.\n"
-            "- Teach new vocabulary at the BEGINNING of the session (after greeting and "
-            "optional review). This gives the student time to practice new words in exercises "
-            "during the same session. You may also introduce additional words at the END if "
-            "exercises revealed gaps — words the student had trouble with or didn't know.\n"
-            "- NEVER repeat content you already presented in this session. If you taught words, "
-            "do not re-introduce them. If you gave an exercise, do not re-ask it.\n"
-            "- Be a leader: teach proactively instead of asking permission for every action. "
-            "Present exercises and vocabulary directly rather than offering menus of choices."
-        )
+        if user.session_style == SessionStyle.STRUCTURED:
+            adaptive_lines.append(
+                "SESSION FLOW (Structured):\n"
+                "- Start every session with a THEORY/GRAMMAR BLOCK: explain the key grammar "
+                "point or language concept for today. Base it on the current plan topic, or "
+                "on the student's weakest areas / lowest topic scores if no plan is active. "
+                "Use clear rules, conjugation tables, and pattern breakdowns with examples.\n"
+                "- After the theory block, teach new vocabulary related to the grammar topic.\n"
+                "- Then move to guided practice exercises applying the theory just taught.\n"
+                "- End with a brief review of what was covered.\n"
+                "- MINIMUM COVERAGE: Every session MUST cover at least one plan topic or one "
+                "weak area with both grammar explanation and vocabulary. Do not end without "
+                "completing at least one full topic cycle (theory → vocab → exercises).\n"
+                "- NEVER repeat content you already presented in this session.\n"
+                "- Be a leader: teach proactively instead of asking permission for every action."
+            )
+        elif user.session_style == SessionStyle.INTENSIVE:
+            adaptive_lines.append(
+                "SESSION FLOW (Intensive):\n"
+                "- Get to work immediately after a brief greeting. No chitchat.\n"
+                "- Lead with the student's learning goals and weakest areas — don't ask "
+                "what they want to do, drive the session toward their goals.\n"
+                "- Teach new vocabulary aggressively — larger batches (5-8 words), "
+                "multiple vocabulary blocks per session.\n"
+                "- Move rapidly between exercises. Don't wait for the student to ask for more.\n"
+                "- MINIMUM COVERAGE: Every session MUST cover at least one weak area or goal-related "
+                "topic with vocabulary and exercises. Push to cover multiple topics per session.\n"
+                "- NEVER repeat content you already presented in this session.\n"
+                "- Be a leader: push the student, don't offer menus of choices."
+            )
+        else:
+            # Casual or default
+            adaptive_lines.append(
+                "SESSION FLOW (Casual):\n"
+                "- Start with natural conversation. Ask what's on the student's mind or "
+                "pick up a topic they enjoy.\n"
+                "- Teach new vocabulary at the BEGINNING of the session (after greeting and "
+                "optional review). This gives the student time to practice new words in exercises "
+                "during the same session. You may also introduce additional words at the END if "
+                "exercises revealed gaps.\n"
+                "- Let the conversation flow naturally — exercises should emerge from the "
+                "dialogue, not interrupt it.\n"
+                "- NEVER repeat content you already presented in this session.\n"
+                "- Be a leader: teach proactively instead of asking permission for every action. "
+                "Present exercises and vocabulary directly rather than offering menus of choices."
+            )
 
     # Score adaptation (skip for first session — no scores exist, and FIRST SESSION
     # GUIDE already provides the diagnostic exercise flow)
@@ -482,10 +494,12 @@ def _build_teaching_approach_section(
     # Content selection
     adaptive_lines.append(
         "CONTENT SELECTION:\n"
-        "- Always incorporate the student's interests when possible.\n"
-        "- Focus exercises on weak areas, but periodically review strong areas.\n"
-        "- When choosing exercise topics, prefer topics the student hasn't practiced recently, "
-        "especially those where they scored low previously."
+        "- Incorporate the student's interests when possible.\n"
+        "- Prioritize weak areas in exercises; periodically revisit strong areas to maintain them.\n"
+        "- Prefer topics the student hasn't practiced recently, especially low-scoring ones.\n"
+        "- WEAK/STRONG AREAS (shown in STUDENT PROFILE) are automatically updated based on "
+        "exercise scores — use consistent topic names in record_exercise_result so the system "
+        "tracks progress accurately."
     )
 
     # Goals (skip for first session — FIRST SESSION GUIDE step 2 handles goal discovery)
@@ -515,11 +529,6 @@ def _build_teaching_approach_section(
                 f"KNOWLEDGE GAP: The student hasn't explicitly set: {', '.join(gaps)}. "
                 "Naturally ask about one of these early in the session and save via update_preference."
             )
-
-    # Session style
-    style_line = _STYLE_INSTRUCTIONS.get(user.session_style)
-    if style_line:
-        adaptive_lines.append(style_line)
 
     # Difficulty
     diff_line = _DIFFICULTY_INSTRUCTIONS.get(user.preferred_difficulty)
@@ -562,7 +571,11 @@ def _build_session_context_section(
                     f"  Status: incomplete ({last_activity.get('close_reason', 'unknown')})"
                 )
         else:
-            ctx_lines.append(f"\nLast session summary: {last_activity.get('session_summary', 'N/A')}")
+            if gap_h < 1:
+                time_ago = f"{int(gap_h * 60)} minutes ago"
+            else:
+                time_ago = f"{gap_h:.1f} hours ago"
+            ctx_lines.append(f"\nLast session ({time_ago}): {last_activity.get('session_summary', 'N/A')}")
             if last_activity.get("topic"):
                 ctx_lines.append(f"Last topic: {last_activity['topic']}")
             if last_activity.get("last_exercise"):
@@ -740,6 +753,7 @@ def _build_learning_plan_section(
         days_remaining = max(0, (active_plan.target_end_date - today).days)
 
         plan_lines = [
+            f"Today: {today.isoformat()} (Week {current_week} of {active_plan.total_weeks})",
             f"Goal: {active_plan.current_level} → {active_plan.target_level} | "
             f"Timeline: {active_plan.start_date} to {active_plan.target_end_date} "
             f"({days_remaining} days remaining)",
@@ -830,26 +844,60 @@ def _build_learning_plan_section(
                     "run a comprehensive review exercise covering this phase's topics."
                 )
 
-        plan_lines.append(
-            "\nGuidelines:"
-            "\n- Align today's exercises with the current phase topics."
-            "\n- When recording exercises for plan topics, use the exact plan "
+        guidelines = [
+            "\nGuidelines:",
+            "- Align today's exercises with the current phase topics.",
+            "- When recording exercises for plan topics, use the exact plan "
             "topic names in the `topic` field of record_exercise_result. "
             "If an exercise covers a sub-aspect, use the parent plan topic name "
             "(e.g. plan has 'Past Tense Verbs' and you drill irregular past tense "
-            "→ record as 'Past Tense Verbs')."
-            "\n- If the pace assessment above shows BEHIND or AHEAD, follow the ACTION directive."
-            "\n- LEVEL PROGRESSION: Level promotion happens through plans. When the plan "
+            "→ record as 'Past Tense Verbs').",
+            "- If the pace assessment above shows BEHIND or AHEAD, follow the ACTION directive.",
+            "- LEVEL PROGRESSION: Level promotion happens through plans. When the plan "
             "nears completion, assess the student's readiness for the next level by "
             "running comprehensive exercises across plan topics. If the student "
             "demonstrates consistent mastery (strong performance across diverse topics), "
             "call adjust_level to promote them. The plan will auto-complete when the "
-            "level reaches the target."
-            "\n- When a plan phase is fully completed, briefly celebrate and "
-            "preview the next phase to keep the student motivated."
-            "\n- This plan snapshot is from session start. Use "
-            "manage_learning_plan(action='get') for up-to-date progress during the session."
+            "level reaches the target.",
+            "- When a plan phase is fully completed, briefly celebrate and "
+            "preview the next phase to keep the student motivated.",
+            "- This plan snapshot is from session start. Use "
+            "manage_learning_plan(action='get') for up-to-date progress during the session.",
+        ]
+
+        # Multi-session-per-day guidance
+        guidelines.append(
+            "- MULTIPLE SESSIONS PER DAY: If the greeting style is 'continuation' or "
+            "'short_break' (indicating the student already had a session today), check "
+            "whether current phase topics have issues (low scores, pending topics). If the "
+            "student has no struggling topics, ask if they'd like to:\n"
+            "  a) Deepen the current topic — more exercises, broader vocabulary, "
+            "grammar edge cases and exceptions, OR\n"
+            "  b) Move forward to the next topic/phase.\n"
+            "Recommend option (a) by default — topic depth is more valuable than rushing ahead. "
+            "Only suggest (b) if the student is clearly performing well on the current topic."
         )
+
+        # Style-specific plan execution guidance (complementing SESSION FLOW in TEACHING APPROACH)
+        if user.session_style == SessionStyle.STRUCTURED:
+            guidelines.append(
+                "- STRUCTURED STYLE: Cover each plan topic in depth — core rules, "
+                "exceptions, related vocabulary, common mistakes, and practical usage. "
+                "Don't mark a topic as covered until grammar, vocabulary, and edge cases "
+                "have all been practiced."
+            )
+        elif user.session_style == SessionStyle.INTENSIVE:
+            guidelines.append(
+                "- INTENSIVE STYLE: Prioritize pending and low-scoring plan topics. "
+                "Don't linger on mastered topics."
+            )
+        elif user.session_style == SessionStyle.CASUAL:
+            guidelines.append(
+                "- CASUAL STYLE: Weave plan topics into natural conversation — "
+                "steer the dialogue toward the plan topic organically."
+            )
+
+        plan_lines.append("\n".join(guidelines))
 
         # Consolidation-specific guidance
         has_consolidation = any(
@@ -884,13 +932,50 @@ def _build_learning_plan_section(
             f"covering advanced {user.level}-level topics "
             "(literary style, colloquialisms, specialized vocabulary, creative expression)"
         )
+    _plan_style_guidance = {
+        SessionStyle.STRUCTURED: (
+            "STYLE-SPECIFIC PLAN STRUCTURE (Structured):\n"
+            "- Each phase should have a clear grammar/theory focus as its primary topic.\n"
+            "- Order topics from foundational grammar to more complex structures.\n"
+            "- Include explicit grammar topics (e.g. 'Past Tense Regular Verbs', "
+            "'Subjunctive Mood Basics') rather than thematic topics.\n"
+            "- TOPIC DEPTH: Each large grammar topic must be planned comprehensively. "
+            "A single topic like 'Past Tense' should cover: core rules, regular forms, "
+            "irregular forms, exceptions, common mistakes, related vocabulary, and "
+            "practical usage patterns. Break large topics into subtopics across the phase "
+            "(e.g. 'Past Tense — Regular Verbs', 'Past Tense — Irregular Verbs', "
+            "'Past Tense — Exceptions & Edge Cases').\n"
+            "- Include vocabulary themes tied to each grammar topic.\n"
+            "- Each session within a phase should start with theory on the phase's "
+            "grammar focus before practice exercises."
+        ),
+        SessionStyle.INTENSIVE: (
+            "STYLE-SPECIFIC PLAN STRUCTURE (Intensive):\n"
+            "- Prioritize the student's learning goals and weakest areas in topic ordering.\n"
+            "- Set higher vocabulary targets per week (aim for 30-50% more than default).\n"
+            "- Include topics that directly address weak areas and low-scoring skills.\n"
+            "- Pack more topics per phase — the student expects a fast pace.\n"
+            "- Focus on practical, goal-aligned topics rather than broad surveys."
+        ),
+        SessionStyle.CASUAL: (
+            "STYLE-SPECIFIC PLAN STRUCTURE (Casual):\n"
+            "- Frame topics around the student's interests and conversational themes "
+            "(e.g. 'Travel Conversations', 'Discussing Movies') rather than pure grammar.\n"
+            "- Keep phases flexible — topics should feel like conversation starters, "
+            "not rigid lessons.\n"
+            "- Weave grammar and vocabulary into interest-based topics naturally.\n"
+            "- The student should feel the plan supports their curiosity, not constrains it."
+        ),
+    }
+    _style_hint = _plan_style_guidance.get(user.session_style, "")
     _plan_guidelines = (
         "When creating a plan, include:\n"
         "- Weekly phases with 2-5 topics each, tailored to the student's interests\n"
         "- Vocabulary themes and targets per week\n"
         "- A FINAL ASSESSMENT phase as the last week — covering key topics from "
         "all prior phases. This is where you'll evaluate readiness for level promotion.\n"
-        "- Realistic expectations based on their session frequency"
+        "- Realistic expectations based on their session frequency\n"
+        + (f"\n{_style_hint}" if _style_hint else "")
     )
     _plan_staleness = (
         "Once a plan is created during this session, use "
@@ -1024,9 +1109,7 @@ def build_system_prompt(
         "and the student will receive a summary.\n"
         "9. Use an informal, friendly tone — like a helpful friend, not a formal teacher. "
         "Keep it warm and casual.\n"
-        "10. Level progression is tied to learning plans. When a plan's topics are mastered, "
-        "assess the student's readiness for the next level through comprehensive exercises "
-        "before calling adjust_level."
+        "10. Level progression requires a learning plan — see LEARNING PLAN section for details."
     )
 
     # --- 3. Output format ---
@@ -1134,21 +1217,13 @@ def build_system_prompt(
     profile_lines.append(
         f"Notifications: {_dated('paused' if user.notifications_paused else 'active', ts.get('notifications_paused'))}"
     )
-    # Level progression info
+    # Level progression info (details in LEARNING PLAN section)
     current_idx = CEFR_LEVELS.index(user.level) if user.level in CEFR_LEVELS else 0
     if current_idx == len(CEFR_LEVELS) - 1:
         profile_lines.append("Level: at highest level (C2)")
-    elif active_plan:
+    elif not active_plan:
         profile_lines.append(
-            "Level progression: tied to learning plan completion. When plan topics are mastered, "
-            "assess readiness and use adjust_level to promote. "
-            "Use get_progress_summary for score trends. "
-            "NEVER reveal exact scores, thresholds, or numeric averages to the student."
-        )
-    else:
-        profile_lines.append(
-            "Level progression: requires an active learning plan. "
-            "Encourage creating one for structured progression."
+            "Level progression: requires an active learning plan."
         )
     sections.append("## STUDENT PROFILE\n" + "\n".join(profile_lines))
 
@@ -1211,7 +1286,25 @@ def build_system_prompt(
         "- Listening comprehension cues (describe pronunciation, stress patterns)\n"
         "- Free writing (short paragraph on a topic)\n\n"
         "Vary exercise types within a session. Don't repeat the same format more than twice in a row.\n\n"
-        "After teaching new vocabulary, IMMEDIATELY create a practice exercise using "
+        + (
+            "STYLE PREFERENCE (Structured): Favor grammar-focused exercises — conjugation drills, "
+            "fill-in-the-blank with grammar rules, sentence building, error correction. "
+            "Each exercise should reinforce the theory taught at the start of the session.\n\n"
+            if user.session_style == SessionStyle.STRUCTURED
+            else (
+                "STYLE PREFERENCE (Intensive): Favor high-density exercise types — translation, "
+                "fill-in-the-blank, conjugation drills. Minimize open-ended formats. "
+                "Keep exercises short and frequent. Prioritize exercises targeting weak areas "
+                "and learning goals.\n\n"
+                if user.session_style == SessionStyle.INTENSIVE
+                else (
+                    "STYLE PREFERENCE (Casual): Favor conversational exercises — conversation "
+                    "simulation, free writing, and exercises that emerge naturally from dialogue. "
+                    "Formal drills should feel organic, not like a test.\n\n"
+                )
+            )
+        )
+        + "After teaching new vocabulary, IMMEDIATELY create a practice exercise using "
         "those words — do not ask 'want to practice?' first.\n\n"
         "EXERCISE RULES:\n"
         "- When creating exercises for words you just taught, you MUST use COMPLETELY "
@@ -1251,7 +1344,7 @@ def build_system_prompt(
             vocab_lines.append("Focus on teaching new vocabulary relevant to the session topic.")
         # Teach proactively, not on request
         vocab_lines.append(
-            "- Teach new words directly (3-5 at a time). Do NOT ask permission first "
+            "- Teach new words directly. Do NOT ask permission first "
             "('Want to learn some words?'). Just teach."
         )
         # Nudge harder when vocabulary is thin for the student's level

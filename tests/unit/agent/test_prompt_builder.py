@@ -484,26 +484,28 @@ class TestSessionHistory:
 
 
 class TestStyleInstructions:
-    """Test that session style instructions appear in the prompt."""
+    """Test that session style instructions appear in the prompt via SESSION FLOW."""
 
     def test_casual_style(self):
         user = _make_user(session_style="casual")
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
-        assert "SESSION STYLE: Casual" in prompt
-        assert "relaxed" in prompt.lower()
+        assert "SESSION FLOW (Casual)" in prompt
+        assert "natural conversation" in prompt
 
     def test_structured_style(self):
         user = _make_user(session_style="structured")
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
-        assert "SESSION STYLE: Structured" in prompt
+        assert "SESSION FLOW (Structured)" in prompt
+        assert "THEORY/GRAMMAR BLOCK" in prompt
 
     def test_intensive_style(self):
         user = _make_user(session_style="intensive")
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
-        assert "SESSION STYLE: Intensive" in prompt
+        assert "SESSION FLOW (Intensive)" in prompt
+        assert "Get to work immediately" in prompt
 
 
 class TestDifficultyInstructions:
@@ -718,7 +720,7 @@ class TestStaleTopics:
         user = _make_user()
         ctx = compute_session_context(user)
         prompt = build_system_prompt(user, ctx)
-        assert "prefer topics the student hasn't practiced recently" in prompt
+        assert "hasn't practiced recently" in prompt
 
 
 class TestTopicPerformance:
@@ -1678,22 +1680,30 @@ class TestPromptTeachingApproach:
 
     def test_subsection_labels_present(self):
         prompt = self._build()
-        assert "SESSION FLOW:" in prompt
+        assert "SESSION FLOW" in prompt
         assert "SCORE ADAPTATION:" in prompt
         assert "CONTENT SELECTION:" in prompt
         assert "GOALS:" in prompt
 
-    def test_vocab_timing_guidance(self):
-        prompt = self._build()
+    def test_structured_theory_first(self):
+        prompt = self._build(session_style="structured")
+        assert "THEORY/GRAMMAR BLOCK" in prompt
+
+    def test_casual_flow(self):
+        prompt = self._build(session_style="casual")
         assert "Teach new vocabulary at the BEGINNING of the session" in prompt
 
-    def test_vocab_end_of_session_gaps(self):
-        prompt = self._build()
-        assert "END if exercises revealed gaps" in prompt
+    def test_intensive_flow(self):
+        prompt = self._build(session_style="intensive")
+        assert "Get to work immediately" in prompt
 
-    def test_session_opening_behavior(self):
-        prompt = self._build()
-        assert "ask what the student wants to focus on today" in prompt
+    def test_vocab_timing_guidance_casual(self):
+        prompt = self._build(session_style="casual")
+        assert "Teach new vocabulary at the BEGINNING of the session" in prompt
+
+    def test_session_opening_behavior_casual(self):
+        prompt = self._build(session_style="casual")
+        assert "natural conversation" in prompt
 
     def test_role_expanded(self):
         prompt = self._build()

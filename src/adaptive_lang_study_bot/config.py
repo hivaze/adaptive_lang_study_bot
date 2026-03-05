@@ -275,7 +275,7 @@ TIER_LIMITS: dict[UserTier, TierLimits] = {
         thinking_type="adaptive",
         max_llm_notifications_per_day=2,
         rate_limit_per_minute=5,
-        max_cost_per_session_usd=0.60,
+        max_cost_per_session_usd=0.75,
         redis_session_ttl_seconds=480,  # idle_timeout (360) + 120s buffer for cleanup loop delays
     ),
     UserTier.PREMIUM: TierLimits(
@@ -287,7 +287,7 @@ TIER_LIMITS: dict[UserTier, TierLimits] = {
         thinking_type="adaptive",
         max_llm_notifications_per_day=8,
         rate_limit_per_minute=20,
-        max_cost_per_session_usd=2.25,
+        max_cost_per_session_usd=2.81,
         redis_session_ttl_seconds=720,  # idle_timeout (600) + 120s buffer for cleanup loop delays
     ),
 }

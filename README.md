@@ -9,7 +9,8 @@ Try the live bot: [@personal_lang_study_bot](https://t.me/personal_lang_study_bo
 ## Features
 
 - **Adaptive exercises** — the AI generates exercises tailored to the user's level (A1-C2), interests, weak areas, and preferred difficulty. No static exercise bank.
-- **Learning plans** — structured multi-week study plans with phases, topics, and vocabulary targets. Progress is derived from exercise results. The agent adapts plans when the student is ahead or behind schedule.
+- **Three session styles** — **Structured** (theory/grammar first, then practice; plans ordered by grammar concepts), **Intensive** (goal-driven, weakness-focused, vocabulary-heavy; aggressive pace), **Casual** (free conversation on topics the student enjoys; exercises emerge organically). Style affects session flow, exercise selection, plan construction, and minimum coverage requirements.
+- **Learning plans** — structured multi-week study plans with phases, topics, and vocabulary targets. Plans are constructed according to the student's session style. Progress is derived from exercise results. The agent adapts plans when the student is ahead or behind schedule.
 - **Vocabulary tracking** — words are stored per-user with FSRS spaced repetition. The bot schedules reviews at optimal intervals.
 - **Web search-powered discussions** — the agent can search the web (via Tavily) for news, articles, and cultural content in the target language. Users can ask for news-based lessons, current event discussions, or topic exploration. Available in both interactive sessions and proactive notifications.
 - **Proactive notifications** — 11 event triggers including streak-at-risk alerts, vocabulary review reminders, weekly progress summaries, and re-engagement nudges. Notifications can include web-searched content relevant to the user's interests. The bot remembers what it sent — when a user replies to a notification, the session automatically continues from that context. Users control schedules via natural language or `/settings`.
@@ -117,7 +118,7 @@ All configuration is via environment variables (loaded by `pydantic-settings` fr
 | Effort | low | low |
 | LLM notifications/day | 2 | 8 |
 | Rate limit | 5 msg/min | 20 msg/min |
-| Max cost/session | $0.60 | $2.25 |
+| Max cost/session | $0.75 | $2.81 |
 | Max cost/day | $2.00 | $8.00 |
 
 To grant a user premium access, use the admin panel or update the `tier` column in the `users` table directly.
@@ -231,7 +232,7 @@ src/adaptive_lang_study_bot/
 
 - **Per-session closures** — each agent session creates its own tool and hook functions. Tools capture a session factory and user ID (each tool call gets its own short-lived DB session). This ensures complete data isolation between concurrent users.
 - **Long-lived sessions** — each user gets one `ClaudeSDKClient` that persists across messages until closed (by turn/cost limit, idle timeout, agent-initiated `end_session`, or `/end`). A new session builds a fresh system prompt from the user's current DB profile snapshot.
-- **Hybrid personalization** — the system prompt carries the user profile snapshot (read-only context), while MCP tools handle all DB writes (exercises, vocabulary, preferences).
+- **Hybrid personalization** — the system prompt carries the user profile snapshot (read-only context), while MCP tools handle all DB writes (exercises, vocabulary, preferences). Session style (structured/intensive/casual) modulates prompt generation across multiple sections: session flow, exercise preferences, plan construction guidelines, and minimum coverage rules.
 - **Learning plans** — structured multi-week plans (2-8 weeks) with phases, focus topics, and vocabulary targets. Progress is derived on-the-fly from exercise results (`compute_plan_progress`) — no stored per-topic state. The agent adapts plans when the student is ahead or behind schedule. Level progression is plan-anchored: the agent assesses readiness and calls `adjust_level` after plan completion, rather than automatic score thresholds. When all topics are completed but the user hasn't reached the target CEFR level, a consolidation phase is auto-added targeting the weakest topics at a higher mastery bar.
 - **Three-tier notifications** — template ($0 cost, random variant from locale files), LLM (short-lived proactive session with optional web search generates personalized message), or hybrid (try LLM, fall back to template). Free users get 2 LLM notifications/day, premium get 8. A post-session cooldown prevents notifications from firing immediately after a session ends.
 - **Notification reply context** — when a user replies to a proactive notification, the system prompt includes the notification text as context, so the agent naturally continues from that topic rather than starting fresh.
