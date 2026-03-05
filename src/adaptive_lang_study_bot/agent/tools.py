@@ -92,7 +92,7 @@ def compute_plan_progress(
 
             is_consolidation = phase.get("consolidation", False)
             mastery = (
-                tuning.level_up_avg if is_consolidation
+                tuning.consolidation_mastery_score if is_consolidation
                 else tuning.plan_topic_mastery_score
             )
             if (
@@ -212,7 +212,7 @@ async def _maybe_add_consolidation_phase(
     else:
         return False
 
-    # Find weakest completed topics (avg_score below level_up_avg)
+    # Find weakest completed topics (avg_score below consolidation mastery)
     weak_topics: list[tuple[str, float]] = []
     for phase_info in progress["phases"]:
         if phase_info.get("consolidation"):
@@ -220,7 +220,7 @@ async def _maybe_add_consolidation_phase(
         for t in phase_info.get("topics", []):
             if t["status"] == "completed":
                 avg = topic_stats.get(t["name"], {}).get("avg_score")
-                if avg is not None and avg < tuning.level_up_avg:
+                if avg is not None and avg < tuning.consolidation_mastery_score:
                     weak_topics.append((t["name"], avg))
 
     if not weak_topics:
@@ -285,6 +285,7 @@ TOOL_NAMES = [
     "mcp__langbot__get_exercise_history",
     "mcp__langbot__get_progress_summary",
     "mcp__langbot__manage_learning_plan",
+    "mcp__langbot__adjust_level",
     "mcp__langbot__web_search",
     "mcp__langbot__web_extract",
 ]
@@ -295,14 +296,14 @@ _SESSION_TYPE_TOOLS: dict[SessionType, set[str]] = {
         "get_user_profile", "update_preference", "record_exercise_result",
         "add_vocabulary", "get_due_vocabulary",
         "manage_schedule", "search_vocabulary", "get_exercise_history",
-        "get_progress_summary", "manage_learning_plan",
+        "get_progress_summary", "manage_learning_plan", "adjust_level",
         "end_session",
         "web_search", "web_extract",
     },
     SessionType.ONBOARDING: {
         "get_user_profile", "update_preference", "record_exercise_result",
         "add_vocabulary", "search_vocabulary", "manage_schedule",
-        "end_session",
+        "adjust_level", "end_session",
     },
     SessionType.PROACTIVE_REVIEW: {"web_search", "web_extract"},
     SessionType.PROACTIVE_QUIZ: {"web_search", "web_extract"},
@@ -566,7 +567,7 @@ def create_session_tools(
         "Record the result of a learning exercise after the student answers it. "
         "Must be called ONLY AFTER the student provides their answer — never before. "
         "If the student ignores an exercise, do NOT record a score. "
-        "Auto-adjusts level and weak/strong areas based on scores. "
+        "Auto-adjusts weak/strong areas based on scores. "
         "Words listed in words_involved are automatically reviewed in the spaced "
         "repetition system (FSRS) — always include the vocabulary words used in the exercise.",
         {"exercise_type": str, "topic": str, "score": int, "max_score": int,
@@ -627,51 +628,6 @@ def create_session_tools(
                 # Running field_timestamps dict — updated progressively
                 ts = dict(user.field_timestamps or {})
                 date_str = datetime.now(_user_tz).strftime("%Y-%m-%d")
-
-                # Level adjustment based on recent scores
-                new_level: str | None = None
-                window = tuning.level_recent_window
-                if len(scores) >= window:
-                    recent_n = scores[-window:]
-                    avg = sum(recent_n) / len(recent_n)
-                    current_idx = CEFR_LEVELS.index(user.level) if user.level in CEFR_LEVELS else 0
-
-                    if avg >= tuning.level_up_avg and current_idx < len(CEFR_LEVELS) - 1:
-                        new_level = CEFR_LEVELS[current_idx + 1]
-                        ts = stamp_field(ts, "level", new_level, date_str)
-                        await UserRepo.update_fields(db_session, user_id, level=new_level, field_timestamps=ts)
-                        adjustments.append(f"Level UP: {user.level} → {new_level}")
-                    elif avg <= tuning.level_down_avg and current_idx > 0:
-                        new_level = CEFR_LEVELS[current_idx - 1]
-                        ts = stamp_field(ts, "level", new_level, date_str)
-                        await UserRepo.update_fields(db_session, user_id, level=new_level, field_timestamps=ts)
-                        adjustments.append(f"Level DOWN: {user.level} → {new_level}")
-
-                # Check learning plan impact on level change
-                if new_level is not None:
-                    try:
-                        active_plan = await LearningPlanRepo.get_active(db_session, user_id)
-                        if active_plan:
-                            new_idx = CEFR_LEVELS.index(new_level)
-                            target_idx = (
-                                CEFR_LEVELS.index(active_plan.target_level)
-                                if active_plan.target_level in CEFR_LEVELS else 0
-                            )
-                            if new_idx >= target_idx:
-                                await LearningPlanRepo.delete(db_session, user_id)
-                                adjustments.append(
-                                    f"Learning plan COMPLETED: reached target level "
-                                    f"{active_plan.target_level}. Consider creating a new plan."
-                                )
-                            elif new_idx < CEFR_LEVELS.index(active_plan.current_level):
-                                adjustments.append(
-                                    f"Level dropped below plan baseline. "
-                                    f"Consider adapting your learning plan."
-                                )
-                    except SQLAlchemyError:
-                        logger.warning(
-                            "Failed to check learning plan on level change for user {}", user_id,
-                        )
 
                 # Weak/strong area adjustment — requires multiple qualifying
                 # scores for the same topic before modifying areas.
@@ -1624,6 +1580,83 @@ def create_session_tools(
         """Signal that the session should end."""
         return _ok({"status": "session_end_requested"})
 
+    # ---------------------------------------------------------------
+    # adjust_level
+    # ---------------------------------------------------------------
+
+    @tool(
+        "adjust_level",
+        "Adjust the student's CEFR level after assessment. "
+        "Call ONLY after conducting a thorough assessment of the student's abilities "
+        f"(at least {tuning.level_adjust_min_assessment_exercises} scored exercises in this session). "
+        "Provide a clear justification based on observed performance.",
+        {"new_level": str, "justification": str},
+    )
+    async def adjust_level(args: dict[str, Any]) -> dict[str, Any]:
+        new_level = str(args.get("new_level", "")).strip().upper()
+        justification = str(args.get("justification", "")).strip()
+
+        if new_level not in CEFR_LEVELS:
+            return _err(f"Invalid level '{new_level}'. Must be one of: {', '.join(CEFR_LEVELS)}")
+        if not justification or len(justification) < 20:
+            return _err("Provide a detailed justification (at least 20 characters)")
+
+        async with session_factory() as db_session:
+            try:
+                user = await UserRepo.get(db_session, user_id)
+                if user is None:
+                    return _err("User not found")
+                if user.level == new_level:
+                    return _err(f"Student is already at level {new_level}")
+
+                old_idx = CEFR_LEVELS.index(user.level) if user.level in CEFR_LEVELS else 0
+                new_idx = CEFR_LEVELS.index(new_level)
+                if abs(new_idx - old_idx) > 1:
+                    return _err("Can only adjust by one CEFR level at a time")
+
+                ts = dict(user.field_timestamps or {})
+                date_str = datetime.now(_user_tz).strftime("%Y-%m-%d")
+                ts = stamp_field(ts, "level", new_level, date_str)
+
+                await UserRepo.update_fields(
+                    db_session, user_id, level=new_level, field_timestamps=ts,
+                )
+
+                # Handle learning plan impact
+                plan_note = ""
+                active_plan = await LearningPlanRepo.get_active(db_session, user_id)
+                if active_plan:
+                    target_idx = (
+                        CEFR_LEVELS.index(active_plan.target_level)
+                        if active_plan.target_level in CEFR_LEVELS else 0
+                    )
+                    if new_idx >= target_idx:
+                        await LearningPlanRepo.delete(db_session, user_id)
+                        plan_note = (
+                            f"Learning plan completed — reached target level "
+                            f"{active_plan.target_level}. Create a new plan for further progression."
+                        )
+
+                await db_session.commit()
+            except SQLAlchemyError:
+                logger.exception("Failed to adjust level for user {}", user_id)
+                return _err("Database error adjusting level, please try again")
+
+        old_level = user.level
+        direction = "UP" if new_idx > old_idx else "DOWN"
+        result: dict[str, Any] = {
+            "status": "level_adjusted",
+            "direction": direction,
+            "old_level": old_level,
+            "new_level": new_level,
+            "justification": justification,
+        }
+        if plan_note:
+            result["plan_impact"] = plan_note
+
+        logger.info("Level adjusted for user {}: {} → {} ({})", user_id, old_level, new_level, direction)
+        return _ok(result)
+
     # --- Build list and permission check ---
 
     all_tools = [
@@ -1637,6 +1670,7 @@ def create_session_tools(
         get_exercise_history,
         get_progress_summary,
         manage_learning_plan,
+        adjust_level,
         end_session,
     ]
     if web_search_tool is not None:

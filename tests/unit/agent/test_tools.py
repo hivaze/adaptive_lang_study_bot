@@ -83,6 +83,23 @@ class TestToolConstants:
     def test_proactive_review_lacks_manage_learning_plan(self):
         assert "manage_learning_plan" not in _SESSION_TYPE_TOOLS[SessionType.PROACTIVE_REVIEW]
 
+    def test_adjust_level_in_tool_names(self):
+        assert "mcp__langbot__adjust_level" in TOOL_NAMES
+
+    def test_interactive_has_adjust_level(self):
+        assert "adjust_level" in _SESSION_TYPE_TOOLS[SessionType.INTERACTIVE]
+
+    def test_onboarding_has_adjust_level(self):
+        assert "adjust_level" in _SESSION_TYPE_TOOLS[SessionType.ONBOARDING]
+
+    def test_proactive_sessions_lack_adjust_level(self):
+        for st in (SessionType.PROACTIVE_REVIEW, SessionType.PROACTIVE_QUIZ,
+                   SessionType.PROACTIVE_SUMMARY, SessionType.PROACTIVE_NUDGE):
+            assert "adjust_level" not in _SESSION_TYPE_TOOLS[st]
+
+    def test_assessment_lacks_adjust_level(self):
+        assert "adjust_level" not in _SESSION_TYPE_TOOLS[SessionType.ASSESSMENT]
+
 
 class TestCanUseTool:
     """Test the can_use_tool callback returned by create_session_tools."""

@@ -79,7 +79,7 @@ from adaptive_lang_study_bot.metrics import (
     SESSIONS_CREATED,
 )
 from adaptive_lang_study_bot.pipeline.post_session import run_post_session
-from adaptive_lang_study_bot.utils import compute_level_progress, strip_mcp_prefix
+from adaptive_lang_study_bot.utils import strip_mcp_prefix
 
 # Remove CLAUDECODE env var once at import time so nested SDK subprocesses
 # can start (instead of popping it on every session creation).
@@ -564,13 +564,6 @@ async def _generate_and_send_summary(
         level_progress: str | None = None
         try:
             async with async_session_factory() as db:
-                # Level progress
-                user_fresh = await UserRepo.get(db, user_id)
-                if user_fresh and user_fresh.recent_scores:
-                    level_progress = compute_level_progress(
-                        user_fresh.recent_scores, user_fresh.level,
-                    )
-
                 active_plan = await LearningPlanRepo.get_active(db, user_id)
                 if active_plan:
                     topic_stats = await fetch_plan_topic_stats(db, user_id, active_plan)
@@ -586,6 +579,12 @@ async def _generate_and_send_summary(
                         f"{progress.get('progress_pct', 0)}% complete "
                         f"({progress.get('completed_topics', 0)}/{progress.get('total_topics', 0)} topics)"
                     )
+                    level_progress = (
+                        f"on track toward {active_plan.target_level} "
+                        f"({progress.get('progress_pct', 0)}% plan complete)"
+                    )
+                else:
+                    level_progress = "no active plan \u2014 level progression requires a learning plan"
         except Exception:
             logger.debug("Failed to fetch plan context for summary (user={})", user_id)
 

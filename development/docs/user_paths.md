@@ -149,7 +149,7 @@ User sends text
 - Have multiple concurrent sessions (one session per user, enforced by Redis lock)
 - Talk about non-language topics (agent is instructed to stay on-topic)
 - See the system prompt (agent refuses to reveal it)
-- Change their own level directly (auto-adjusted by scores)
+- Change their own level directly (agent-assessed via learning plan completion)
 - Change their tier (admin-assigned only)
 - Bypass rate limits (8 msg/min free, 20 msg/min premium)
 
@@ -439,7 +439,7 @@ Current: French
 ### What the User Cannot Do
 - Change their native language after onboarding (must delete account and re-register)
 - Change their tier (admin-only)
-- Change their level directly (auto-adjusted by performance)
+- Change their level directly (agent-assessed via adjust_level tool after plan assessment)
 - Set custom quiet hours (presets only)
 - Create schedules from settings UI (only via agent or onboarding)
 - See cost data or admin controls
@@ -735,7 +735,7 @@ Active sess: 3
 ### Explicitly Blocked
 | Action | Reason |
 |---|---|
-| Change their CEFR level directly | Auto-adjusted by exercise performance to prevent gaming |
+| Change their CEFR level directly | Agent-assessed via learning plan completion to ensure holistic evaluation |
 | Change their tier | Admin-assigned, no billing system |
 | Send non-text content | Bot only processes text (photos, voice, stickers rejected) |
 | Have multiple concurrent sessions | Redis lock enforces one-at-a-time |

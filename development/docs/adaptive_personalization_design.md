@@ -210,30 +210,16 @@ async def update_preference(args):
     "notes": str,        # brief observation about performance
 })
 async def record_exercise_result(args):
-    """System-driven: records result and triggers auto-adjustment."""
+    """System-driven: records result and updates weak/strong areas."""
     score = int(args["score"])
     if not 0 <= score <= 10:
         return error("Score must be 0-10")
 
     user = db.get(args["user_id"])
 
-    # --- Auto-adjustment logic (no LLM needed) ---
+    # NOTE: Level adjustment is now plan-anchored — the agent calls
+    # adjust_level after assessment, not automatic score thresholds.
     user["recent_scores"].append(score)
-    recent = user["recent_scores"][-5:]  # last 5 scores
-
-    # Level adjustment
-    avg = sum(recent) / len(recent) if recent else 5
-    if len(recent) >= 5:
-        if avg >= 9.0 and user["level"] != "C2":
-            user["level"] = next_level(user["level"])
-            adjustment = f"Level UP to {user['level']}!"
-        elif avg <= 3.0 and user["level"] != "A1":
-            user["level"] = prev_level(user["level"])
-            adjustment = f"Level adjusted to {user['level']} for better learning."
-        else:
-            adjustment = None
-    else:
-        adjustment = None
 
     # Weak/strong area tracking
     topic = args["topic"]
@@ -513,7 +499,7 @@ async def post_session_pipeline(user_id: str, session_id: str, session_cost: flo
     analytics.log_session(user_id, session_id, session_cost, user["level"])
 ```
 
-**Why pure Python, not LLM?** From Exp 13, the agent didn't reliably call write tools. Level adjustments, difficulty computation, and spaced repetition are deterministic — don't need (or trust) an LLM for these.
+**Why pure Python, not LLM?** From Exp 13, the agent didn't reliably call write tools. Difficulty computation and spaced repetition are deterministic — don't need (or trust) an LLM for these. Note: level adjustments were later moved to agent-driven assessment (adjust_level tool) tied to learning plan completion.
 
 ---
 
@@ -537,7 +523,7 @@ User message: "I want harder exercises"
 Agent gives quiz → user answers → agent evaluates
   → Agent calls record_exercise_result(score=3, topic="subjunctive")
   → can_use_tool validates: score in 0-10 ✓
-  → Tool executes: auto-adjusts level if avg drops, adds "subjunctive" to weak_areas
+  → Tool executes: adds "subjunctive" to weak_areas (level changes are plan-anchored via adjust_level)
   → PostToolUse hook sees low score → injects: "ADAPTIVE_HINT: simplify next exercise"
   → Agent adapts: offers simpler exercise on same topic
   → Post-session pipeline finalizes: preferred_difficulty → "easy"
@@ -587,7 +573,7 @@ User: "I'm bored with grammar, let's do something else"
 |-----------|--------------|---------|
 | Immutable rules | ~300 | Guardrails, core behavior |
 | Student profile | ~200-400 | Current state from DB |
-| Adaptive behavior | ~150 | Instructions for auto-adjustment |
+| Adaptive behavior | ~150 | Instructions for assessment-based level adjustment |
 | Session context | ~50 | Date, pending reviews |
 | **Total system prompt** | **~700-900** | Fits easily in context |
 

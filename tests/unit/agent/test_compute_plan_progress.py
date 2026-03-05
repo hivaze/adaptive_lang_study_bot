@@ -212,7 +212,7 @@ class TestConsolidationPhase:
         }
 
     def test_consolidation_uses_level_up_threshold(self):
-        """Consolidation topics need level_up_avg (8.5) to be completed, not 7.0."""
+        """Consolidation topics need consolidation_mastery_score (8.5) to be completed, not 7.0."""
         plan_data = self._make_plan_with_consolidation(
             regular_topics=["Verbs"],
             consolidation_topics=["Verbs"],
@@ -231,7 +231,7 @@ class TestConsolidationPhase:
         assert progress["phases"][1].get("consolidation") is True
 
     def test_consolidation_completed_at_high_score(self):
-        """Consolidation topics complete when avg >= level_up_avg."""
+        """Consolidation topics complete when avg >= consolidation_mastery_score."""
         plan_data = self._make_plan_with_consolidation(
             regular_topics=["Verbs"],
             consolidation_topics=["Verbs"],

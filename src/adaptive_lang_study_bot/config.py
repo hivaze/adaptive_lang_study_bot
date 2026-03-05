@@ -25,10 +25,9 @@ class BotTuning:
     difficulty_down_hard_normal: float = 4.5  # avg to go hard→normal
     difficulty_down_normal_easy: float = 4.5  # avg to go normal→easy
 
-    # -- Level auto-adjust (tools.py record_exercise_result) --
-    level_up_avg: float = 8.5
-    level_down_avg: float = 3.0
-    level_recent_window: int = 15
+    # -- Level assessment (tools.py adjust_level, consolidation) --
+    consolidation_mastery_score: float = 8.5  # mastery bar for consolidation phase topics
+    level_adjust_min_assessment_exercises: int = 5  # min exercises before adjust_level allowed
 
     # -- Weak / strong area thresholds (tools.py) --
     weak_area_score: int = 5  # score threshold to consider "weak"

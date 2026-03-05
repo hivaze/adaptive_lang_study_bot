@@ -130,39 +130,6 @@ def compute_new_streak(current_streak: int, last_updated: date | None, today: da
     return 1
 
 
-def compute_level_progress(scores: list[int], current_level: str) -> str:
-    """Compute a qualitative label describing progress toward the next level.
-
-    Returns a human-readable string for use in prompts/summaries (no numeric scores).
-    """
-    from adaptive_lang_study_bot.config import CEFR_LEVELS
-
-    window = tuning.level_recent_window
-    current_idx = CEFR_LEVELS.index(current_level) if current_level in CEFR_LEVELS else 0
-
-    if current_idx == len(CEFR_LEVELS) - 1:
-        return "at highest level (C2)"
-
-    if len(scores) < window:
-        remaining = window - len(scores)
-        return f"not enough exercises yet (need {remaining} more for level evaluation)"
-
-    recent = scores[-window:]
-    avg = sum(recent) / len(recent)
-
-    if avg >= tuning.level_up_avg:
-        return "ready for level up (will happen automatically on next exercise)"
-
-    # Check trend: compare last 5 vs full window average
-    last_5 = scores[-5:] if len(scores) >= 5 else scores
-    last_5_avg = sum(last_5) / len(last_5)
-
-    if last_5_avg > avg + 0.5:
-        return "progressing toward next level"
-    if avg <= tuning.level_down_avg and current_idx > 0:
-        return "needs more practice to maintain current level"
-    return "stable at current level"
-
 
 def is_user_admin(user: User) -> bool:
     """Check if a user has admin privileges.

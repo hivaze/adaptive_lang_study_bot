@@ -27,13 +27,13 @@ poetry add <package>                           # add dependency
 src/adaptive_lang_study_bot/
 ├── config.py              # Settings (pydantic-settings), BotTuning (centralized magic numbers), TIER_LIMITS
 ├── enums.py               # StrEnum: UserTier, SessionType, SessionStyle, Difficulty, CloseReason, NotificationTier, NotificationStatus, ScheduleType, ScheduleStatus, PipelineStatus, AccessRequestStatus
-├── utils.py               # Helpers: score_label, user_local_now, safe_zoneinfo, compute_next_trigger, get_language_name, strip_mcp_prefix, is_user_admin, compute_new_streak, compute_level_progress, summarize_tool_usage, stamp_field/stamp_fields/get_item_date (field timestamps)
+├── utils.py               # Helpers: score_label, user_local_now, safe_zoneinfo, compute_next_trigger, get_language_name, strip_mcp_prefix, is_user_admin, compute_new_streak, summarize_tool_usage, stamp_field/stamp_fields/get_item_date (field timestamps)
 ├── i18n.py                # t(key, lang, **kwargs) with JSON locale fallback
 ├── logging_config.py      # Loguru setup + stdlib bridge, runtime log level toggle
 ├── metrics.py             # Prometheus counters/gauges/histograms (16 metrics)
 ├── locales/               # JSON locale files (en, ru, es, fr, de, pt, it)
 ├── agent/
-│   ├── tools.py           # 11 core + 2 optional web MCP tools (web_search, web_extract; conditional on Tavily), _SESSION_TYPE_TOOLS, _USER_MUTABLE_FIELDS, compute_plan_progress(), fetch_plan_topic_stats(), _maybe_add_consolidation_phase()
+│   ├── tools.py           # 12 core + 2 optional web MCP tools (web_search, web_extract; conditional on Tavily), _SESSION_TYPE_TOOLS, _USER_MUTABLE_FIELDS, compute_plan_progress(), fetch_plan_topic_stats(), _maybe_add_consolidation_phase()
 │   ├── hooks.py           # PostToolUse (adaptive hints), UserPromptSubmit (turn limit), Stop hooks
 │   ├── prompt_builder.py  # build_system_prompt(), build_proactive_prompt(), compute_session_context()
 │   ├── session_manager.py # SessionManager (interactive) + run_proactive_llm_session() + run_summary_llm_session() (standalone)
@@ -89,7 +89,7 @@ Each `ClaudeSDKClient` instance spawns a Claude CLI subprocess. Sessions are ass
 
 1. **System prompt** (`prompt_builder.py`) — full string override, built fresh per session from a DB snapshot of the user's profile. Up to 15 sections for interactive (role, rules, output format, tool requirements, student profile, first session guide, teaching approach, level guidance, exercise types, vocab strategy, session context, comeback adaptation, scheduling, learning plan, bot capabilities). Some are conditional: first session guide (new users only), level guidance, vocab strategy, comeback adaptation (gap ≥ 48h), learning plan (three modes: active plan with progress, propose plan interactively on early sessions ≤ `plan_auto_create_after_sessions`, auto-create plan silently for experienced users). Proactive prompts are compact (5 sections + conditional learning plan context for proactive_summary: role+rules, profile, time context, task, trigger context).
 
-2. **MCP tools** (`tools.py`) — 11 core tools + 2 optional web tools (`web_search`, `web_extract`; conditional on Tavily library + `TAVILY_API_KEY`) registered via `@tool` + `create_sdk_mcp_server()`. Each tool is a closure capturing `(session_factory, user_id)` — creates its own short-lived DB session per call. Tools are filtered by `_SESSION_TYPE_TOOLS[session_type]` before MCP server creation — the SDK never sees disallowed tools.
+2. **MCP tools** (`tools.py`) — 12 core tools + 2 optional web tools (`web_search`, `web_extract`; conditional on Tavily library + `TAVILY_API_KEY`) registered via `@tool` + `create_sdk_mcp_server()`. Each tool is a closure capturing `(session_factory, user_id)` — creates its own short-lived DB session per call. Tools are filtered by `_SESSION_TYPE_TOOLS[session_type]` before MCP server creation — the SDK never sees disallowed tools.
 
 3. **Hooks** (`hooks.py`) — per-session `SessionHookState` tracks exercise scores, tool calls, turn count. `PostToolUse` injects adaptive difficulty hints after exercises (cheap behavior steering — no extra LLM call). `UserPromptSubmit` injects wrap-up hint at 80% of turn limit.
 
@@ -239,7 +239,7 @@ SDK spawns Claude CLI as subprocess. Nesting guard removed at import time in `se
 
 | Type | Entry point | Model | Hooks | Tools | Timeout | Notes |
 |------|-------------|-------|-------|-------|---------|-------|
-| Interactive | `SessionManager._create_session()` | Tier-based (haiku/sonnet) | PostToolUse + UserPromptSubmit + Stop | 7-13 (session-type filtered) | Idle timeout (6/10 min) | Long-lived, multi-turn, reused across messages |
+| Interactive | `SessionManager._create_session()` | Tier-based (haiku/sonnet) | PostToolUse + UserPromptSubmit + Stop | 8-14 (session-type filtered) | Idle timeout (6/10 min) | Long-lived, multi-turn, reused across messages |
 | Proactive | `run_proactive_llm_session()` | haiku (`tuning.proactive_model`) | None | 0-2 (web_search, web_extract; conditional on Tavily) | 30s hard timeout | Standalone function, single query, generates text directly |
 | Summary | `run_summary_llm_session()` | haiku (`tuning.proactive_model`) | None | None (tool-less) | 15s timeout, max 3 turns | Generates session-end summary, no DB writes |
 
@@ -282,7 +282,7 @@ return {
 
 **Proactive** (`build_proactive_prompt`) — 5-6 sections + conditional LEARNING PLAN CONTEXT for proactive_summary: ROLE+RULES, TOOLS (conditional, when web_search available), STUDENT PROFILE (compact), TIME CONTEXT, TASK (per-session-type instructions from `_PROACTIVE_TASK_INSTRUCTIONS`), TRIGGER CONTEXT, LEARNING PLAN CONTEXT (conditional, proactive_summary only). Agent generates notification text directly, optionally using web_search/web_extract tools to enrich content.
 
-**Summary** (`build_summary_prompt`) — 4 sections: ROLE, RULES (close-reason-aware tone), SESSION DATA (exercise counts, topics, words, duration, qualitative level progress), TASK (progress vs no-progress branch, includes level trajectory hint).
+**Summary** (`build_summary_prompt`) — 4 sections: ROLE, RULES (close-reason-aware tone), SESSION DATA (exercise counts, topics, words, duration, plan progress), TASK (progress vs no-progress branch, includes plan progress hint).
 
 SDK exception types: `CLINotFoundError`, `ProcessError`, `ClaudeSDKError`.
 
@@ -301,7 +301,7 @@ These rules MUST be maintained when modifying code:
 **Security boundaries** (in `tools.py`):
 - `_USER_MUTABLE_FIELDS`: only `{interests, learning_goals, preferred_difficulty, session_style, topics_to_avoid, notifications_paused, additional_notes}` can be modified via `update_preference`
 - `_SESSION_TYPE_TOOLS`: defines which tools each session type can access — disallowed tools are excluded from MCP server entirely
-- `manage_learning_plan` write actions (`create`, `adapt`) only in interactive/onboarding; proactive sessions only have web_search/web_extract (conditional on Tavily)
+- `manage_learning_plan` write actions (`create`, `adapt`) only in interactive; `adjust_level` only in interactive/onboarding; proactive sessions only have web_search/web_extract (conditional on Tavily)
 - Array caps enforced: interests ≤ 8, learning_goals ≤ 8, topics_to_avoid ≤ 8, additional_notes ≤ 10, weak/strong areas ≤ 10
 
 **One session per user**: Redis SET NX lock. `SessionManager` for interactive, `run_proactive_llm_session()` as standalone function for proactive.
@@ -332,7 +332,7 @@ Key design choices (read code for details):
 - FSRS state denormalized in vocabulary (`fsrs_due` column) for efficient due-card queries
 - Schedules use RRULE strings; `next_trigger_at` is the polled field
 - Notification preferences inlined in users table (avoids JOIN on proactive tick)
-- Learning plans: one per user (UNIQUE constraint), JSONB `plan_data` stores phases/topics, progress derived from exercise results via `compute_plan_progress()` (no stored per-topic state). Auto-consolidation: when plan reaches 100% completion but user level < target, `_maybe_add_consolidation_phase()` appends a consolidation phase targeting weakest topics at `level_up_avg` mastery threshold (triggered via `manage_learning_plan(action='get')`). Consolidation phases use `consolidation_added_at` date for fresh-exercise-only stat counting via `fetch_plan_topic_stats()`.
+- Learning plans: one per user (UNIQUE constraint), JSONB `plan_data` stores phases/topics, progress derived from exercise results via `compute_plan_progress()` (no stored per-topic state). Level progression is plan-anchored: the agent uses `adjust_level` after assessment, not automatic sliding-window. Auto-consolidation: when plan reaches 100% completion but user level < target, `_maybe_add_consolidation_phase()` appends a consolidation phase targeting weakest topics at `consolidation_mastery_score` threshold (triggered via `manage_learning_plan(action='get')`). Consolidation phases use `consolidation_added_at` date for fresh-exercise-only stat counting via `fetch_plan_topic_stats()`.
 - Field timestamps: `users.field_timestamps` JSONB tracks when profile fields were set/changed (date-only, user-local). Scalar fields use field name → ISO date string. Array fields use `sha256(item)[:8]` hex hash → ISO date string (avoids duplicating item text). Utilities: `stamp_field()`, `stamp_fields()`, `get_item_date()` in `utils.py`. Rendered as "(since DATE)" in system/proactive prompts. Language switch resets timestamps.
 
 ## Sensitive Files

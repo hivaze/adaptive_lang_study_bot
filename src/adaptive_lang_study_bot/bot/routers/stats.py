@@ -12,7 +12,7 @@ from adaptive_lang_study_bot.config import TIER_LIMITS, UserTier
 from adaptive_lang_study_bot.db.models import User
 from adaptive_lang_study_bot.db.repositories import ExerciseResultRepo, LearningPlanRepo, VocabularyRepo
 from adaptive_lang_study_bot.i18n import DEFAULT_LANGUAGE, get_localized_language_name, render_goal, t
-from adaptive_lang_study_bot.utils import compute_level_progress, score_label
+from adaptive_lang_study_bot.utils import score_label
 
 router = Router()
 
@@ -58,11 +58,6 @@ async def cmd_stats(message: Message, user: User, db_session: AsyncSession) -> N
         strong = ", ".join(esc(a) for a in user.strong_areas)
         lines.append(t("stats.strong_areas", lang, areas=strong))
 
-    # Level progress
-    if user.recent_scores:
-        level_progress = compute_level_progress(user.recent_scores, user.level)
-        lines.append(t("stats.level_progress", lang, progress=esc(level_progress)))
-
     # Learning plan
     plan = await LearningPlanRepo.get_active(db_session, user.telegram_id)
     if plan:
@@ -103,6 +98,17 @@ async def cmd_stats(message: Message, user: User, db_session: AsyncSession) -> N
                     focus=esc(phase["focus"] or ""),
                 ))
                 break
+
+    # Level progress (plan-based)
+    if plan:
+        lines.append(t(
+            "stats.level_progress_plan", lang,
+            current_level=esc(user.level),
+            target_level=esc(plan.target_level),
+            pct=progress["progress_pct"],
+        ))
+    else:
+        lines.append(t("stats.level_progress_no_plan", lang, level=esc(user.level)))
 
     if recent:
         lines.append(t("stats.recent_exercises", lang))

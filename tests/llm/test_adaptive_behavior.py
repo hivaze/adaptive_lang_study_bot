@@ -1,7 +1,7 @@
 """Category C: Adaptive behavior — hooks and hints work in practice.
 
-These tests verify that the PostToolUse adaptive hints and the automatic
-level adjustment logic fire correctly through real SDK sessions.
+These tests verify that the PostToolUse adaptive hints and the
+weak/strong area tracking logic fire correctly through real SDK sessions.
 """
 
 import pytest
@@ -9,40 +9,6 @@ import pytest
 from adaptive_lang_study_bot.db.repositories import UserRepo
 
 pytestmark = [pytest.mark.llm, pytest.mark.timeout(60)]
-
-
-async def test_high_score_triggers_level_up(create_llm_session):
-    """When avg(last 5 scores) >= 9.0, the tool should auto-adjust level up."""
-    session = await create_llm_session(
-        max_turns=4,
-        user_overrides={
-            "level": "A1",
-            "recent_scores": [9, 10, 9, 10],  # Need 1 more score >= 9 to trigger
-        },
-    )
-
-    await session.query_and_collect(
-        "I just completed a translation exercise on basic greetings. "
-        "I got everything right — perfect score! "
-        "Please record this result: exercise_type='translation', "
-        "topic='greetings', score=10, max_score=10. "
-        "Use the record_exercise_result tool."
-    )
-
-    assert "record_exercise_result" in session.bare_tools, (
-        f"Expected record_exercise_result called, got: {session.bare_tools}"
-    )
-
-    # The record_exercise_result tool auto-adjusts level when avg(last 5) >= 9.0
-    # With scores [9, 10, 9, 10, 10], avg = 9.6 → level should go from A1 to A2
-    user = await UserRepo.get(session.db_session, session.user.telegram_id)
-    assert user.recent_scores, "Expected scores to be recorded"
-    if len(user.recent_scores) >= 5:
-        avg = sum(user.recent_scores[-5:]) / 5
-        if avg >= 9.0:
-            assert user.level == "A2", (
-                f"Expected level A2 after avg={avg:.1f}, got {user.level}"
-            )
 
 
 async def test_weak_area_tracking(create_llm_session):
