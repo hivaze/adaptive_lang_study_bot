@@ -81,7 +81,7 @@ class User(Base):
     quiet_hours_start: Mapped[time | None] = mapped_column(Time)
     quiet_hours_end: Mapped[time | None] = mapped_column(Time)
     notifications_paused: Mapped[bool] = mapped_column(Boolean, default=False)
-    max_notifications_per_day: Mapped[int] = mapped_column(SmallInteger, default=3)
+    max_notifications_per_day: Mapped[int] = mapped_column(SmallInteger, default=5)
     notifications_sent_today: Mapped[int] = mapped_column(SmallInteger, default=0)
     notifications_count_reset_date: Mapped[date | None] = mapped_column(Date)
     notification_preferences: Mapped[dict] = mapped_column(

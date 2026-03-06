@@ -694,11 +694,21 @@ def _build_template_summary(managed: "ManagedSession", session_data: dict | None
         )
         exercise_count = 0
 
+    # Duration
+    duration = session_data.get("duration_minutes", 0)
+    if duration >= 1:
+        parts.append(t("session.summary_duration", lang, minutes=duration))
+
     if exercise_count:
         parts.append(t("session.summary_exercises", lang, count=exercise_count))
         if session_data["exercise_topics"]:
             unique_topics = list(dict.fromkeys(session_data["exercise_topics"]))[:5]
             parts.append(t("session.summary_topics", lang, topics=", ".join(unique_topics)))
+        # Average score
+        scores = session_data.get("exercise_scores", [])
+        if scores:
+            avg = round(sum(scores) / len(scores), 1)
+            parts.append(t("session.summary_avg_score", lang, score=avg))
     if vocab_count:
         parts.append(t("session.summary_vocab", lang, count=vocab_count))
         if session_data["words_added"]:

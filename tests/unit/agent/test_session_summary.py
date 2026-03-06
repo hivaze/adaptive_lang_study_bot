@@ -181,8 +181,8 @@ class TestBuildTemplateSummary:
         assert "3" in summary  # exercise count
         assert "verbs" in summary
         assert "nouns" in summary
-        # Numeric scores should not appear in user-facing summaries
-        assert "8.0" not in summary
+        # Average score should now appear in user-facing summaries
+        assert "8.0/10" in summary
 
     def test_vocab_with_word_samples(self):
         state = SessionHookState(user_id=1)

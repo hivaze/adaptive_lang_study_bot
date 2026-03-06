@@ -377,14 +377,20 @@ async def on_native_selected(
         await callback.answer(t("start.invalid_selection", DEFAULT_LANGUAGE), show_alert=True)
         return
 
-    # Clear target_language when native changes — prevents stale pairing
+    # Clear target_language and downstream onboarding state when native
+    # changes — prevents stale pairing and step resume skipping ahead
     # if the user goes back during onboarding and picks a different native.
+    milestones = dict(user.milestones or {})
+    for key in ("onboarding_step", "onboarding_goals", "onboarding_interests"):
+        milestones.pop(key, None)
+
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     ts = stamp_field(user.field_timestamps, "native_language", native_code, date_str)
     await UserRepo.update_fields(
         db_session, user.telegram_id,
         native_language=native_code,
         target_language="",
+        milestones=milestones,
         field_timestamps=ts,
     )
 
@@ -732,11 +738,18 @@ async def on_schedule_pref_selected(
         now_utc = datetime.now(timezone.utc)
         now_local = now_utc.astimezone(user_tz)
 
-        # Next occurrence of the chosen hour
-        daily_local = now_local.replace(hour=hour, minute=0, second=0, microsecond=0)
-        if daily_local <= now_local:
-            daily_local += timedelta(days=1)
-        daily_trigger_utc = daily_local.astimezone(timezone.utc)
+        # Practice reminder at the chosen hour (primary schedule)
+        practice_local = now_local.replace(hour=hour, minute=0, second=0, microsecond=0)
+        if practice_local <= now_local:
+            practice_local += timedelta(days=1)
+        practice_trigger_utc = practice_local.astimezone(timezone.utc)
+
+        # Vocab review: 2 hours before practice reminder
+        review_hour = (hour - 2) % 24
+        review_local = now_local.replace(hour=review_hour, minute=0, second=0, microsecond=0)
+        if review_local <= now_local:
+            review_local += timedelta(days=1)
+        review_trigger_utc = review_local.astimezone(timezone.utc)
 
         # Weekly report: Sunday at chosen_hour + 1 (wraps to Monday 0:00 if hour=23)
         report_hour = (hour + 1) % 24
@@ -755,9 +768,20 @@ async def on_schedule_pref_selected(
             db_session,
             user_id=user.telegram_id,
             schedule_type=ScheduleType.DAILY_REVIEW,
+            rrule=f"FREQ=DAILY;BYHOUR={review_hour};BYMINUTE=0",
+            next_trigger_at=review_trigger_utc,
+            description=t("start.sched_desc_daily", lang, time=f"{review_hour}:00"),
+            notification_tier=NotificationTier.TEMPLATE,
+            created_by="onboarding",
+        )
+
+        await ScheduleRepo.create(
+            db_session,
+            user_id=user.telegram_id,
+            schedule_type=ScheduleType.PRACTICE_REMINDER,
             rrule=f"FREQ=DAILY;BYHOUR={hour};BYMINUTE=0",
-            next_trigger_at=daily_trigger_utc,
-            description=t("start.sched_desc_daily", lang, time=f"{hour}:00"),
+            next_trigger_at=practice_trigger_utc,
+            description=t("start.sched_desc_practice", lang, time=f"{hour}:00"),
             notification_tier=NotificationTier.TEMPLATE,
             created_by="onboarding",
         )
@@ -879,9 +903,10 @@ async def on_back_to_tz(callback: CallbackQuery, user: User, db_session: AsyncSe
     if user.onboarding_completed:
         await callback.answer(t("start.already_onboarded_tz", lang), show_alert=True)
         return
-    # Reset step so /start resume lands on timezone
+    # Reset step and downstream selections so /start resume lands on timezone
     milestones = dict(user.milestones or {})
-    milestones.pop("onboarding_step", None)
+    for key in ("onboarding_step", "onboarding_goals", "onboarding_interests"):
+        milestones.pop(key, None)
     await UserRepo.update_fields(db_session, user.telegram_id, milestones=milestones)
     keyboard = _build_timezone_kb(lang=lang)
     await _safe_edit(callback, _step(3, t("start.ask_timezone", lang)), reply_markup=keyboard)
@@ -895,9 +920,11 @@ async def on_back_to_level(callback: CallbackQuery, user: User, db_session: Asyn
     if user.onboarding_completed:
         await callback.answer()
         return
-    # Reset step so /start resume lands on level
+    # Reset step and downstream selections so /start resume lands on level
     milestones = dict(user.milestones or {})
     milestones["onboarding_step"] = 4
+    for key in ("onboarding_goals", "onboarding_interests"):
+        milestones.pop(key, None)
     await UserRepo.update_fields(db_session, user.telegram_id, milestones=milestones)
     target_name = get_localized_language_name(user.target_language, lang)
     keyboard = _build_level_kb(lang=lang)

@@ -7,6 +7,7 @@ from aiogram import Bot
 from loguru import logger
 
 from adaptive_lang_study_bot.agent.pool import session_pool
+from adaptive_lang_study_bot.agent.session_manager import session_manager
 from adaptive_lang_study_bot.bot.helpers import TELEGRAM_MSG_MAX_LEN, markdown_to_telegram_html
 from adaptive_lang_study_bot.cache.client import get_redis
 from adaptive_lang_study_bot.config import TIER_LIMITS, settings
@@ -386,7 +387,7 @@ def _status_badge(status: str) -> str:
         "active": "light", "paused": "mid", "expired": "dark",
         "skipped_quiet": "mid", "skipped_paused": "mid",
         "skipped_preference": "mid", "skipped_limit": "mid",
-        "skipped_dedup": "dark",
+        "skipped_dedup": "dark", "skipped_cooldown": "dark",
     }
     style = styles.get(status, "dark")
     return f'<span class="badge badge-{style}">{status}</span>'
@@ -520,7 +521,7 @@ async def send_direct_message(telegram_id: int, markdown_text: str) -> str:
 # ---------------------------------------------------------------------------
 
 _USER_HEADERS = [
-    "ID", "Name", "Languages", "Level", "Streak",
+    "ID", "Name", "Languages", "Level", "Style", "Streak",
     "Vocab", "Sessions", "Tier", "Last Active", "Active", "Admin",
 ]
 
@@ -533,6 +534,7 @@ def _format_user_rows(users: list) -> list[list]:
             u.first_name,
             f"{u.native_language} -> {u.target_language}",
             u.level,
+            u.session_style,
             f"{u.streak_days}d",
             u.vocabulary_count,
             u.sessions_completed,
@@ -631,6 +633,7 @@ async def get_user_detail(telegram_id: int) -> str:
             schedules = await ScheduleRepo.get_for_user(db, telegram_id, active_only=False)
             recent_sessions = await SessionRepo.get_recent(db, telegram_id, limit=5)
             recent_notifs = await NotificationRepo.get_recent(db, telegram_id, limit=5)
+            learning_plan = await LearningPlanRepo.get_active(db, telegram_id)
 
         onboarding_badge = (
             '<span class="badge badge-light">Complete</span>'
@@ -638,12 +641,17 @@ async def get_user_detail(telegram_id: int) -> str:
             else '<span class="badge badge-mid">Pending</span>'
         )
         admin_badge = ' <span class="badge badge-accent">Admin</span>' if user.is_admin else ""
+        whitelist_badge = (
+            ' <span class="badge badge-light">Whitelisted</span>'
+            if user.whitelist_approved
+            else ""
+        )
         created = user.created_at.strftime("%Y-%m-%d %H:%M") if user.created_at else "N/A"
 
         lines = [
             f"### {_esc(user.first_name)} (ID: {user.telegram_id})",
             f"**Username:** @{user.telegram_username or 'N/A'} &nbsp; "
-            f"{_active_badge(user.is_active)} {_tier_badge(user.tier)}{admin_badge}",
+            f"{_active_badge(user.is_active)} {_tier_badge(user.tier)}{admin_badge}{whitelist_badge}",
             f"**Onboarding:** {onboarding_badge} &nbsp; **Created:** {created}",
             "",
             "---",
@@ -663,6 +671,7 @@ async def get_user_detail(telegram_id: int) -> str:
             f"**Interests:** {', '.join(render_interest(i) for i in user.interests) if user.interests else 'none'}",
             f"**Learning goals:** {'; '.join(render_goal(g, target_language=user.target_language) for g in user.learning_goals) if user.learning_goals else 'none'}",
             f"**Topics to avoid:** {', '.join(user.topics_to_avoid) if user.topics_to_avoid else 'none'}",
+            f"**Additional notes:** {'; '.join(user.additional_notes) if user.additional_notes else 'none'}",
             f"**Weak areas:** {', '.join(user.weak_areas) if user.weak_areas else 'none'}",
             f"**Strong areas:** {', '.join(user.strong_areas) if user.strong_areas else 'none'}",
             f"**Recent scores:** {user.recent_scores[-10:] if user.recent_scores else 'none'}",
@@ -698,6 +707,26 @@ async def get_user_detail(telegram_id: int) -> str:
             f"| **Last sent** | {last_notif} |",
         ]
 
+        if learning_plan:
+            plan_phases = learning_plan.plan_data.get("phases", [])
+            total_topics = sum(len(p.get("topics", [])) for p in plan_phases)
+            adapted_str = (
+                f"{learning_plan.times_adapted} (last: {learning_plan.last_adapted_at.strftime('%Y-%m-%d')})"
+                if learning_plan.last_adapted_at
+                else str(learning_plan.times_adapted)
+            )
+            lines += [
+                "", "---", "",
+                "### Learning Plan",
+                "",
+                f"| | |",
+                f"|---|---|",
+                f"| **Level path** | {learning_plan.current_level} -> {learning_plan.target_level} |",
+                f"| **Timeline** | {learning_plan.start_date} to {learning_plan.target_end_date} ({learning_plan.total_weeks}w) |",
+                f"| **Phases** | {len(plan_phases)} ({total_topics} topics) |",
+                f"| **Adaptations** | {adapted_str} |",
+            ]
+
         if user.last_activity:
             lines += ["", "---", "", "### Last Activity", ""]
             for k, v in user.last_activity.items():
@@ -728,14 +757,21 @@ async def get_user_detail(telegram_id: int) -> str:
 
         if recent_sessions:
             lines += ["", "---", "", "### Recent Sessions", ""]
-            lines.append("| Started | Type | Turns | Cost | Pipeline |")
-            lines.append("|---------|------|-------|------|----------|")
+            lines.append("| Started | Type | Turns | Cost | Pipeline | AI Summary |")
+            lines.append("|---------|------|-------|------|----------|------------|")
             for s in recent_sessions:
                 cost_str = f"${float(s.cost_usd):.4f}" if s.cost_usd else "$0"
                 started = s.started_at.strftime("%Y-%m-%d %H:%M") if s.started_at else "?"
+                summary_preview = ""
+                if s.ai_summary:
+                    summary_preview = _esc(
+                        (s.ai_summary[:60] + "...")
+                        if len(s.ai_summary) > 60
+                        else s.ai_summary
+                    )
                 lines.append(
                     f"| {started} | {s.session_type} | {s.num_turns} "
-                    f"| {cost_str} | {_status_badge(s.pipeline_status)} |"
+                    f"| {cost_str} | {_status_badge(s.pipeline_status)} | {summary_preview} |"
                 )
 
         if recent_notifs:
@@ -783,6 +819,100 @@ async def get_sessions_data() -> list[list]:
             s.duration_ms or 0,
         ])
     return rows
+
+
+async def get_session_detail(session_id_prefix: str) -> str:
+    """Get detailed session info by ID prefix."""
+    if not session_id_prefix or not session_id_prefix.strip():
+        return "Enter a session ID (or prefix)."
+    prefix = session_id_prefix.strip()
+
+    try:
+        async with async_session_factory() as db:
+            # Search by prefix
+            sessions = await SessionRepo.list_recent_all(db, limit=200)
+            match = None
+            for s in sessions:
+                if str(s.id).startswith(prefix):
+                    match = s
+                    break
+            if match is None:
+                return f"Session starting with `{prefix}` not found."
+
+            exercises = await ExerciseResultRepo.get_by_session(db, match.id)
+
+        cost_str = f"${float(match.cost_usd):.4f}" if match.cost_usd else "$0"
+        started = match.started_at.strftime("%Y-%m-%d %H:%M UTC") if match.started_at else "?"
+        ended = match.ended_at.strftime("%Y-%m-%d %H:%M UTC") if match.ended_at else "ongoing"
+        duration = f"{match.duration_ms / 1000:.1f}s" if match.duration_ms else "N/A"
+
+        lines = [
+            f"### Session {str(match.id)[:8]}",
+            "",
+            "| | |",
+            "|---|---|",
+            f"| **Full ID** | `{match.id}` |",
+            f"| **User** | {match.user_id} |",
+            f"| **Type** | {match.session_type} |",
+            f"| **Started** | {started} |",
+            f"| **Ended** | {ended} |",
+            f"| **Duration** | {duration} |",
+            f"| **Turns** | {match.num_turns} |",
+            f"| **Tool calls** | {match.tool_calls_count} |",
+            f"| **Cost** | {cost_str} |",
+            f"| **Tokens** | in: {match.input_tokens}, out: {match.output_tokens} |",
+            f"| **Cache** | created: {match.cache_creation_tokens}, read: {match.cache_read_tokens} |",
+            f"| **Pipeline** | {_status_badge(match.pipeline_status)} |",
+        ]
+
+        if match.tool_calls_detail:
+            lines += ["", "**Tool calls breakdown:**"]
+            for tool_name, count in sorted(match.tool_calls_detail.items()):
+                lines.append(f"- `{tool_name}`: {count}")
+
+        if match.pipeline_issues:
+            lines += ["", "**Pipeline issues:**"]
+            if isinstance(match.pipeline_issues, dict):
+                issues_list = match.pipeline_issues.get("issues", [])
+                if isinstance(issues_list, list):
+                    for issue in issues_list:
+                        lines.append(f"- {issue}")
+                else:
+                    lines.append(f"- {match.pipeline_issues}")
+            else:
+                lines.append(f"- {match.pipeline_issues}")
+
+        if exercises:
+            lines += ["", "---", "", f"### Exercises ({len(exercises)})", ""]
+            lines.append("| Type | Topic | Score | Words |")
+            lines.append("|------|-------|-------|-------|")
+            for ex in exercises:
+                words = ", ".join(ex.words_involved[:5]) if ex.words_involved else "-"
+                lines.append(f"| {ex.exercise_type} | {_esc(ex.topic)} | {ex.score}/{ex.max_score} | {_esc(words)} |")
+
+        if match.ai_summary:
+            lines += [
+                "", "---", "",
+                "### AI Summary",
+                "",
+                match.ai_summary,
+            ]
+
+        if match.system_prompt:
+            prompt_preview = match.system_prompt[:2000]
+            if len(match.system_prompt) > 2000:
+                prompt_preview += f"\n\n*... truncated ({len(match.system_prompt)} chars total)*"
+            lines += [
+                "", "---", "",
+                "### System Prompt (preview)",
+                "",
+                f"```\n{prompt_preview}\n```",
+            ]
+
+        return "\n".join(lines)
+
+    except SQLAlchemyError as e:
+        return f"**Error:** {e}"
 
 
 # ---------------------------------------------------------------------------
@@ -960,16 +1090,18 @@ async def get_system_health() -> str:
     except Exception:
         lines.append('- <span class="health-alert">DOWN</span> **Database** &mdash; unavailable')
 
-    # Session pool
+    # Session pool + active sessions
     try:
         int_active = session_pool.interactive_active
         int_max = settings.max_concurrent_interactive_sessions
         pro_active = session_pool.proactive_active
         pro_max = settings.max_concurrent_proactive_sessions
+        active_sessions = session_manager.get_active_count()
         lines += [
             "",
             f"""\
 <div class="stat-row">
+<div class="stat-card"><div class="stat-value">{active_sessions}</div><div class="stat-label">Active Sessions</div></div>
 <div class="stat-card"><div class="stat-value">{int_active}/{int_max}</div><div class="stat-label">Interactive pool</div></div>
 <div class="stat-card"><div class="stat-value">{pro_active}/{pro_max}</div><div class="stat-label">Proactive pool</div></div>
 </div>""",
@@ -991,8 +1123,8 @@ async def get_system_health() -> str:
         "| Setting | Value |",
         "|---------|-------|",
         f"| Proactive tick | {settings.proactive_tick_interval_seconds}s |",
-        "| Free model | claude-haiku-4-5 |",
-        "| Premium model | claude-sonnet-4-6 |",
+        f"| Free model | {TIER_LIMITS[UserTier.FREE].model} |",
+        f"| Premium model | {TIER_LIMITS[UserTier.PREMIUM].model} |",
         f"| DB host | {settings.postgres_host}:{settings.postgres_port} |",
         f"| Redis | {redis_display} |",
         "",
@@ -1436,8 +1568,8 @@ def create_admin_app() -> gr.Blocks:
                 max_height=500,
                 interactive=False,
                 column_widths=[
-                    "90px", "120px", "110px", "60px", "55px",
-                    "55px", "65px", "75px", "100px", "50px", "50px",
+                    "90px", "120px", "110px", "50px", "75px", "50px",
+                    "50px", "60px", "70px", "95px", "45px", "45px",
                 ],
             )
             refresh_users_btn = gr.Button("Reload All Users", variant="secondary", size="sm")
@@ -1493,6 +1625,21 @@ def create_admin_app() -> gr.Blocks:
             )
             refresh_sessions_btn = gr.Button("Refresh", variant="secondary", size="sm")
             refresh_sessions_btn.click(get_sessions_data, outputs=sessions_table)
+
+            with gr.Accordion("Session Detail", open=False):
+                session_id_input = gr.Textbox(
+                    label="Session ID (or prefix)",
+                    placeholder="e.g. a1b2c3d4",
+                )
+                session_detail_btn = gr.Button("View Session", variant="primary", size="sm")
+                session_detail_md = gr.Markdown(
+                    sanitize_html=False, elem_classes=["report-md"],
+                )
+            session_detail_btn.click(
+                get_session_detail,
+                inputs=session_id_input,
+                outputs=session_detail_md,
+            )
 
         # --- Costs tab ---
         with gr.Tab("Costs") as costs_tab:

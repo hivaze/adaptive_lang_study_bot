@@ -170,8 +170,10 @@ async def should_send(user: User, notification_type: str) -> tuple[bool, str]:
     """Check all gates before sending a notification.
 
     Returns ``(can_send, skip_reason)``.  ``skip_reason`` is one of
-    ``"skipped_paused"``, ``"skipped_quiet"``, ``"skipped_limit"``,
-    ``"skipped_dedup"`` or ``""`` when sending is allowed.
+    ``"skipped_paused"``, ``"skipped_preference"``, ``"skipped_quiet"``,
+    ``"skipped_cooldown"``, ``"skipped_dedup"`` or ``""`` when sending
+    is allowed.  ``"skipped_limit"`` is handled downstream in
+    ``dispatch_notification()`` via atomic ``check_and_increment_notification``.
 
     NOTE: Dedup is checked here (read-only) as an early exit.  The
     authoritative atomic claim (SET NX) happens in dispatch_notification()
@@ -372,9 +374,9 @@ async def dispatch_notification(
                 cost_usd=llm_cost,
             )
             await db.commit()
-            # Release dedup slot so the next tick can retry.
-            if dedup_claimed:
-                await _release_dedup_slot(dedup_key, user.telegram_id)
+            # Keep dedup slot claimed — daily limit won't reset until tomorrow,
+            # so retrying every tick would just generate DB noise (skipped_limit
+            # rows every 60s). The dedup key expires at local midnight anyway.
             if llm_reserved:
                 try:
                     redis = await get_redis()
