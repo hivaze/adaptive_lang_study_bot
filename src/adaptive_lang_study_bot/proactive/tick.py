@@ -27,7 +27,7 @@ from adaptive_lang_study_bot.db.repositories import (
 )
 from adaptive_lang_study_bot.enums import ScheduleStatus, ScheduleType
 from adaptive_lang_study_bot.i18n import DEFAULT_LANGUAGE, t
-from adaptive_lang_study_bot.proactive.dispatcher import dispatch_notification
+from adaptive_lang_study_bot.proactive.dispatcher import build_cta_keyboard, dispatch_notification
 from adaptive_lang_study_bot.utils import compute_next_trigger, get_language_name, safe_zoneinfo
 from adaptive_lang_study_bot.agent.session_manager import session_manager
 from adaptive_lang_study_bot.bot.routers.review import is_in_review
@@ -207,8 +207,12 @@ async def _phase_reminders(bot: Bot) -> None:
                 "notif.practice_reminder_followup", lang,
                 name=user_name, target_language=target_language,
             )
+            cta_keyboard = build_cta_keyboard(ScheduleType.PRACTICE_REMINDER, lang)
             try:
-                sent = await bot.send_message(user_id, reminder_text, parse_mode="HTML")
+                sent = await bot.send_message(
+                    user_id, reminder_text, parse_mode="HTML",
+                    reply_markup=cta_keyboard,
+                )
                 new_msg_id = sent.message_id
             except Exception:
                 logger.warning("Failed to send follow-up reminder to user {}", user_id)

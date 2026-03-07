@@ -123,7 +123,7 @@ _CTA_MAPPINGS: dict[str, tuple[str, str]] = {
 }
 
 
-def _build_cta_keyboard(notification_type: str, lang: str) -> InlineKeyboardMarkup | None:
+def build_cta_keyboard(notification_type: str, lang: str) -> InlineKeyboardMarkup | None:
     """Build a call-to-action inline keyboard differentiated by trigger type."""
     mapping = _CTA_MAPPINGS.get(notification_type)
     if mapping is None:
@@ -347,7 +347,7 @@ async def dispatch_notification(
         message_text = message_text[:TELEGRAM_MSG_MAX_LEN - 3] + "..."
 
     # Build call-to-action keyboard based on notification type
-    cta_keyboard = _build_cta_keyboard(notification_type, user.native_language)
+    cta_keyboard = build_cta_keyboard(notification_type, user.native_language)
 
     # Atomically claim a daily notification slot BEFORE sending.
     # This prevents races where two concurrent dispatches both pass
