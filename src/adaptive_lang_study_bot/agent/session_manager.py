@@ -284,6 +284,7 @@ async def run_proactive_llm_session(
             max_turns=tuning.proactive_max_turns,
             thinking={"type": tuning.proactive_thinking},
             effort=tuning.proactive_effort,
+            tools=[],
             permission_mode="bypassPermissions",
             system_prompt=system_prompt,
             **mcp_kwargs,
@@ -430,6 +431,7 @@ async def run_internal_summary_session(
             max_turns=tuning.internal_summary_max_turns,
             thinking={"type": "disabled"},
             effort=tuning.summary_effort,
+            tools=[],
             permission_mode="bypassPermissions",
             system_prompt=system_prompt,
         )
@@ -1227,6 +1229,7 @@ class SessionManager:
                 max_turns=limits.max_turns_per_session,
                 thinking=thinking,
                 effort=tuning.interactive_effort,
+                tools=[],
                 mcp_servers={"langbot": server},
                 allowed_tools=allowed_tool_names,
                 permission_mode="bypassPermissions",
