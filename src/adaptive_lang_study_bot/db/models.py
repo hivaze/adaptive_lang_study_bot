@@ -90,8 +90,6 @@ class User(Base):
             "streak_reminders": True,
             "vocab_reviews": True,
             "progress_reports": True,
-            "re_engagement": True,
-            "learning_nudges": True,
         },
     )
 

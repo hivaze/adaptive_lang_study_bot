@@ -50,9 +50,9 @@ _SCHEDULE_TO_SESSION_TYPE: dict[str, str] = {
 _TRIGGER_TO_NOTIF_CATEGORY: dict[str, str] = {
     "daily_review": "vocab_reviews",
     "progress_report": "progress_reports",
-    "quiz": "learning_nudges",
+    "quiz": "streak_reminders",
     "practice_reminder": "streak_reminders",
-    "custom": "learning_nudges",
+    "custom": "streak_reminders",
 }
 
 # CTA button mappings: notification_type → (i18n_key, callback_data).

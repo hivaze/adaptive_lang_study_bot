@@ -502,8 +502,6 @@ _NOTIF_PREF_CATEGORIES = [
     ("streak_reminders", "settings.notifpref_streak"),
     ("vocab_reviews", "settings.notifpref_vocab"),
     ("progress_reports", "settings.notifpref_progress"),
-    ("re_engagement", "settings.notifpref_reengagement"),
-    ("learning_nudges", "settings.notifpref_nudges"),
 ]
 
 

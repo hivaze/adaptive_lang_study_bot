@@ -218,8 +218,6 @@ class TestNotificationPreferences:
             "streak_reminders": False,
             "vocab_reviews": True,
             "progress_reports": False,
-            "re_engagement": True,
-            "learning_nudges": False,
         }
         await UserRepo.update_fields(
             db_session, user.telegram_id, notification_preferences=prefs,
