@@ -210,9 +210,9 @@ class TestShouldSendDedup:
 
 class TestNotificationToSessionType:
 
-    def test_only_practice_reminder_mapped(self):
-        assert ScheduleType.PRACTICE_REMINDER in _SCHEDULE_TO_SESSION_TYPE
-        assert len(_SCHEDULE_TO_SESSION_TYPE) == 1
+    def test_all_schedule_types_mapped(self):
+        for st in ScheduleType:
+            assert st in _SCHEDULE_TO_SESSION_TYPE, f"Missing mapping for ScheduleType.{st.name}"
 
     def test_schedule_practice_reminder_maps_to_proactive_nudge(self):
         assert _SCHEDULE_TO_SESSION_TYPE[ScheduleType.PRACTICE_REMINDER] == SessionType.PROACTIVE_NUDGE

@@ -270,12 +270,9 @@ async def _phase_schedules(bot: Bot) -> None:
         )
     # DB session released
 
-    # 2. Filter to actionable work items — only practice reminders
+    # 2. Filter to actionable work items
     work_items: list[tuple] = []
     for schedule in due_schedules:
-        if schedule.schedule_type != ScheduleType.PRACTICE_REMINDER:
-            continue
-
         user = schedule.user
         if user is None or not user.is_active:
             continue
@@ -305,6 +302,11 @@ async def _phase_schedules(bot: Bot) -> None:
                     return
 
                 due_count = due_counts.get(user.telegram_id, 0)
+
+                # Skip review-type schedules when no cards are due.
+                if due_count == 0 and schedule.schedule_type == ScheduleType.DAILY_REVIEW:
+                    await _advance_schedule(schedule, user.timezone, success=True)
+                    return
 
                 # Check if user already had a lesson today — use different template
                 today_start = _local_today_start(user.timezone)

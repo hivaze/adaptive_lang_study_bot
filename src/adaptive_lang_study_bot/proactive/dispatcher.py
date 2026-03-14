@@ -39,18 +39,30 @@ from adaptive_lang_study_bot.utils import user_local_now
 # ---------------------------------------------------------------------------
 
 _SCHEDULE_TO_SESSION_TYPE: dict[str, str] = {
+    ScheduleType.DAILY_REVIEW: SessionType.PROACTIVE_REVIEW,
+    ScheduleType.QUIZ: SessionType.PROACTIVE_QUIZ,
+    ScheduleType.PROGRESS_REPORT: SessionType.PROACTIVE_SUMMARY,
     ScheduleType.PRACTICE_REMINDER: SessionType.PROACTIVE_NUDGE,
+    ScheduleType.CUSTOM: SessionType.PROACTIVE_NUDGE,
 }
 
 
 _TRIGGER_TO_NOTIF_CATEGORY: dict[str, str] = {
+    "daily_review": "vocab_reviews",
+    "progress_report": "progress_reports",
+    "quiz": "learning_nudges",
     "practice_reminder": "streak_reminders",
+    "custom": "learning_nudges",
 }
 
 # CTA button mappings: notification_type → (i18n_key, callback_data).
 # Types not listed here get no CTA keyboard.
 _CTA_MAPPINGS: dict[str, tuple[str, str]] = {
+    "daily_review":           ("cta.start_review", "cta:words"),
+    "quiz":                   ("cta.start_session", "cta:session"),
     "practice_reminder":      ("cta.start_session", "cta:session"),
+    "progress_report":        ("cta.start_session", "cta:session"),
+    "custom":                 ("cta.start_session", "cta:session"),
 }
 
 
