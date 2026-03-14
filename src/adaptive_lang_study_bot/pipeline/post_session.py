@@ -216,15 +216,16 @@ async def run_post_session(
             for ex in exercises:
                 last_exercise_type = ex.exercise_type
                 last_topic = ex.topic
-                last_score = ex.score
+                norm = round(ex.score * 10 / ex.max_score) if ex.max_score else 0
+                last_score = norm
                 if ex.words_involved:
                     all_words.extend(ex.words_involved)
                 if ex.topic and ex.topic not in all_topics:
                     all_topics.append(ex.topic)
                 if ex.topic:
-                    topic_scores.setdefault(ex.topic, []).append(ex.score)
+                    topic_scores.setdefault(ex.topic, []).append(norm)
                 if ex.exercise_type:
-                    type_scores.setdefault(ex.exercise_type, []).append(ex.score)
+                    type_scores.setdefault(ex.exercise_type, []).append(norm)
 
             # Enrich summary with real data
             if exercises and not summary_parts:

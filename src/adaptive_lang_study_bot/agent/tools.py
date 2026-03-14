@@ -658,7 +658,10 @@ def create_session_tools(
                 recent_topic_results = await ExerciseResultRepo.get_recent(
                     db_session, user_id, topic=topic, limit=tuning.weak_strong_recent_limit,
                 )
-                recent_topic_scores = [r.score for r in recent_topic_results]
+                recent_topic_scores = [
+                    round(r.score * 10 / r.max_score) if r.max_score else 0
+                    for r in recent_topic_results
+                ]
 
                 strong_count = sum(
                     1 for s in recent_topic_scores if s >= tuning.strong_area_score
@@ -723,6 +726,7 @@ def create_session_tools(
 
         result = {
             "status": "recorded",
+            "score": normalized_score,
             "performance": score_label(normalized_score),
             "topic": topic,
             "recent_trend": score_label(

@@ -195,6 +195,73 @@ class TestToolOutputParsing:
         )
         assert result["continue_"] is True
 
+    @pytest.mark.asyncio
+    async def test_score_field_required_in_tool_output(self, _hook_handler):
+        """Verify the hook extracts numeric 'score' field from tool output.
+
+        The tool must return 'score' (normalized 0-10 int) alongside
+        'performance' (qualitative label). Without 'score', adaptive hints
+        are disabled entirely — this was a real bug.
+        """
+        handler, state = _hook_handler
+        # Output WITH score — hook produces a hint
+        result_with = await handler(
+            {
+                "tool_name": "mcp__langbot__record_exercise_result",
+                "tool_input": {},
+                "tool_response": _make_exercise_tool_output(7),
+            },
+            "test-id",
+            None,
+        )
+        assert "hookSpecificOutput" in result_with
+        assert len(state.exercise_scores) == 1
+        assert state.exercise_scores[0] == 7
+
+        # Output WITHOUT score — no hint
+        no_score_output = {
+            "content": [
+                {"type": "text", "text": json.dumps({"performance": "good", "status": "recorded"})},
+            ],
+        }
+        result_without = await handler(
+            {
+                "tool_name": "mcp__langbot__record_exercise_result",
+                "tool_input": {},
+                "tool_response": no_score_output,
+            },
+            "test-id-2",
+            None,
+        )
+        # Score was not extracted, so no new hint injected
+        assert "hookSpecificOutput" not in result_without
+        # exercise_scores should not grow
+        assert len(state.exercise_scores) == 1
+
+    @pytest.mark.asyncio
+    async def test_vocabulary_reviewed_tracked(self, _hook_handler):
+        """Hook tracks vocabulary_reviewed count from tool output."""
+        handler, state = _hook_handler
+        output = {
+            "content": [
+                {"type": "text", "text": json.dumps({
+                    "score": 8,
+                    "status": "recorded",
+                    "vocabulary_reviewed": ["bonjour", "merci"],
+                })},
+            ],
+        }
+        await handler(
+            {
+                "tool_name": "mcp__langbot__record_exercise_result",
+                "tool_input": {},
+                "tool_response": output,
+            },
+            "test-id",
+            None,
+        )
+        assert state.words_reviewed == 2
+
 
 # ---------------------------------------------------------------------------
 # Hook state tracking

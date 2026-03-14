@@ -1244,9 +1244,10 @@ class ExerciseResultRepo:
         *,
         last_n: int = 5,
     ) -> float | None:
-        """Average score for a topic over the last N exercises."""
+        """Average normalized (0-10) score for a topic over the last N exercises."""
+        normalized = ExerciseResult.score * 10.0 / ExerciseResult.max_score
         subq = (
-            select(ExerciseResult.score)
+            select(normalized.label("norm_score"))
             .where(
                 ExerciseResult.user_id == user_id,
                 ExerciseResult.topic == topic,
@@ -1256,10 +1257,10 @@ class ExerciseResultRepo:
             .subquery()
         )
         result = await session.execute(
-            select(func.avg(subq.c.score)),
+            select(func.avg(subq.c.norm_score)),
         )
         val = result.scalar_one_or_none()
-        return float(val) if val is not None else None
+        return round(float(val), 1) if val is not None else None
 
     @staticmethod
     async def get_score_summary(
