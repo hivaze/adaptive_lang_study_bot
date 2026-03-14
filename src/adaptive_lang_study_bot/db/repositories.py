@@ -1269,15 +1269,16 @@ class ExerciseResultRepo:
         days: int | None = 30,
     ) -> dict:
         """Aggregate score statistics for a time period (None = all time)."""
+        normalized = ExerciseResult.score * 10.0 / ExerciseResult.max_score
         conditions = [ExerciseResult.user_id == user_id]
         if days is not None:
             conditions.append(ExerciseResult.created_at >= _utcnow() - timedelta(days=days))
         result = await session.execute(
             select(
                 func.count(),
-                func.avg(ExerciseResult.score),
-                func.min(ExerciseResult.score),
-                func.max(ExerciseResult.score),
+                func.avg(normalized),
+                func.min(normalized),
+                func.max(normalized),
             ).where(*conditions),
         )
         row = result.one()
@@ -1297,12 +1298,13 @@ class ExerciseResultRepo:
         limit: int = 10,
     ) -> list[dict]:
         """Per-topic performance stats for a time period."""
+        normalized = ExerciseResult.score * 10.0 / ExerciseResult.max_score
         cutoff = _utcnow() - timedelta(days=days)
         result = await session.execute(
             select(
                 ExerciseResult.topic,
                 func.count(),
-                func.avg(ExerciseResult.score),
+                func.avg(normalized),
                 func.max(ExerciseResult.created_at),
             )
             .where(
@@ -1348,11 +1350,12 @@ class ExerciseResultRepo:
             return {}
         since_dt = datetime(since.year, since.month, since.day, tzinfo=timezone.utc)
         lower_topics = [t.lower() for t in topics]
+        normalized = ExerciseResult.score * 10.0 / ExerciseResult.max_score
         result = await session.execute(
             select(
                 ExerciseResult.topic,
                 func.count(),
-                func.avg(ExerciseResult.score),
+                func.avg(normalized),
                 func.max(ExerciseResult.created_at),
             )
             .where(
@@ -1404,12 +1407,13 @@ class ExerciseResultRepo:
         session: AsyncSession, *, days: int = 30, limit: int = 20,
     ) -> list[dict]:
         """Per-topic performance stats across ALL users."""
+        normalized = ExerciseResult.score * 10.0 / ExerciseResult.max_score
         cutoff = _utcnow() - timedelta(days=days)
         result = await session.execute(
             select(
                 ExerciseResult.topic,
                 func.count(),
-                func.avg(ExerciseResult.score),
+                func.avg(normalized),
                 func.count(ExerciseResult.user_id.distinct()),
                 func.max(ExerciseResult.created_at),
             )
