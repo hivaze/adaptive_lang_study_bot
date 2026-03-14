@@ -16,7 +16,6 @@ from adaptive_lang_study_bot.cache.keys import (
     NOTIF_REMINDER_KEY,
     NOTIF_REMINDER_TTL,
 )
-from adaptive_lang_study_bot.config import tuning as _tuning
 from adaptive_lang_study_bot.config import TIER_LIMITS
 from adaptive_lang_study_bot.metrics import NOTIFICATION_LLM_COST, NOTIFICATIONS_SENT, NOTIFICATIONS_SKIPPED
 from adaptive_lang_study_bot.agent.session_manager import run_proactive_llm_session
@@ -40,86 +39,18 @@ from adaptive_lang_study_bot.utils import user_local_now
 # ---------------------------------------------------------------------------
 
 _SCHEDULE_TO_SESSION_TYPE: dict[str, str] = {
-    ScheduleType.DAILY_REVIEW: SessionType.PROACTIVE_REVIEW,
-    ScheduleType.QUIZ: SessionType.PROACTIVE_QUIZ,
-    ScheduleType.PROGRESS_REPORT: SessionType.PROACTIVE_SUMMARY,
     ScheduleType.PRACTICE_REMINDER: SessionType.PROACTIVE_NUDGE,
-    ScheduleType.CUSTOM: SessionType.PROACTIVE_NUDGE,
-}
-
-_TRIGGER_TO_SESSION_TYPE: dict[str, str] = {
-    "streak_risk": SessionType.PROACTIVE_NUDGE,
-    "cards_due": SessionType.PROACTIVE_REVIEW,
-    "user_inactive": SessionType.PROACTIVE_NUDGE,
-    "weak_area_persistent": SessionType.PROACTIVE_NUDGE,
-    "score_trend_declining": SessionType.PROACTIVE_NUDGE,
-    "score_trend_improving": SessionType.PROACTIVE_SUMMARY,
-    "incomplete_exercise": SessionType.PROACTIVE_NUDGE,
-    "weak_area_drill_due": SessionType.PROACTIVE_REVIEW,
-    # Re-engagement triggers
-    "post_onboarding_24h": SessionType.PROACTIVE_NUDGE,
-    "post_onboarding_3d": SessionType.PROACTIVE_NUDGE,
-    "post_onboarding_7d": SessionType.PROACTIVE_NUDGE,
-    "lapsed_gentle": SessionType.PROACTIVE_NUDGE,
-    "lapsed_compelling": SessionType.PROACTIVE_NUDGE,
-    "lapsed_miss_you": SessionType.PROACTIVE_NUDGE,
-    "post_onboarding_14d": SessionType.PROACTIVE_NUDGE,
-    "dormant_weekly": SessionType.PROACTIVE_NUDGE,
-    "progress_celebration": SessionType.PROACTIVE_NUDGE,
 }
 
 
 _TRIGGER_TO_NOTIF_CATEGORY: dict[str, str] = {
-    "streak_risk": "streak_reminders",
-    "cards_due": "vocab_reviews",
-    "daily_review": "vocab_reviews",
-    "score_trend_declining": "progress_reports",
-    "score_trend_improving": "progress_reports",
-    "progress_report": "progress_reports",
-    "user_inactive": "re_engagement",
-    "lapsed_gentle": "re_engagement",
-    "lapsed_compelling": "re_engagement",
-    "lapsed_miss_you": "re_engagement",
-    "post_onboarding_24h": "re_engagement",
-    "post_onboarding_3d": "re_engagement",
-    "post_onboarding_7d": "re_engagement",
-    "post_onboarding_14d": "re_engagement",
-    "dormant_weekly": "re_engagement",
-    "weak_area_persistent": "learning_nudges",
-    "weak_area_drill_due": "learning_nudges",
-    "incomplete_exercise": "learning_nudges",
-    "progress_celebration": "progress_reports",
-    # Schedule-driven types (so users can opt out via per-type preferences)
-    "quiz": "learning_nudges",
     "practice_reminder": "streak_reminders",
-    "custom": "learning_nudges",
 }
 
 # CTA button mappings: notification_type → (i18n_key, callback_data).
 # Types not listed here get no CTA keyboard.
 _CTA_MAPPINGS: dict[str, tuple[str, str]] = {
-    "cards_due":              ("cta.start_review", "cta:words"),
-    "daily_review":           ("cta.start_review", "cta:words"),
-    "incomplete_exercise":    ("cta.continue", "cta:session"),
-    "lapsed_gentle":          ("cta.resume_learning", "cta:session"),
-    "lapsed_compelling":      ("cta.resume_learning", "cta:session"),
-    "lapsed_miss_you":        ("cta.resume_learning", "cta:session"),
-    "dormant_weekly":         ("cta.resume_learning", "cta:session"),
-    "streak_risk":            ("cta.quick_session", "cta:session"),
-    "user_inactive":          ("cta.start_session", "cta:session"),
-    "weak_area_persistent":   ("cta.start_session", "cta:session"),
-    "weak_area_drill_due":    ("cta.start_session", "cta:session"),
-    "score_trend_declining":  ("cta.start_session", "cta:session"),
-    "score_trend_improving":  ("cta.start_session", "cta:session"),
-    "progress_report":        ("cta.start_session", "cta:session"),
-    "post_onboarding_24h":    ("cta.start_session", "cta:session"),
-    "post_onboarding_3d":     ("cta.start_session", "cta:session"),
-    "post_onboarding_7d":     ("cta.start_session", "cta:session"),
-    "post_onboarding_14d":    ("cta.start_session", "cta:session"),
-    "quiz":                   ("cta.start_session", "cta:session"),
     "practice_reminder":      ("cta.start_session", "cta:session"),
-    "custom":                 ("cta.start_session", "cta:session"),
-    "progress_celebration":   ("cta.start_session", "cta:session"),
 }
 
 
@@ -317,7 +248,6 @@ async def dispatch_notification(
     if tier in (NotificationTier.LLM, NotificationTier.HYBRID):
         session_type = (
             _SCHEDULE_TO_SESSION_TYPE.get(notification_type)
-            or _TRIGGER_TO_SESSION_TYPE.get(notification_type)
             or SessionType.PROACTIVE_NUDGE
         )
         try:

@@ -404,10 +404,11 @@
     "{name}, ¡<b>{sessions_completed}</b> sesiones completadas! Estás construyendo una base sólida.",
     "¡Sigue así, {name}! Tu <b>racha de {streak} días</b> muestra verdadero compromiso."
   ],
+  "notif.streak_info": "¡Tu racha: {streak} días! ",
   "notif.practice_reminder": [
-    "¡Hola {name}! Es hora de tu lección de {target_language}. ¡No pierdas el ritmo!",
-    "{name}, tu lección programada empieza ahora. ¿Listo/a para aprender {target_language}?",
-    "¡Es hora de la lección, {name}! Tu sesión de {target_language} te espera."
+    "¡Hola {name}! {streak_info}Es hora de tu lección de {target_language}. ¡No pierdas el ritmo!",
+    "{name}, tu lección programada empieza ahora. {streak_info}¿Listo/a para aprender {target_language}?",
+    "¡Es hora de la lección, {name}! {streak_info}Tu sesión de {target_language} te espera."
   ],
   "notif.practice_reminder_another": [
     "¡Buen trabajo hoy, {name}! ¿Quieres otra sesión de {target_language}?",

@@ -10,13 +10,12 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from adaptive_lang_study_bot.cache.client import get_redis
 from adaptive_lang_study_bot.cache.keys import (
-    NOTIF_REMINDER_KEY,
     NOTIF_REMINDER_TTL,
     PROACTIVE_TICK_LOCK_KEY,
     PROACTIVE_TICK_LOCK_TTL,
 )
 from adaptive_lang_study_bot.cache.redis_lock import acquire_lock, generate_lock_token, refresh_lock, release_lock
-from adaptive_lang_study_bot.config import settings, tuning
+from adaptive_lang_study_bot.config import tuning
 from adaptive_lang_study_bot.metrics import PROACTIVE_TICK_DURATION, PROACTIVE_TICKS
 from adaptive_lang_study_bot.db.engine import async_session_factory
 from adaptive_lang_study_bot.db.repositories import (
@@ -28,10 +27,8 @@ from adaptive_lang_study_bot.db.repositories import (
 from adaptive_lang_study_bot.enums import ScheduleStatus, ScheduleType
 from adaptive_lang_study_bot.i18n import DEFAULT_LANGUAGE, t
 from adaptive_lang_study_bot.proactive.dispatcher import build_cta_keyboard, dispatch_notification
-from adaptive_lang_study_bot.utils import compute_next_trigger, get_language_name, safe_zoneinfo
+from adaptive_lang_study_bot.utils import compute_next_trigger, safe_zoneinfo
 from adaptive_lang_study_bot.agent.session_manager import session_manager
-from adaptive_lang_study_bot.bot.routers.review import is_in_review
-from adaptive_lang_study_bot.proactive.triggers import ALL_TRIGGERS
 
 # Schedule failure thresholds are in config.py:BotTuning
 # (tuning.schedule_max_backoff_minutes, tuning.schedule_max_consecutive_failures)
@@ -63,12 +60,8 @@ async def _periodic_lock_refresh(redis, token: str) -> None:
 async def tick_scheduler(bot: Bot) -> None:
     """Main proactive tick — runs every 1 minute via APScheduler.
 
-    Two phases:
-    1. Process due schedules (RRULE-based)
-    2. Evaluate event triggers for active users
-
-    Both phases use bounded parallel dispatch to keep tick duration
-    short even with many LLM notifications (important at scale).
+    Phase 0: Follow-up reminders for practice notifications.
+    Phase 1: Process due practice_reminder schedules (RRULE-based).
     """
     redis = await get_redis()
 
@@ -87,7 +80,6 @@ async def tick_scheduler(bot: Bot) -> None:
     try:
         await _phase_reminders(bot)
         await _phase_schedules(bot)
-        await _phase_event_triggers(bot)
     except Exception:
         logger.exception("Error in proactive tick")
     finally:
@@ -278,9 +270,12 @@ async def _phase_schedules(bot: Bot) -> None:
         )
     # DB session released
 
-    # 2. Filter to actionable work items
+    # 2. Filter to actionable work items — only practice reminders
     work_items: list[tuple] = []
     for schedule in due_schedules:
+        if schedule.schedule_type != ScheduleType.PRACTICE_REMINDER:
+            continue
+
         user = schedule.user
         if user is None or not user.is_active:
             continue
@@ -311,12 +306,6 @@ async def _phase_schedules(bot: Bot) -> None:
 
                 due_count = due_counts.get(user.telegram_id, 0)
 
-                # Skip review-type schedules when no cards are due.
-                # Sending "0 cards waiting" is confusing UX. Advance silently.
-                if due_count == 0 and schedule.schedule_type == ScheduleType.DAILY_REVIEW:
-                    await _advance_schedule(schedule, user.timezone, success=True)
-                    return
-
                 # Check if user already had a lesson today — use different template
                 today_start = _local_today_start(user.timezone)
                 async with async_session_factory() as db:
@@ -332,7 +321,14 @@ async def _phase_schedules(bot: Bot) -> None:
                 ):
                     template_type = "practice_reminder_another"
 
-                target_lang_name = get_language_name(user.target_language)
+                target_lang_name = t(f"lang.{user.target_language}", user.native_language)
+
+                streak_info = ""
+                if user.streak_days > 1:
+                    streak_info = t(
+                        "notif.streak_info", user.native_language,
+                        streak=user.streak_days,
+                    )
 
                 trigger = {
                     "type": schedule.schedule_type,
@@ -342,6 +338,7 @@ async def _phase_schedules(bot: Bot) -> None:
                     "data": {
                         "name": user.first_name,
                         "streak": user.streak_days,
+                        "streak_info": streak_info,
                         "due_count": due_count,
                         "level": user.level,
                         "vocab_count": user.vocabulary_count,
@@ -404,83 +401,3 @@ async def _handle_schedule_failure(schedule, bot: Bot) -> None:
     except SQLAlchemyError:
         logger.exception("Failed to update schedule {} after failure", schedule.id)
 
-
-# ---------------------------------------------------------------------------
-# Phase 2: Event triggers
-# ---------------------------------------------------------------------------
-
-# TODO: Replace scan-all-then-filter loop with either:
-#   1. Trigger-specific SQL queries (short term, no new infra) — one query per
-#      trigger returning only candidate users, instead of loading all active
-#      users and filtering in Python.  O(candidates) vs O(all_users).
-#   2. arq / Taskiq event-driven enqueue (medium term) — tools and post-session
-#      pipeline enqueue per-user trigger checks on state change; the tick
-#      becomes a thin catch-up sweep, not the primary dispatch path.
-
-async def _phase_event_triggers(bot: Bot) -> None:
-    """Evaluate event-based triggers for active users.
-
-    Users are loaded in pages to avoid pulling 100k+ rows into memory.
-    Each page is evaluated (pure Python, fast) and triggered notifications
-    are dispatched with bounded concurrency.
-    """
-    page_size = tuning.proactive_user_page_size
-    offset = 0
-    sem = asyncio.Semaphore(tuning.proactive_dispatch_concurrency)
-
-    while True:
-        # Short-lived session per page
-        async with async_session_factory() as db:
-            users = await UserRepo.get_active_users_for_proactive(
-                db, limit=page_size, offset=offset,
-            )
-            if not users:
-                break
-
-            user_ids = [u.telegram_id for u in users]
-            due_counts = await VocabularyRepo.count_due_batch(db, user_ids)
-        # DB session released
-
-        # In whitelist mode, skip users who haven't been approved yet
-        if settings.whitelist_mode:
-            users = [u for u in users if u.whitelist_approved]
-            if not users:
-                offset += page_size
-                continue
-
-        # Evaluate triggers (pure Python, no I/O)
-        work: list[tuple] = []
-        for user in users:
-            # Skip users with active interactive or review sessions — sending
-            # a proactive notification mid-session is confusing UX.
-            if session_manager.has_active_session(user.telegram_id):
-                continue
-            if is_in_review(user.telegram_id):
-                continue
-            due_count = due_counts.get(user.telegram_id, 0)
-            for trigger_fn in ALL_TRIGGERS:
-                trigger = trigger_fn(user, due_count=due_count)
-                if trigger is not None:
-                    work.append((user, trigger))
-                    break  # Only one event trigger per user per tick
-
-        # Dispatch with bounded concurrency
-        if work:
-            async def _dispatch_one(u, trig) -> None:
-                async with sem:
-                    try:
-                        await dispatch_notification(u, trig, bot)
-                    except Exception:
-                        logger.exception(
-                            "Error dispatching trigger to user {}",
-                            u.telegram_id,
-                        )
-
-            await asyncio.gather(
-                *(_dispatch_one(u, trig) for u, trig in work),
-                return_exceptions=True,
-            )
-
-        offset += page_size
-        if len(users) < page_size:
-            break  # Last page

@@ -404,10 +404,11 @@
     "{name}, уже <b>{sessions_completed}</b> завершённых занятий! Ты строишь прочную основу.",
     "Продолжай в том же духе, {name}! Твоя серия в <b>{streak} дней</b> говорит о настоящей дисциплине."
   ],
+  "notif.streak_info": "Серия: {streak} дн.! ",
   "notif.practice_reminder": [
-    "Привет, {name}! Время для урока {target_language}. Давай не терять темп!",
-    "{name}, пора на занятие! Готов(-а) к уроку {target_language}?",
-    "Время урока, {name}! Твоё занятие по {target_language} ждёт."
+    "Привет, {name}! {streak_info}Время для урока {target_language}. Давай не терять темп!",
+    "{name}, пора на занятие! {streak_info}Готов(-а) к уроку {target_language}?",
+    "Время урока, {name}! {streak_info}Твоё занятие по {target_language} ждёт."
   ],
   "notif.practice_reminder_another": [
     "Отлично позанимался(-ась) сегодня, {name}! Хочешь ещё один урок {target_language}?",

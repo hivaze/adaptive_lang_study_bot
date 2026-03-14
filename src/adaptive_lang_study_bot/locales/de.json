@@ -404,10 +404,11 @@
     "{name}, <b>{sessions_completed}</b> Sitzungen abgeschlossen! Du baust ein solides Fundament auf.",
     "Mach weiter so, {name}! Deine <b>{streak}-Tage-Serie</b> zeigt echte Disziplin."
   ],
+  "notif.streak_info": "Deine Serie: {streak} Tage! ",
   "notif.practice_reminder": [
-    "Hey {name}! Zeit für deine {target_language}-Lektion. Bleib am Ball!",
-    "{name}, deine geplante Lektion beginnt jetzt! Bereit für {target_language}?",
-    "Lektionszeit, {name}! Deine {target_language}-Sitzung wartet."
+    "Hey {name}! {streak_info}Zeit für deine {target_language}-Lektion. Bleib am Ball!",
+    "{name}, deine geplante Lektion beginnt jetzt! {streak_info}Bereit für {target_language}?",
+    "Lektionszeit, {name}! {streak_info}Deine {target_language}-Sitzung wartet."
   ],
   "notif.practice_reminder_another": [
     "Toll gemacht heute, {name}! Lust auf noch eine {target_language}-Sitzung?",

@@ -29,7 +29,7 @@ def _make_schedule(**overrides):
     s = MagicMock()
     s.id = overrides.get("id", uuid4())
     s.user_id = overrides.get("user_id", 100)
-    s.schedule_type = overrides.get("schedule_type", "daily_review")
+    s.schedule_type = overrides.get("schedule_type", "practice_reminder")
     s.notification_tier = overrides.get("notification_tier", "template")
     s.status = ScheduleStatus.ACTIVE
     s.pause_until = None
@@ -104,8 +104,7 @@ class TestTickScheduler:
              patch(f"{TICK_MODULE}.acquire_lock", new_callable=AsyncMock, return_value=True), \
              patch(f"{TICK_MODULE}.release_lock", new_callable=AsyncMock) as mock_release, \
              patch(f"{TICK_MODULE}.refresh_lock", new_callable=AsyncMock), \
-             patch(f"{TICK_MODULE}._phase_schedules", new_callable=AsyncMock), \
-             patch(f"{TICK_MODULE}._phase_event_triggers", new_callable=AsyncMock):
+             patch(f"{TICK_MODULE}._phase_schedules", new_callable=AsyncMock):
             from adaptive_lang_study_bot.proactive.tick import tick_scheduler
 
             bot = AsyncMock()
@@ -133,8 +132,7 @@ class TestTickScheduler:
              patch(f"{TICK_MODULE}.acquire_lock", new_callable=AsyncMock, return_value=True), \
              patch(f"{TICK_MODULE}.release_lock", new_callable=AsyncMock) as mock_release, \
              patch(f"{TICK_MODULE}.refresh_lock", new_callable=AsyncMock), \
-             patch(f"{TICK_MODULE}._phase_schedules", new_callable=AsyncMock, side_effect=RuntimeError("boom")), \
-             patch(f"{TICK_MODULE}._phase_event_triggers", new_callable=AsyncMock):
+             patch(f"{TICK_MODULE}._phase_schedules", new_callable=AsyncMock, side_effect=RuntimeError("boom")):
             from adaptive_lang_study_bot.proactive.tick import tick_scheduler
 
             bot = AsyncMock()
@@ -340,137 +338,6 @@ class TestHandleScheduleFailure:
         # 2^4 = 16 minutes backoff
         next_at = mock_trigger.call_args[1]["next_trigger_at"]
         assert next_at > datetime.now(timezone.utc)
-
-
-# ---------------------------------------------------------------------------
-# _phase_event_triggers
-# ---------------------------------------------------------------------------
-
-class TestPhaseEventTriggers:
-
-    @pytest.mark.asyncio
-    async def test_no_active_users_returns_immediately(self):
-        """When no active users, phase exits with no dispatches."""
-        factory, mock_db = _mock_session_factory()
-
-        with patch(f"{TICK_MODULE}.async_session_factory", factory), \
-             patch(f"{TICK_MODULE}.UserRepo.get_active_users_for_proactive", new_callable=AsyncMock, return_value=[]), \
-             patch(f"{TICK_MODULE}.dispatch_notification", new_callable=AsyncMock) as mock_dispatch:
-            from adaptive_lang_study_bot.proactive.tick import _phase_event_triggers
-
-            await _phase_event_triggers(AsyncMock())
-
-        mock_dispatch.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_dispatches_triggered_users(self):
-        """Users matching a trigger get dispatched."""
-        users = [_make_user(telegram_id=i) for i in range(3)]
-        trigger = {"type": "streak_risk", "tier": "template", "data": {}}
-        factory, _ = _mock_session_factory()
-
-        with patch(f"{TICK_MODULE}.async_session_factory", factory), \
-             patch(f"{TICK_MODULE}.UserRepo.get_active_users_for_proactive", new_callable=AsyncMock, return_value=users), \
-             patch(f"{TICK_MODULE}.VocabularyRepo.count_due_batch", new_callable=AsyncMock, return_value={}), \
-             patch(f"{TICK_MODULE}.ALL_TRIGGERS", [lambda user, due_count: trigger]), \
-             patch(f"{TICK_MODULE}.dispatch_notification", new_callable=AsyncMock) as mock_dispatch:
-            from adaptive_lang_study_bot.proactive.tick import _phase_event_triggers
-
-            await _phase_event_triggers(AsyncMock())
-
-        assert mock_dispatch.call_count == 3
-
-    @pytest.mark.asyncio
-    async def test_only_one_trigger_per_user(self):
-        """Only the first matching trigger fires per user."""
-        users = [_make_user(telegram_id=1)]
-        trigger_a = {"type": "streak_risk", "tier": "template", "data": {}}
-        trigger_b = {"type": "cards_due", "tier": "template", "data": {}}
-        factory, _ = _mock_session_factory()
-
-        with patch(f"{TICK_MODULE}.async_session_factory", factory), \
-             patch(f"{TICK_MODULE}.UserRepo.get_active_users_for_proactive", new_callable=AsyncMock, return_value=users), \
-             patch(f"{TICK_MODULE}.VocabularyRepo.count_due_batch", new_callable=AsyncMock, return_value={}), \
-             patch(f"{TICK_MODULE}.ALL_TRIGGERS", [
-                 lambda user, due_count: trigger_a,
-                 lambda user, due_count: trigger_b,
-             ]), \
-             patch(f"{TICK_MODULE}.dispatch_notification", new_callable=AsyncMock) as mock_dispatch:
-            from adaptive_lang_study_bot.proactive.tick import _phase_event_triggers
-
-            await _phase_event_triggers(AsyncMock())
-
-        # Only one dispatch per user despite two triggers matching
-        assert mock_dispatch.call_count == 1
-        assert mock_dispatch.call_args[0][1] == trigger_a
-
-    @pytest.mark.asyncio
-    async def test_paginates_user_loading(self):
-        """Users are loaded in pages, not all at once."""
-        page1 = [_make_user(telegram_id=i) for i in range(3)]
-        page2 = [_make_user(telegram_id=i) for i in range(3, 5)]
-
-        call_count = {"n": 0}
-
-        async def mock_get_users(db, *, limit=0, offset=0):
-            call_count["n"] += 1
-            if offset == 0:
-                return page1
-            elif offset == 3:
-                return page2
-            return []
-
-        factory, _ = _mock_session_factory()
-        trigger = {"type": "streak_risk", "tier": "template", "data": {}}
-
-        with patch(f"{TICK_MODULE}.async_session_factory", factory), \
-             patch(f"{TICK_MODULE}.UserRepo.get_active_users_for_proactive", side_effect=mock_get_users), \
-             patch(f"{TICK_MODULE}.VocabularyRepo.count_due_batch", new_callable=AsyncMock, return_value={}), \
-             patch(f"{TICK_MODULE}.ALL_TRIGGERS", [lambda user, due_count: trigger]), \
-             patch(f"{TICK_MODULE}.dispatch_notification", new_callable=AsyncMock) as mock_dispatch, \
-             patch(f"{TICK_MODULE}.tuning") as mock_tuning:
-            mock_tuning.proactive_user_page_size = 3
-            mock_tuning.proactive_dispatch_concurrency = 20
-
-            from adaptive_lang_study_bot.proactive.tick import _phase_event_triggers
-
-            await _phase_event_triggers(AsyncMock())
-
-        # 5 users dispatched across 2 pages
-        assert mock_dispatch.call_count == 5
-        # 3 DB calls: page1 (3 users) + page2 (2 users < page_size, last page)
-        # Actually: page1 returns 3 (== page_size), so we try page2.
-        # page2 returns 2 (< page_size), so we stop. Total = 2 calls.
-        assert call_count["n"] == 2
-
-    @pytest.mark.asyncio
-    async def test_dispatch_error_does_not_crash_phase(self):
-        """A single dispatch error doesn't stop processing other users."""
-        users = [_make_user(telegram_id=i) for i in range(3)]
-        trigger = {"type": "streak_risk", "tier": "template", "data": {}}
-
-        call_count = {"n": 0}
-
-        async def failing_dispatch(user, trigger, bot):
-            call_count["n"] += 1
-            if user.telegram_id == 1:
-                raise RuntimeError("Telegram down")
-            return "sent"
-
-        factory, _ = _mock_session_factory()
-
-        with patch(f"{TICK_MODULE}.async_session_factory", factory), \
-             patch(f"{TICK_MODULE}.UserRepo.get_active_users_for_proactive", new_callable=AsyncMock, return_value=users), \
-             patch(f"{TICK_MODULE}.VocabularyRepo.count_due_batch", new_callable=AsyncMock, return_value={}), \
-             patch(f"{TICK_MODULE}.ALL_TRIGGERS", [lambda user, due_count: trigger]), \
-             patch(f"{TICK_MODULE}.dispatch_notification", side_effect=failing_dispatch):
-            from adaptive_lang_study_bot.proactive.tick import _phase_event_triggers
-
-            # Should not raise
-            await _phase_event_triggers(AsyncMock())
-
-        # All 3 users were attempted
-        assert call_count["n"] == 3
 
 
 # ---------------------------------------------------------------------------

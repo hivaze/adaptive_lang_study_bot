@@ -18,7 +18,6 @@ from adaptive_lang_study_bot.enums import (
 )
 from adaptive_lang_study_bot.proactive.dispatcher import (
     _SCHEDULE_TO_SESSION_TYPE,
-    _TRIGGER_TO_SESSION_TYPE,
     _seconds_until_local_midnight,
     dispatch_notification,
     should_send,
@@ -211,34 +210,12 @@ class TestShouldSendDedup:
 
 class TestNotificationToSessionType:
 
-    def test_all_schedule_types_mapped(self):
-        for st in ScheduleType:
-            assert st in _SCHEDULE_TO_SESSION_TYPE, f"Missing mapping for ScheduleType.{st.name}"
-
-    def test_schedule_daily_review_maps_to_proactive_review(self):
-        assert _SCHEDULE_TO_SESSION_TYPE[ScheduleType.DAILY_REVIEW] == SessionType.PROACTIVE_REVIEW
-
-    def test_schedule_quiz_maps_to_proactive_quiz(self):
-        assert _SCHEDULE_TO_SESSION_TYPE[ScheduleType.QUIZ] == SessionType.PROACTIVE_QUIZ
-
-    def test_schedule_progress_report_maps_to_proactive_summary(self):
-        assert _SCHEDULE_TO_SESSION_TYPE[ScheduleType.PROGRESS_REPORT] == SessionType.PROACTIVE_SUMMARY
+    def test_only_practice_reminder_mapped(self):
+        assert ScheduleType.PRACTICE_REMINDER in _SCHEDULE_TO_SESSION_TYPE
+        assert len(_SCHEDULE_TO_SESSION_TYPE) == 1
 
     def test_schedule_practice_reminder_maps_to_proactive_nudge(self):
         assert _SCHEDULE_TO_SESSION_TYPE[ScheduleType.PRACTICE_REMINDER] == SessionType.PROACTIVE_NUDGE
-
-    def test_trigger_types_all_mapped(self):
-        expected_triggers = {
-            "streak_risk", "cards_due", "user_inactive", "weak_area_persistent",
-            "score_trend_declining", "score_trend_improving", "incomplete_exercise",
-            "weak_area_drill_due",
-        }
-        for t in expected_triggers:
-            assert t in _TRIGGER_TO_SESSION_TYPE, f"Missing mapping for trigger '{t}'"
-
-    def test_unknown_trigger_defaults_to_nudge(self):
-        """Unknown types should not be in the mapping (caller uses 'or' fallback)."""
-        assert "unknown_type" not in _TRIGGER_TO_SESSION_TYPE
 
 
 # ---------------------------------------------------------------------------
