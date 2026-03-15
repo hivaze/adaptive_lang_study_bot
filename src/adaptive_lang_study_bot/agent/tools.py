@@ -303,7 +303,7 @@ TOOL_NAMES = [
     "mcp__langbot__get_due_vocabulary",
     "mcp__langbot__manage_schedule",
     "mcp__langbot__search_vocabulary",
-    "mcp__langbot__get_exercise_history",
+    "mcp__langbot__get_session_history",
     "mcp__langbot__get_progress_summary",
     "mcp__langbot__manage_learning_plan",
     "mcp__langbot__adjust_level",
@@ -316,7 +316,7 @@ _SESSION_TYPE_TOOLS: dict[SessionType, set[str]] = {
     SessionType.INTERACTIVE: {
         "get_user_profile", "update_preference", "record_exercise_result",
         "add_vocabulary", "get_due_vocabulary",
-        "manage_schedule", "search_vocabulary", "get_exercise_history",
+        "manage_schedule", "search_vocabulary", "get_session_history",
         "get_progress_summary", "manage_learning_plan", "adjust_level",
         "end_session",
         "web_search", "web_extract",
@@ -1050,32 +1050,56 @@ def create_session_tools(
             return _ok({"results": cards, "count": len(cards)})
 
     @tool(
-        "get_exercise_history",
-        "Get recent exercise results, optionally filtered by topic. "
-        "Useful for tracking performance trends.",
-        {"limit": int, "topic": str},
+        "get_session_history",
+        "Get recent session history with AI summaries and exercise results. "
+        "Each session includes metadata (date, duration, type, turns, tools used) "
+        "and an AI-generated summary of what happened. Use this to understand "
+        "what the student did in past sessions, track continuity, and plan next steps.",
+        {"limit": int},
     )
-    async def get_exercise_history(args: dict[str, Any]) -> dict[str, Any]:
-        limit = min(args.get("limit", tuning.exercise_history_default_limit), tuning.exercise_history_max)
-        topic = args.get("topic", "").strip() or None
+    async def get_session_history(args: dict[str, Any]) -> dict[str, Any]:
+        limit = min(args.get("limit", 5), 10)
 
         async with session_factory() as db_session:
-            results = await ExerciseResultRepo.get_recent(
-                db_session, user_id, limit=limit, topic=topic,
+            sessions = await SessionRepo.get_recent(
+                db_session, user_id, limit=limit,
             )
-            items = [
-                {
-                    "exercise_type": r.exercise_type,
-                    "topic": r.topic,
-                    "score": r.score,
-                    "max_score": r.max_score,
-                    "words_involved": r.words_involved,
-                    "notes": r.agent_notes,
-                    "date": _to_local_iso(r.created_at),
+            items = []
+            for sess in sessions:
+                duration_min = None
+                if sess.ended_at and sess.started_at:
+                    duration_min = int(
+                        (sess.ended_at - sess.started_at).total_seconds() / 60,
+                    )
+
+                exercises = await ExerciseResultRepo.get_by_session(
+                    db_session, sess.id,
+                )
+                exercise_items = [
+                    {
+                        "exercise_type": r.exercise_type,
+                        "topic": r.topic,
+                        "score": r.score,
+                        "max_score": r.max_score,
+                        "words_involved": r.words_involved,
+                    }
+                    for r in exercises
+                ]
+
+                entry: dict[str, Any] = {
+                    "date": _to_local_iso(sess.started_at),
+                    "session_type": sess.session_type,
+                    "duration_min": duration_min,
+                    "turns": sess.num_turns,
+                    "tools_used": sess.tool_calls_count,
                 }
-                for r in results
-            ]
-            return _ok({"history": items, "count": len(items)})
+                if sess.ai_summary:
+                    entry["summary"] = sess.ai_summary
+                if exercise_items:
+                    entry["exercises"] = exercise_items
+                items.append(entry)
+
+            return _ok({"sessions": items, "count": len(items)})
 
     @tool(
         "get_progress_summary",
@@ -1722,7 +1746,7 @@ def create_session_tools(
         get_due_vocabulary,
         manage_schedule,
         search_vocabulary,
-        get_exercise_history,
+        get_session_history,
         get_progress_summary,
         manage_learning_plan,
         adjust_level,

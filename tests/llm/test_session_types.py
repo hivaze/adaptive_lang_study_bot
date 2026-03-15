@@ -25,7 +25,7 @@ async def test_onboarding_uses_limited_tools(create_llm_session):
     # Onboarding allows: get_user_profile, update_preference, manage_schedule
     restricted_tools = {"record_exercise_result", "add_vocabulary",
                         "get_due_vocabulary", "search_vocabulary",
-                        "get_exercise_history"}
+                        "get_session_history"}
     called_restricted = restricted_tools & set(session.bare_tools)
     assert not called_restricted, (
         f"Onboarding session should not use restricted tools, but called: {called_restricted}"

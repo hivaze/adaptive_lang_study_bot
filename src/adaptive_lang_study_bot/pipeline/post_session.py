@@ -22,7 +22,7 @@ from adaptive_lang_study_bot.utils import compute_new_streak, stamp_field, strip
 
 # Prep tools that hint at what the agent was doing when the user dropped off.
 _PREP_TOOL_HINTS = {
-    "get_exercise_history": "preparing an exercise",
+    "get_session_history": "reviewing past sessions",
     "get_due_vocabulary": "setting up vocabulary review",
     "search_vocabulary": "looking up vocabulary",
     "get_progress_summary": "reviewing progress",

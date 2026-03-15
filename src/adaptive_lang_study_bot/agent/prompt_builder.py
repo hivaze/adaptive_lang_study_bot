@@ -488,7 +488,7 @@ def _build_teaching_approach_section(
     # GUIDE already provides the diagnostic exercise flow)
     if not is_first_session:
         if has_perf_tools:
-            # Interactive: agent has get_progress_summary / get_exercise_history for
+            # Interactive: agent has get_progress_summary / get_session_history for
             # live score trends — generic rules are sufficient, no stale snapshot.
             adaptive_lines.append(
                 "SCORE ADAPTATION:\n"
@@ -702,7 +702,7 @@ def _build_session_context_section(
             ctx_lines.append(f"\n[{date}{duration}]")
             ctx_lines.append(sess.ai_summary)
 
-    # Session history — skip for interactive (agent can call get_exercise_history)
+    # Session history — skip for interactive (agent can call get_session_history)
     if not has_perf_tools:
         session_history = user.session_history or []
         if session_history:
@@ -1116,7 +1116,7 @@ def build_system_prompt(
     13. LEARNING PLAN — (conditional) plan structure and progress
     14. BOT CAPABILITIES — what agent can/cannot do vs /settings
 
-    Interactive sessions have live tools (get_exercise_history, get_progress_summary)
+    Interactive sessions have live tools (get_session_history, get_progress_summary)
     for performance data, so static snapshots of scores, topic performance, and
     session history are omitted — the agent can query fresh data when needed.
     Onboarding sessions lack those tools, so static data is preserved.
@@ -1231,8 +1231,8 @@ def build_system_prompt(
         n = len(tool_hints) + 1
         tool_hints.append(
             f"{n}. Recent session summaries are included in SESSION CONTEXT below. Call "
-            "get_exercise_history only when you need per-exercise detail beyond what the "
-            "summaries provide (specific scores, words involved, exercise dates)."
+            "get_session_history when you need full session history with metadata, "
+            "AI summaries, and per-exercise details (scores, words, topics)."
         )
         tool_hints.append(
             f"{n + 1}. Call get_progress_summary only when you need aggregate statistics "
@@ -1277,7 +1277,7 @@ def build_system_prompt(
         f"Strong areas: {', '.join(_dated_item(_sanitize(i), ts, 'strong_areas', i) for i in user.strong_areas) if user.strong_areas else 'none identified yet'}",
     ]
     if has_perf_tools:
-        # Interactive sessions: agent can call get_progress_summary / get_exercise_history
+        # Interactive sessions: agent can call get_progress_summary / get_session_history
         # for live, detailed performance data — omit stale static snapshot.
         profile_lines.append("Recent performance: see session summaries below; call get_progress_summary for detailed stats")
     else:

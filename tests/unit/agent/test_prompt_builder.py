@@ -407,7 +407,7 @@ class TestSessionHistory:
 
     Session history is only included for sessions without performance tools
     (onboarding). Interactive sessions omit it — the agent can call
-    get_exercise_history for live data.
+    get_session_history for live data.
     """
 
     def test_history_shown_onboarding(self):

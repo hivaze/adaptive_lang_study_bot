@@ -329,14 +329,14 @@ class TestLastActivity:
             await run_post_session(
                 user_id=uid,
                 session_id=sess.id,
-                tools_called=["mcp__langbot__get_exercise_history"],
+                tools_called=["mcp__langbot__get_session_history"],
                 close_reason=CloseReason.IDLE_TIMEOUT,
             )
 
             updated = await _read_user(penv, uid)
             activity = updated.last_activity
             assert activity["status"] == "incomplete"
-            assert activity["pending_context"] == "preparing an exercise"
+            assert activity["pending_context"] == "reviewing past sessions"
         finally:
             await _cleanup(penv, uid)
 
@@ -359,7 +359,7 @@ class TestLastActivity:
                 user_id=uid,
                 session_id=sess.id,
                 tools_called=[
-                    "mcp__langbot__get_exercise_history",
+                    "mcp__langbot__get_session_history",
                     "mcp__langbot__record_exercise_result",
                 ],
                 close_reason=CloseReason.IDLE_TIMEOUT,
