@@ -407,10 +407,12 @@
     "Mach weiter so, {name}! Deine <b>{streak}-Tage-Serie</b> zeigt echte Disziplin."
   ],
   "notif.streak_info": "Deine Serie: {streak} Tage! ",
+  "notif.streak_warning": "Deine {streak}-Tage-Serie ist in Gefahr! ",
+  "notif.plan_info": "\n\n📊 Plan {plan_levels}: {plan_pct}% abgeschlossen ({completed}/{total} Themen)",
   "notif.practice_reminder": [
-    "Hey {name}! {streak_info}Zeit für deine {target_language}-Lektion. Bleib am Ball!",
-    "{name}, deine geplante Lektion beginnt jetzt! {streak_info}Bereit für {target_language}?",
-    "Lektionszeit, {name}! {streak_info}Deine {target_language}-Sitzung wartet."
+    "Hey {name}! {streak_info}Zeit für deine {target_language}-Lektion. Bleib am Ball!{plan_info}",
+    "{name}, deine geplante Lektion beginnt jetzt! {streak_info}Bereit für {target_language}?{plan_info}",
+    "Lektionszeit, {name}! {streak_info}Deine {target_language}-Sitzung wartet.{plan_info}"
   ],
   "notif.practice_reminder_another": [
     "Toll gemacht heute, {name}! Lust auf noch eine {target_language}-Sitzung?",

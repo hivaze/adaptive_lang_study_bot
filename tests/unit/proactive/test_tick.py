@@ -178,6 +178,7 @@ class TestPhaseSchedules:
                  s2.id: (ScheduleStatus.ACTIVE, None),
              }), \
              patch(f"{TICK_MODULE}.SessionRepo.count_since_batch", new_callable=AsyncMock, return_value={}), \
+             patch(f"{TICK_MODULE}.LearningPlanRepo.get_active_batch", new_callable=AsyncMock, return_value={}), \
              patch(f"{TICK_MODULE}.SessionRepo.count_since", new_callable=AsyncMock, return_value=0), \
              patch(f"{TICK_MODULE}.dispatch_notification", new_callable=AsyncMock, return_value="msg") as mock_dispatch, \
              patch(f"{TICK_MODULE}.compute_next_trigger", return_value=datetime.now(timezone.utc) + timedelta(days=1)), \
@@ -202,6 +203,7 @@ class TestPhaseSchedules:
                  s.id: (ScheduleStatus.PAUSED, None),
              }), \
              patch(f"{TICK_MODULE}.SessionRepo.count_since_batch", new_callable=AsyncMock, return_value={}), \
+             patch(f"{TICK_MODULE}.LearningPlanRepo.get_active_batch", new_callable=AsyncMock, return_value={}), \
              patch(f"{TICK_MODULE}.SessionRepo.count_since", new_callable=AsyncMock, return_value=0), \
              patch(f"{TICK_MODULE}.dispatch_notification", new_callable=AsyncMock) as mock_dispatch:
             from adaptive_lang_study_bot.proactive.tick import _phase_schedules
@@ -222,6 +224,7 @@ class TestPhaseSchedules:
              patch(f"{TICK_MODULE}.VocabularyRepo.count_due_batch", new_callable=AsyncMock, return_value={}), \
              patch(f"{TICK_MODULE}.ScheduleRepo.get_statuses_batch", new_callable=AsyncMock, return_value={}), \
              patch(f"{TICK_MODULE}.SessionRepo.count_since_batch", new_callable=AsyncMock, return_value={}), \
+             patch(f"{TICK_MODULE}.LearningPlanRepo.get_active_batch", new_callable=AsyncMock, return_value={}), \
              patch(f"{TICK_MODULE}.SessionRepo.count_since", new_callable=AsyncMock, return_value=0), \
              patch(f"{TICK_MODULE}.dispatch_notification", new_callable=AsyncMock) as mock_dispatch:
             from adaptive_lang_study_bot.proactive.tick import _phase_schedules
@@ -243,6 +246,7 @@ class TestPhaseSchedules:
                  s.id: (ScheduleStatus.ACTIVE, None),
              }), \
              patch(f"{TICK_MODULE}.SessionRepo.count_since_batch", new_callable=AsyncMock, return_value={}), \
+             patch(f"{TICK_MODULE}.LearningPlanRepo.get_active_batch", new_callable=AsyncMock, return_value={}), \
              patch(f"{TICK_MODULE}.SessionRepo.count_since", new_callable=AsyncMock, return_value=0), \
              patch(f"{TICK_MODULE}.dispatch_notification", new_callable=AsyncMock, side_effect=RuntimeError("fail")), \
              patch(f"{TICK_MODULE}._handle_schedule_failure", new_callable=AsyncMock) as mock_handle:
@@ -251,6 +255,151 @@ class TestPhaseSchedules:
             await _phase_schedules(AsyncMock())
 
         mock_handle.assert_called_once_with(s, pytest.approx(mock_handle.call_args[0][1], abs=1))
+
+    @pytest.mark.asyncio
+    async def test_streak_warning_when_not_practiced_today(self):
+        """Streak warning (not info) is used when user hasn't practiced today."""
+        s = _make_schedule(user_id=100)
+        s.user.streak_days = 5  # Has a streak > 1
+
+        factory, _ = _mock_session_factory()
+        captured_trigger = {}
+
+        async def capture_dispatch(user, trigger, bot):
+            captured_trigger.update(trigger)
+            return "msg"
+
+        with patch(f"{TICK_MODULE}.async_session_factory", factory), \
+             patch(f"{TICK_MODULE}.ScheduleRepo.get_due", new_callable=AsyncMock, return_value=[s]), \
+             patch(f"{TICK_MODULE}.VocabularyRepo.count_due_batch", new_callable=AsyncMock, return_value={100: 5}), \
+             patch(f"{TICK_MODULE}.ScheduleRepo.get_statuses_batch", new_callable=AsyncMock, return_value={
+                 s.id: (ScheduleStatus.ACTIVE, None),
+             }), \
+             patch(f"{TICK_MODULE}.SessionRepo.count_since_batch", new_callable=AsyncMock, return_value={}), \
+             patch(f"{TICK_MODULE}.LearningPlanRepo.get_active_batch", new_callable=AsyncMock, return_value={}), \
+             patch(f"{TICK_MODULE}.SessionRepo.count_since", new_callable=AsyncMock, return_value=0), \
+             patch(f"{TICK_MODULE}.dispatch_notification", side_effect=capture_dispatch), \
+             patch(f"{TICK_MODULE}.compute_next_trigger", return_value=datetime.now(timezone.utc) + timedelta(days=1)), \
+             patch(f"{TICK_MODULE}.ScheduleRepo.update_after_trigger", new_callable=AsyncMock), \
+             patch(f"{TICK_MODULE}.ScheduleRepo.update_fields", new_callable=AsyncMock):
+            from adaptive_lang_study_bot.proactive.tick import _phase_schedules
+
+            await _phase_schedules(AsyncMock())
+
+        data = captured_trigger["data"]
+        # streak_info should contain warning text (from notif.streak_warning), not info
+        assert "risk" in data["streak_info"].lower() or "danger" in data["streak_info"].lower() or "угроз" in data["streak_info"].lower()
+
+    @pytest.mark.asyncio
+    async def test_streak_info_when_already_practiced(self):
+        """Regular streak info (not warning) is used when user already practiced today."""
+        s = _make_schedule(user_id=100)
+        s.user.streak_days = 5
+
+        factory, _ = _mock_session_factory()
+        captured_trigger = {}
+
+        async def capture_dispatch(user, trigger, bot):
+            captured_trigger.update(trigger)
+            return "msg"
+
+        with patch(f"{TICK_MODULE}.async_session_factory", factory), \
+             patch(f"{TICK_MODULE}.ScheduleRepo.get_due", new_callable=AsyncMock, return_value=[s]), \
+             patch(f"{TICK_MODULE}.VocabularyRepo.count_due_batch", new_callable=AsyncMock, return_value={100: 5}), \
+             patch(f"{TICK_MODULE}.ScheduleRepo.get_statuses_batch", new_callable=AsyncMock, return_value={
+                 s.id: (ScheduleStatus.ACTIVE, None),
+             }), \
+             patch(f"{TICK_MODULE}.SessionRepo.count_since_batch", new_callable=AsyncMock, return_value={}), \
+             patch(f"{TICK_MODULE}.LearningPlanRepo.get_active_batch", new_callable=AsyncMock, return_value={}), \
+             patch(f"{TICK_MODULE}.SessionRepo.count_since", new_callable=AsyncMock, return_value=1), \
+             patch(f"{TICK_MODULE}.dispatch_notification", side_effect=capture_dispatch), \
+             patch(f"{TICK_MODULE}.compute_next_trigger", return_value=datetime.now(timezone.utc) + timedelta(days=1)), \
+             patch(f"{TICK_MODULE}.ScheduleRepo.update_after_trigger", new_callable=AsyncMock), \
+             patch(f"{TICK_MODULE}.ScheduleRepo.update_fields", new_callable=AsyncMock):
+            from adaptive_lang_study_bot.proactive.tick import _phase_schedules
+
+            await _phase_schedules(AsyncMock())
+
+        data = captured_trigger["data"]
+        # Should be info, not warning
+        assert "streak" in data["streak_info"].lower()
+        assert "risk" not in data["streak_info"].lower()
+
+    @pytest.mark.asyncio
+    async def test_plan_info_included_when_plan_exists(self):
+        """Plan progress info is included in trigger data when user has a plan."""
+        s = _make_schedule(user_id=100)
+        mock_plan = MagicMock()
+        mock_plan.user_id = 100
+        mock_plan.current_level = "A1"
+        mock_plan.target_level = "B1"
+        mock_plan.total_weeks = 8
+        mock_plan.start_date = datetime.now(timezone.utc).date()
+        mock_plan.plan_data = {"phases": [{"topics": ["Greetings"]}]}
+
+        factory, _ = _mock_session_factory()
+        captured_trigger = {}
+
+        async def capture_dispatch(user, trigger, bot):
+            captured_trigger.update(trigger)
+            return "msg"
+
+        with patch(f"{TICK_MODULE}.async_session_factory", factory), \
+             patch(f"{TICK_MODULE}.ScheduleRepo.get_due", new_callable=AsyncMock, return_value=[s]), \
+             patch(f"{TICK_MODULE}.VocabularyRepo.count_due_batch", new_callable=AsyncMock, return_value={100: 5}), \
+             patch(f"{TICK_MODULE}.ScheduleRepo.get_statuses_batch", new_callable=AsyncMock, return_value={
+                 s.id: (ScheduleStatus.ACTIVE, None),
+             }), \
+             patch(f"{TICK_MODULE}.SessionRepo.count_since_batch", new_callable=AsyncMock, return_value={}), \
+             patch(f"{TICK_MODULE}.LearningPlanRepo.get_active_batch", new_callable=AsyncMock, return_value={100: mock_plan}), \
+             patch(f"{TICK_MODULE}.SessionRepo.count_since", new_callable=AsyncMock, return_value=0), \
+             patch(f"{TICK_MODULE}.fetch_plan_topic_stats", new_callable=AsyncMock, return_value={}), \
+             patch(f"{TICK_MODULE}.compute_plan_progress", return_value={
+                 "progress_pct": 25, "completed_topics": 2, "total_topics": 8,
+             }), \
+             patch(f"{TICK_MODULE}.dispatch_notification", side_effect=capture_dispatch), \
+             patch(f"{TICK_MODULE}.compute_next_trigger", return_value=datetime.now(timezone.utc) + timedelta(days=1)), \
+             patch(f"{TICK_MODULE}.ScheduleRepo.update_after_trigger", new_callable=AsyncMock), \
+             patch(f"{TICK_MODULE}.ScheduleRepo.update_fields", new_callable=AsyncMock):
+            from adaptive_lang_study_bot.proactive.tick import _phase_schedules
+
+            await _phase_schedules(AsyncMock())
+
+        data = captured_trigger["data"]
+        assert "A1" in data["plan_info"]
+        assert "B1" in data["plan_info"]
+        assert "25%" in data["plan_info"]
+
+    @pytest.mark.asyncio
+    async def test_plan_info_empty_when_no_plan(self):
+        """Plan info is empty string when user has no learning plan."""
+        s = _make_schedule(user_id=100)
+
+        factory, _ = _mock_session_factory()
+        captured_trigger = {}
+
+        async def capture_dispatch(user, trigger, bot):
+            captured_trigger.update(trigger)
+            return "msg"
+
+        with patch(f"{TICK_MODULE}.async_session_factory", factory), \
+             patch(f"{TICK_MODULE}.ScheduleRepo.get_due", new_callable=AsyncMock, return_value=[s]), \
+             patch(f"{TICK_MODULE}.VocabularyRepo.count_due_batch", new_callable=AsyncMock, return_value={100: 5}), \
+             patch(f"{TICK_MODULE}.ScheduleRepo.get_statuses_batch", new_callable=AsyncMock, return_value={
+                 s.id: (ScheduleStatus.ACTIVE, None),
+             }), \
+             patch(f"{TICK_MODULE}.SessionRepo.count_since_batch", new_callable=AsyncMock, return_value={}), \
+             patch(f"{TICK_MODULE}.LearningPlanRepo.get_active_batch", new_callable=AsyncMock, return_value={}), \
+             patch(f"{TICK_MODULE}.SessionRepo.count_since", new_callable=AsyncMock, return_value=0), \
+             patch(f"{TICK_MODULE}.dispatch_notification", side_effect=capture_dispatch), \
+             patch(f"{TICK_MODULE}.compute_next_trigger", return_value=datetime.now(timezone.utc) + timedelta(days=1)), \
+             patch(f"{TICK_MODULE}.ScheduleRepo.update_after_trigger", new_callable=AsyncMock), \
+             patch(f"{TICK_MODULE}.ScheduleRepo.update_fields", new_callable=AsyncMock):
+            from adaptive_lang_study_bot.proactive.tick import _phase_schedules
+
+            await _phase_schedules(AsyncMock())
+
+        assert captured_trigger["data"]["plan_info"] == ""
 
     @pytest.mark.asyncio
     async def test_dispatches_run_concurrently(self):
@@ -278,6 +427,7 @@ class TestPhaseSchedules:
              patch(f"{TICK_MODULE}.VocabularyRepo.count_due_batch", new_callable=AsyncMock, return_value=due_counts), \
              patch(f"{TICK_MODULE}.ScheduleRepo.get_statuses_batch", new_callable=AsyncMock, return_value=statuses), \
              patch(f"{TICK_MODULE}.SessionRepo.count_since_batch", new_callable=AsyncMock, return_value={}), \
+             patch(f"{TICK_MODULE}.LearningPlanRepo.get_active_batch", new_callable=AsyncMock, return_value={}), \
              patch(f"{TICK_MODULE}.SessionRepo.count_since", new_callable=AsyncMock, return_value=0), \
              patch(f"{TICK_MODULE}.dispatch_notification", side_effect=slow_dispatch), \
              patch(f"{TICK_MODULE}.compute_next_trigger", return_value=datetime.now(timezone.utc) + timedelta(days=1)), \

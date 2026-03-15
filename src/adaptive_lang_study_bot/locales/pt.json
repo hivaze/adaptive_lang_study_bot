@@ -407,10 +407,12 @@
     "Continue assim, {name}! Sua <b>sequência de {streak} dias</b> mostra verdadeiro compromisso."
   ],
   "notif.streak_info": "Sua sequência: {streak} dias! ",
+  "notif.streak_warning": "Sua sequência de {streak} dias está em risco! ",
+  "notif.plan_info": "\n\n📊 Plano {plan_levels}: {plan_pct}% concluído ({completed}/{total} temas)",
   "notif.practice_reminder": [
-    "Oi {name}! {streak_info}Hora da sua lição de {target_language}. Vamos manter o ritmo!",
-    "{name}, sua lição programada começa agora! {streak_info}Pronto(a) para aprender {target_language}?",
-    "Hora da lição, {name}! {streak_info}Sua sessão de {target_language} está esperando."
+    "Oi {name}! {streak_info}Hora da sua lição de {target_language}. Vamos manter o ritmo!{plan_info}",
+    "{name}, sua lição programada começa agora! {streak_info}Pronto(a) para aprender {target_language}?{plan_info}",
+    "Hora da lição, {name}! {streak_info}Sua sessão de {target_language} está esperando.{plan_info}"
   ],
   "notif.practice_reminder_another": [
     "Bom trabalho hoje, {name}! Quer mais uma sessão de {target_language}?",

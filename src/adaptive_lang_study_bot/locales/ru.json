@@ -407,10 +407,12 @@
     "Продолжай в том же духе, {name}! Твоя серия в <b>{streak} дней</b> говорит о настоящей дисциплине."
   ],
   "notif.streak_info": "Серия: {streak} дн.! ",
+  "notif.streak_warning": "Серия {streak} дн. под угрозой! ",
+  "notif.plan_info": "\n\n📊 План {plan_levels}: {plan_pct}% ({completed}/{total} тем)",
   "notif.practice_reminder": [
-    "Привет, {name}! {streak_info}Время для урока {target_language}. Давай не терять темп!",
-    "{name}, пора на занятие! {streak_info}Готов(-а) к уроку {target_language}?",
-    "Время урока, {name}! {streak_info}Твоё занятие по {target_language} ждёт."
+    "Привет, {name}! {streak_info}Время для урока {target_language}. Давай не терять темп!{plan_info}",
+    "{name}, пора на занятие! {streak_info}Готов(-а) к уроку {target_language}?{plan_info}",
+    "Время урока, {name}! {streak_info}Твоё занятие по {target_language} ждёт.{plan_info}"
   ],
   "notif.practice_reminder_another": [
     "Отлично позанимался(-ась) сегодня, {name}! Хочешь ещё один урок {target_language}?",

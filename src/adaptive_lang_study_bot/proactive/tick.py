@@ -19,11 +19,13 @@ from adaptive_lang_study_bot.config import tuning
 from adaptive_lang_study_bot.metrics import PROACTIVE_TICK_DURATION, PROACTIVE_TICKS
 from adaptive_lang_study_bot.db.engine import async_session_factory
 from adaptive_lang_study_bot.db.repositories import (
+    LearningPlanRepo,
     ScheduleRepo,
     SessionRepo,
     UserRepo,
     VocabularyRepo,
 )
+from adaptive_lang_study_bot.agent.tools import compute_plan_progress, fetch_plan_topic_stats
 from adaptive_lang_study_bot.enums import ScheduleStatus, ScheduleType
 from adaptive_lang_study_bot.i18n import DEFAULT_LANGUAGE, t
 from adaptive_lang_study_bot.proactive.dispatcher import build_cta_keyboard, dispatch_notification
@@ -268,6 +270,10 @@ async def _phase_schedules(bot: Bot) -> None:
             await SessionRepo.count_since_batch(db, active_user_ids, week_start)
             if active_user_ids else {}
         )
+        plans = (
+            await LearningPlanRepo.get_active_batch(db, active_user_ids)
+            if active_user_ids else {}
+        )
     # DB session released
 
     # 2. Filter to actionable work items
@@ -325,12 +331,44 @@ async def _phase_schedules(bot: Bot) -> None:
 
                 target_lang_name = t(f"lang.{user.target_language}", user.native_language)
 
+                # Streak info: warning when at risk, informational otherwise
                 streak_info = ""
-                if user.streak_days > 1:
+                if user.streak_days > 1 and today_sessions == 0:
+                    streak_info = t(
+                        "notif.streak_warning", user.native_language,
+                        streak=user.streak_days,
+                    )
+                elif user.streak_days > 1:
                     streak_info = t(
                         "notif.streak_info", user.native_language,
                         streak=user.streak_days,
                     )
+
+                # Learning plan progress
+                plan_info = ""
+                plan = plans.get(user.telegram_id)
+                if plan:
+                    try:
+                        async with async_session_factory() as plan_db:
+                            topic_stats = await fetch_plan_topic_stats(
+                                plan_db, user.telegram_id, plan,
+                            )
+                        progress = compute_plan_progress(
+                            plan.plan_data or {}, plan.total_weeks,
+                            plan.start_date, topic_stats,
+                        )
+                        plan_info = t(
+                            "notif.plan_info", user.native_language,
+                            plan_levels=f"{plan.current_level} → {plan.target_level}",
+                            plan_pct=progress["progress_pct"],
+                            completed=progress["completed_topics"],
+                            total=progress["total_topics"],
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to compute plan progress for user {}",
+                            user.telegram_id,
+                        )
 
                 trigger = {
                     "type": schedule.schedule_type,
@@ -347,6 +385,7 @@ async def _phase_schedules(bot: Bot) -> None:
                         "target_language": target_lang_name,
                         "sessions_week": session_counts.get(user.telegram_id, 0),
                         "today_sessions": today_sessions,
+                        "plan_info": plan_info,
                     },
                 }
 

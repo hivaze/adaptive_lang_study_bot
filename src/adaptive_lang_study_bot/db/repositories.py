@@ -1554,6 +1554,18 @@ class LearningPlanRepo:
         return result.scalar_one_or_none()
 
     @staticmethod
+    async def get_active_batch(
+        session: AsyncSession, user_ids: list[int],
+    ) -> dict[int, "LearningPlan"]:
+        """Batch-fetch active learning plans for multiple users."""
+        if not user_ids:
+            return {}
+        result = await session.execute(
+            select(LearningPlan).where(LearningPlan.user_id.in_(user_ids)),
+        )
+        return {plan.user_id: plan for plan in result.scalars().all()}
+
+    @staticmethod
     async def create(session: AsyncSession, **kwargs) -> LearningPlan:
         """Create a new plan.  Deletes any existing plan for this user first."""
         user_id = kwargs.get("user_id")
