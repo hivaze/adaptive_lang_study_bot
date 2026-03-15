@@ -13,7 +13,7 @@ Try the live bot: [@personal_lang_study_bot](https://t.me/personal_lang_study_bo
 - **Learning plans** — structured multi-week study plans with phases, topics, and vocabulary targets. Plans are constructed according to the student's session style. Progress is derived from exercise results. The agent adapts plans when the student is ahead or behind schedule.
 - **Vocabulary tracking** — words are stored per-user with FSRS spaced repetition. The bot schedules reviews at optimal intervals.
 - **Web search-powered discussions** — the agent can search the web (via Tavily) for news, articles, and cultural content in the target language. Users can ask for news-based lessons, current event discussions, or topic exploration. Available in both interactive sessions and proactive notifications.
-- **Proactive notifications** — 11 event triggers including streak-at-risk alerts, vocabulary review reminders, weekly progress summaries, and re-engagement nudges. Notifications can include web-searched content relevant to the user's interests. The bot remembers what it sent — when a user replies to a notification, the session automatically continues from that context. Users control schedules via natural language or `/settings`.
+- **Proactive notifications** — schedule-based reminders that the user signs up for: practice reminders, vocabulary review (when cards are due), weekly progress summaries, and agent-created quiz/custom schedules. Notifications include action + dismiss buttons. The bot remembers what it sent — when a user replies to a notification, the session automatically continues from that context. Users control schedules via natural language or `/settings`.
 - **Auto session management** — sessions end automatically when the lesson reaches a natural conclusion. The agent calls an `end_session` tool, delivers a farewell, and the user receives a formatted summary with achievements and recommendations. An internal AI summary is generated in the background and injected into the next session's system prompt for continuity.
 - **Two-tier system** — Free (Haiku 4.5) and Premium (Sonnet 4.6) with different limits. No billing — admin grants premium via the Gradio panel.
 - **17 target languages** — English, French, Spanish, Italian, German, Portuguese, Russian, Chinese, Japanese, Korean, Arabic, Turkish, Dutch, Polish, Swedish, Ukrainian, Hindi. Users can learn any of these.
@@ -171,9 +171,9 @@ Any other text message starts or continues an interactive study session with the
 │ (streak, difficulty, milestones)                               │
 │                                                                │
 │ PROACTIVE ENGINE                                               │
-│ APScheduler 60s --> 11 Triggers --> Dispatcher                 │
-│                                     ├── template --> Telegram  │
-│                                     └── LLM (+ web tools) ──> Anthropic│
+│ APScheduler 60s --> Schedules --> Dispatcher                    │
+│                                   ├── template --> Telegram    │
+│                                   └── LLM (+ web tools) ──> Anthropic│
 │                                                                │
 │ Health Alerts + Stats Reports ──────> Telegram (admins)        │
 │ Prometheus metrics :9090                                       │
@@ -235,9 +235,8 @@ src/adaptive_lang_study_bot/
 - **Session continuity via AI summaries** — after each session, a background LLM call generates a structured internal summary (topics, performance, vocabulary, continuation points). These summaries are stored in the `sessions.ai_summary` column and injected into the next session's system prompt, giving the agent rich context about recent sessions without duplicating raw exercise data.
 - **Hybrid personalization** — the system prompt carries the user profile snapshot (read-only context), while MCP tools handle all DB writes (exercises, vocabulary, preferences). Session style (structured/intensive/casual) modulates prompt generation across multiple sections: session flow, exercise preferences, plan construction guidelines, and minimum coverage rules.
 - **Learning plans** — structured multi-week plans (2-8 weeks) with phases, focus topics, and vocabulary targets. Progress is derived on-the-fly from exercise results (`compute_plan_progress`) — no stored per-topic state. The agent adapts plans when the student is ahead or behind schedule. Level progression is plan-anchored: the agent assesses readiness and calls `adjust_level` after plan completion, rather than automatic score thresholds. When all topics are completed but the user hasn't reached the target CEFR level, a consolidation phase is auto-added targeting the weakest topics at a higher mastery bar. Mastery plans (where current and target levels are the same) auto-complete and delete at 100%.
-- **Three-tier notifications** — template ($0 cost, random variant from locale files), LLM (short-lived proactive session with optional web search generates personalized message), or hybrid (try LLM, fall back to template). Free users get 2 LLM notifications/day, premium get 8. A post-session cooldown prevents notifications from firing immediately after a session ends.
+- **Three-tier notifications** — template ($0 cost, random variant from locale files), LLM (short-lived proactive session with optional web search generates personalized message), or hybrid (try LLM, fall back to template). Free users get 2 LLM notifications/day, premium get 8. All notifications include CTA keyboards with action + dismiss buttons. A post-session cooldown prevents notifications from firing immediately after a session ends.
 - **Notification reply context** — when a user replies to a proactive notification, the system prompt includes the notification text as context, so the agent naturally continues from that topic rather than starting fresh.
-- **Re-engagement triggers** — escalating nudge system for post-onboarding (24h → 3d → 7d → 14d), lapsed users (gentle → compelling → miss-you), and dormant users (weekly nudges for 21-45 days inactive), with automatic stop after final attempt.
 - **Localized UI** — all user-facing messages (bot UI, notifications, session summaries, warnings) rendered via `i18n.t()` in the user's native language.
 - **Post-session pipeline** — after each session, a pure-Python pipeline validates data integrity, updates streaks, auto-adjusts difficulty, and detects milestones.
 
@@ -314,8 +313,8 @@ No database, Redis, or SDK required. They verify:
 - Pure functions (message splitting, timezone conversion, language detection, utils helpers)
 - Prompt builder output structure and sanitization
 - Notification template rendering via i18n
-- Trigger evaluation logic (all 11 triggers + re-engagement escalation)
 - Dispatcher gate logic (should_send conditions)
+- Score normalization consistency (0-10 scale thresholds)
 - Post-session pipeline steps and post-session logic
 - FSRS engine operations
 - Config validation
@@ -365,7 +364,7 @@ The bot process runs 3 background jobs:
 
 | Job | Interval | Purpose |
 |-----|----------|---------|
-| `proactive_tick` | 60s | Schedule-based and event-triggered notifications |
+| `proactive_tick` | 60s | Schedule-based notifications and follow-up reminders |
 | `health_alerts` | 60s | Evaluate 7 health conditions, alert admins via Telegram |
 | `admin_stats_report` | 12h | Send usage/cost summary to admins via Telegram |
 

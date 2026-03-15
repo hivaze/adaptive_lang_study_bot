@@ -46,7 +46,7 @@ src/adaptive_lang_study_bot/
 ├── db/
 │   ├── engine.py          # SQLAlchemy async engine + session factory
 │   ├── models.py          # 9 ORM models: User, Vocabulary, Session (ai_summary), Schedule, ExerciseResult, Notification, LearningPlan, VocabularyReviewLog, AccessRequest
-│   ├── repositories.py    # Static-method repos with explicit AsyncSession param (batch vocab lookup, AI summary CRUD)
+│   ├── repositories.py    # Static-method repos with explicit AsyncSession param (batch vocab lookup, AI summary CRUD). All score queries normalize to 0-10 scale (score * 10.0 / max_score).
 │   └── migrations/        # Alembic
 ├── cache/
 │   ├── client.py          # Redis pool
@@ -54,9 +54,9 @@ src/adaptive_lang_study_bot/
 │   ├── redis_lock.py      # Distributed lock helpers (Lua release)
 │   └── session_lock.py    # Per-user session lock (SET NX)
 ├── proactive/
-│   ├── tick.py            # APScheduler 60s tick: Phase 0 (follow-up reminders) → Phase 1 (schedules) → Phase 2 (event triggers)
-│   ├── triggers.py        # 11 event triggers in ALL_TRIGGERS priority list
-│   ├── dispatcher.py      # should_send() gates, template/LLM/hybrid dispatch, CTA keyboards
+│   ├── tick.py            # APScheduler 60s tick: Phase 0 (follow-up reminders) → Phase 1 (schedules)
+│   ├── triggers.py        # Trigger dataclass (used by dispatcher type hints only; event triggers disabled)
+│   ├── dispatcher.py      # should_send() gates, template/LLM/hybrid dispatch, CTA keyboards (with dismiss button)
 │   └── admin_reports.py   # Stats reports (12h), health alerts (60s), 7 health checks
 ├── fsrs_engine/scheduler.py  # FSRS spaced repetition wrapper
 ├── pipeline/post_session.py  # Post-session pipeline (pure Python, no LLM): validation, streak, difficulty, milestones
@@ -81,7 +81,7 @@ development/
 
 **Interactive** (user-initiated): Telegram message → aiogram middlewares → `chat` router → `SessionManager.handle_message()` → `ClaudeSDKClient.query()` → response back to Telegram. One long-lived session per user, reused across messages until closed.
 
-**Proactive** (system-initiated): APScheduler 60s tick → `tick_scheduler()` processes follow-up reminders (Phase 0), evaluates due schedules (Phase 1), and event triggers (Phase 2) → `dispatcher.dispatch_notification()` → either renders an i18n template ($0) or runs a short-lived `run_proactive_llm_session()` → sends Telegram message with CTA keyboard. Proactive sessions are standalone (not managed by `SessionManager`), have no hooks, 30s timeout, haiku model, max 10 turns.
+**Proactive** (system-initiated): APScheduler 60s tick → `tick_scheduler()` processes follow-up reminders (Phase 0) and evaluates due schedules (Phase 1) → `dispatcher.dispatch_notification()` → either renders an i18n template ($0) or runs a short-lived `run_proactive_llm_session()` → sends Telegram message with CTA keyboard (action + dismiss buttons). Proactive sessions are standalone (not managed by `SessionManager`), have no hooks, 30s timeout, haiku model, max 10 turns. Event triggers (Phase 2) are disabled — only user-created schedules fire notifications.
 
 ### Agent session architecture
 
@@ -137,9 +137,13 @@ Redis is NOT used as a traditional cache — it provides distributed coordinatio
 
 ### Proactive engine
 
-11 event triggers in `triggers.py:ALL_TRIGGERS`, evaluated in priority order. Only one fires per user per tick. Phase 2 skips users with active interactive sessions to avoid mid-session interruptions. Three tiers of triggers: Tier 1 (engagement — streak risk, due cards, inactivity), Tier 1.5 (re-engagement — post-onboarding escalation windows, lapsed user escalation, dormant weekly), Tier 2 (learning — weak areas, score trends, incomplete exercises, progress celebrations). Phase 1 (schedules) checks if the user already had a lesson today — uses `practice_reminder_another` template variant if so.
+**Schedule-only notifications** — the bot only sends notifications for schedules the user explicitly created (during onboarding or via the agent). Event triggers (Phase 2) are disabled. Schedule types: `practice_reminder` (daily lesson nudge), `daily_review` (vocab review when cards are due), `progress_report` (weekly summary), `quiz` (agent-created), `custom` (agent-created). Phase 1 checks if the user already had a lesson today — uses `practice_reminder_another` template variant if so.
 
-Notifications dispatch via three tiers: **template** (i18n, $0), **LLM** (`run_proactive_llm_session()`), **hybrid** (try LLM, fall back to template). `should_send()` gates: paused → preference → quiet hours → cooldown → dedup. LLM notifications exceeding daily limit downgrade to template. Practice reminder notifications trigger follow-up reminder chains (Phase 0): if the user doesn't start a session within `tuning.schedule_reminder_interval` (10 min), a follow-up is sent up to `tuning.schedule_reminder_max` (5) times, deleting the previous message each time. Chain auto-cancels if the user starts a session.
+Notifications dispatch via three tiers: **template** (i18n, $0), **LLM** (`run_proactive_llm_session()`), **hybrid** (try LLM, fall back to template). `should_send()` gates: paused → preference → quiet hours → cooldown → dedup. LLM notifications exceeding daily limit downgrade to template. All notifications include CTA keyboards with an action button + dismiss button. The dismiss button (`cta:dismiss`) cancels the follow-up reminder chain and deletes the notification message.
+
+Practice reminder notifications trigger follow-up reminder chains (Phase 0): if the user doesn't start a session within `tuning.schedule_reminder_interval` (10 min), a follow-up is sent up to `tuning.schedule_reminder_max` (5) times, deleting the previous message each time. Chain auto-cancels if the user starts a session or taps the dismiss button.
+
+Three notification preference categories: `streak_reminders` (practice reminders, quiz, custom), `vocab_reviews` (daily review), `progress_reports` (weekly summary). Toggled in `/settings`.
 
 ### Guardrail layers
 
@@ -340,7 +344,7 @@ Repositories (`db/repositories.py`) use static methods with explicit `AsyncSessi
 Key design choices (read code for details):
 - FSRS state denormalized in vocabulary (`fsrs_due` column) for efficient due-card queries
 - Schedules use RRULE strings; `next_trigger_at` is the polled field
-- Notification preferences inlined in users table (avoids JOIN on proactive tick)
+- Notification preferences inlined in users table (avoids JOIN on proactive tick). Three categories: `streak_reminders`, `vocab_reviews`, `progress_reports`.
 - Learning plans: one per user (UNIQUE constraint), JSONB `plan_data` stores phases/topics, progress derived from exercise results via `compute_plan_progress()` (no stored per-topic state). Level progression is plan-anchored: the agent uses `adjust_level` after assessment, not automatic sliding-window. Mastery plans (current_level == target_level) auto-complete and delete at 100%. Auto-consolidation: when plan reaches 100% completion but user level < target, `_maybe_add_consolidation_phase()` appends a consolidation phase targeting weakest topics at `consolidation_mastery_score` threshold (triggered via `manage_learning_plan(action='get')`). Consolidation phases use `consolidation_added_at` date for fresh-exercise-only stat counting via `fetch_plan_topic_stats()`.
 - Field timestamps: `users.field_timestamps` JSONB tracks when profile fields were set/changed (date-only, user-local). Scalar fields use field name → ISO date string. Array fields use `sha256(item)[:8]` hex hash → ISO date string (avoids duplicating item text). Utilities: `stamp_field()`, `stamp_fields()`, `get_item_date()` in `utils.py`. Rendered as "(since DATE)" in system/proactive prompts. Language switch resets timestamps.
 
