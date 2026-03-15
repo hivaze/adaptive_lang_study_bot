@@ -1105,6 +1105,32 @@ async def on_cta_session(
 
 
 # ---------------------------------------------------------------------------
+# CTA: dismiss notification & cancel reminder chain
+# ---------------------------------------------------------------------------
+
+@router.callback_query(lambda c: c.data == "cta:dismiss")
+async def on_cta_dismiss(callback: CallbackQuery, user: User) -> None:
+    """Dismiss a notification and cancel any follow-up reminder chain."""
+    from adaptive_lang_study_bot.cache.client import get_redis
+    from adaptive_lang_study_bot.cache.keys import NOTIF_REMINDER_KEY
+
+    lang = _lang(user)
+    # Cancel reminder chain in Redis
+    redis = await get_redis()
+    key = NOTIF_REMINDER_KEY.format(user_id=user.telegram_id)
+    await redis.delete(key)
+
+    # Remove the notification message
+    if callback.message:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+
+    await callback.answer(t("cta.dismissed", lang))
+
+
+# ---------------------------------------------------------------------------
 # /help
 # ---------------------------------------------------------------------------
 

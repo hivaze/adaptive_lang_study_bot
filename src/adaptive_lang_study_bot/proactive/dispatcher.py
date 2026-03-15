@@ -74,6 +74,7 @@ def build_cta_keyboard(notification_type: str, lang: str) -> InlineKeyboardMarku
     i18n_key, callback_data = mapping
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t(i18n_key, lang), callback_data=callback_data)],
+        [InlineKeyboardButton(text=t("cta.dismiss", lang), callback_data="cta:dismiss")],
     ])
 
 

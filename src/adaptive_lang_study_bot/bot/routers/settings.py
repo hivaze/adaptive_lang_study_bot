@@ -240,23 +240,34 @@ async def _render_schedules_view(
             next_at = local_time.strftime("%Y-%m-%d %H:%M")
         else:
             next_at = "N/A"
-        status_icon = t("settings.schedule_paused_suffix", lang) if s.status == ScheduleStatus.PAUSED else ""
+        if s.status == ScheduleStatus.PAUSED:
+            status_icon = t("settings.schedule_paused_suffix", lang)
+        elif s.status == ScheduleStatus.EXPIRED:
+            status_icon = t("settings.schedule_expired_suffix", lang)
+        else:
+            status_icon = ""
         lines.append(f"  • {esc(s.description)}{status_icon} — {t('settings.schedule_next', lang, time=next_at)}")
 
         sid = str(s.id)
         short_desc = s.description[:20] + ("\u2026" if len(s.description) > 20 else "")
-        if s.status == ScheduleStatus.ACTIVE:
+        if s.status == ScheduleStatus.EXPIRED:
+            # Expired schedules can only be deleted, not resumed
+            delete_btn = InlineKeyboardButton(text=t("settings.btn_delete", lang), callback_data=f"sched:del:{sid}")
+            rows.append([delete_btn])
+        elif s.status == ScheduleStatus.ACTIVE:
             toggle_btn = InlineKeyboardButton(
                 text=t("settings.btn_pause", lang, desc=short_desc),
                 callback_data=f"sched:pause:{sid}",
             )
+            delete_btn = InlineKeyboardButton(text=t("settings.btn_delete", lang), callback_data=f"sched:del:{sid}")
+            rows.append([toggle_btn, delete_btn])
         else:
             toggle_btn = InlineKeyboardButton(
                 text=t("settings.btn_resume", lang, desc=short_desc),
                 callback_data=f"sched:resume:{sid}",
             )
-        delete_btn = InlineKeyboardButton(text=t("settings.btn_delete", lang), callback_data=f"sched:del:{sid}")
-        rows.append([toggle_btn, delete_btn])
+            delete_btn = InlineKeyboardButton(text=t("settings.btn_delete", lang), callback_data=f"sched:del:{sid}")
+            rows.append([toggle_btn, delete_btn])
 
     rows.append([InlineKeyboardButton(text=t("settings.btn_back", lang), callback_data="set:back")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=rows)

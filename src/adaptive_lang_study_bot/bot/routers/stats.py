@@ -119,6 +119,8 @@ async def cmd_stats(message: Message, user: User, db_session: AsyncSession) -> N
                   topic=esc(ex.topic), label=esc(label),
                   exercise_type=esc(ex.exercise_type)),
             )
+    else:
+        lines.append(t("stats.no_exercises", lang))
 
     # Tier info
     try:
