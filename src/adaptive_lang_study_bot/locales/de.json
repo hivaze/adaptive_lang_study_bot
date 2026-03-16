@@ -350,10 +350,10 @@
     "Guter Zeitpunkt für eine Wiederholung, {name}! <b>{due_count}</b> Karten sind bereit — Regelmäßigkeit ist der Schlüssel."
   ],
   "notif.progress_report": [
-    "<b>Wochenbericht</b>\n\n<b>Niveau:</b> {level}\n<b>Serie:</b> {streak} Tage\n<b>Gelernte Wörter:</b> {vocab_count}\n<b>Sitzungen diese Woche:</b> {sessions_week}\n\nWeiter so, {name}!"
+    "<b>Wochenbericht</b>\n\n<b>Niveau:</b> {level}\n<b>Gelernte Wörter:</b> {vocab_count}\n<b>Sitzungen diese Woche:</b> {sessions_week}\n\nWeiter so, {name}!"
   ],
   "notif.weekly_summary_template": [
-    "<b>Wochenbericht</b>\n\n<b>Niveau:</b> {level}\n<b>Serie:</b> {streak} Tage\n<b>Gelernte Wörter:</b> {vocab_count}\n<b>Sitzungen diese Woche:</b> {sessions_week}\n\nWeiter so, {name}!"
+    "<b>Wochenbericht</b>\n\n<b>Niveau:</b> {level}\n<b>Gelernte Wörter:</b> {vocab_count}\n<b>Sitzungen diese Woche:</b> {sessions_week}\n\nWeiter so, {name}!"
   ],
   "notif.weak_area_drill": [
     "{name}, es ist eine Weile her, seit du <b>{topic}</b> geübt hast. Bereit für ein gezieltes Training?",

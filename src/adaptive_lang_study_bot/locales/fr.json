@@ -350,10 +350,10 @@
     "Bon moment pour réviser, {name} ! <b>{due_count}</b> cartes sont prêtes — la régularité est la clé."
   ],
   "notif.progress_report": [
-    "<b>Résumé hebdomadaire</b>\n\n<b>Niveau :</b> {level}\n<b>Série :</b> {streak} jours\n<b>Mots appris :</b> {vocab_count}\n<b>Sessions cette semaine :</b> {sessions_week}\n\nContinue comme ça, {name} !"
+    "<b>Résumé hebdomadaire</b>\n\n<b>Niveau :</b> {level}\n<b>Mots appris :</b> {vocab_count}\n<b>Sessions cette semaine :</b> {sessions_week}\n\nContinue comme ça, {name} !"
   ],
   "notif.weekly_summary_template": [
-    "<b>Résumé hebdomadaire</b>\n\n<b>Niveau :</b> {level}\n<b>Série :</b> {streak} jours\n<b>Mots appris :</b> {vocab_count}\n<b>Sessions cette semaine :</b> {sessions_week}\n\nContinue comme ça, {name} !"
+    "<b>Résumé hebdomadaire</b>\n\n<b>Niveau :</b> {level}\n<b>Mots appris :</b> {vocab_count}\n<b>Sessions cette semaine :</b> {sessions_week}\n\nContinue comme ça, {name} !"
   ],
   "notif.weak_area_drill": [
     "{name}, ça fait un moment que tu n'as pas pratiqué <b>{topic}</b>. Prêt(e) pour un exercice ciblé ?",

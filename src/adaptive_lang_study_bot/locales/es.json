@@ -350,10 +350,10 @@
     "¡Buen momento para repasar, {name}! <b>{due_count}</b> tarjetas te esperan — la constancia es clave."
   ],
   "notif.progress_report": [
-    "<b>Resumen semanal</b>\n\n<b>Nivel:</b> {level}\n<b>Racha:</b> {streak} días\n<b>Palabras aprendidas:</b> {vocab_count}\n<b>Sesiones esta semana:</b> {sessions_week}\n\n¡Sigue así, {name}!"
+    "<b>Resumen semanal</b>\n\n<b>Nivel:</b> {level}\n<b>Palabras aprendidas:</b> {vocab_count}\n<b>Sesiones esta semana:</b> {sessions_week}\n\n¡Sigue así, {name}!"
   ],
   "notif.weekly_summary_template": [
-    "<b>Resumen semanal</b>\n\n<b>Nivel:</b> {level}\n<b>Racha:</b> {streak} días\n<b>Palabras aprendidas:</b> {vocab_count}\n<b>Sesiones esta semana:</b> {sessions_week}\n\n¡Sigue así, {name}!"
+    "<b>Resumen semanal</b>\n\n<b>Nivel:</b> {level}\n<b>Palabras aprendidas:</b> {vocab_count}\n<b>Sesiones esta semana:</b> {sessions_week}\n\n¡Sigue así, {name}!"
   ],
   "notif.weak_area_drill": [
     "{name}, hace tiempo que no practicas <b>{topic}</b>. ¿Listo/a para un ejercicio enfocado?",

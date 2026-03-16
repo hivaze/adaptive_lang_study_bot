@@ -852,9 +852,9 @@ def _build_learning_plan_section(
                 plan_lines.append(
                     f"\nPace: BEHIND schedule ({actual_pct}% done, "
                     f"expected ~{int(expected_pct)}%). "
-                    "Focus on completing pending topics. Consider simplifying exercises. "
-                    "ACTION: Proactively offer to adapt the plan by calling "
-                    "manage_learning_plan(action='adapt') to make remaining phases more achievable."
+                    "MANDATORY ACTION: Call manage_learning_plan(action='adapt') early in this "
+                    "session to extend the timeline and redistribute remaining topics. "
+                    "Do this BEFORE starting exercises. Then focus on completing pending topics."
                 )
             elif gap <= -tuning.plan_ahead_schedule_pct:
                 plan_lines.append(
@@ -1584,11 +1584,18 @@ _PROACTIVE_TASK_INSTRUCTIONS: dict[str, str] = {
         "notification, so the student needs a clear prompt to respond."
     ),
     "proactive_summary": (
-        "Generate a personalized progress summary for the student. "
+        "Generate a personalized weekly progress summary for the student. "
         "Use PROGRESS DATA (topic performance, vocabulary, session activity) "
-        "and RECENT CONTEXT (session summaries) to craft a comprehensive overview. "
-        "Include specific details: topics practiced, streak status, vocabulary growth. "
-        "Highlight achievements and suggest areas for improvement."
+        "and RECENT CONTEXT (session summaries) to craft a concise overview.\n"
+        "Guidelines:\n"
+        "- Include specific details: topics practiced, vocabulary growth, session count.\n"
+        "- Only mention streak if it is 3+ days — a 1-2 day streak is not noteworthy.\n"
+        "- Highlight concrete achievements and suggest specific areas for improvement.\n"
+        "- Do NOT ask questions or prompt for a reply — the student may not see this for hours.\n"
+        "- Write naturally and fluently in the student's native language. "
+        "Avoid awkward phrasing, calques, or machine-translation artifacts.\n"
+        "- If the student has a learning plan, mention plan progress briefly.\n"
+        "- Keep it concise: 3-6 short paragraphs max."
     ),
     "proactive_nudge": (
         "Generate a brief, warm motivational message encouraging the student "

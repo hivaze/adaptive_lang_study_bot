@@ -350,10 +350,10 @@
     "Buon momento per ripassare, {name}! <b>{due_count}</b> carte sono pronte — la costanza è la chiave."
   ],
   "notif.progress_report": [
-    "<b>Riepilogo settimanale</b>\n\n<b>Livello:</b> {level}\n<b>Serie:</b> {streak} giorni\n<b>Parole imparate:</b> {vocab_count}\n<b>Sessioni questa settimana:</b> {sessions_week}\n\nContinua così, {name}!"
+    "<b>Riepilogo settimanale</b>\n\n<b>Livello:</b> {level}\n<b>Parole imparate:</b> {vocab_count}\n<b>Sessioni questa settimana:</b> {sessions_week}\n\nContinua così, {name}!"
   ],
   "notif.weekly_summary_template": [
-    "<b>Riepilogo settimanale</b>\n\n<b>Livello:</b> {level}\n<b>Serie:</b> {streak} giorni\n<b>Parole imparate:</b> {vocab_count}\n<b>Sessioni questa settimana:</b> {sessions_week}\n\nContinua così, {name}!"
+    "<b>Riepilogo settimanale</b>\n\n<b>Livello:</b> {level}\n<b>Parole imparate:</b> {vocab_count}\n<b>Sessioni questa settimana:</b> {sessions_week}\n\nContinua così, {name}!"
   ],
   "notif.weak_area_drill": [
     "{name}, è passato un po' da quando hai praticato <b>{topic}</b>. Pronto per un esercizio mirato?",

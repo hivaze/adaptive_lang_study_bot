@@ -350,10 +350,10 @@
     "Самое время для повторения, {name}! <b>{due_count}</b> карточек готовы — регулярность важнее всего."
   ],
   "notif.progress_report": [
-    "<b>Итоги недели</b>\n\n<b>Уровень:</b> {level}\n<b>Серия:</b> {streak} дн.\n<b>Выучено слов:</b> {vocab_count}\n<b>Сессий за неделю:</b> {sessions_week}\n\nТак держать, {name}!"
+    "<b>Итоги недели</b>\n\n<b>Уровень:</b> {level}\n<b>Выучено слов:</b> {vocab_count}\n<b>Сессий за неделю:</b> {sessions_week}\n\nТак держать, {name}!"
   ],
   "notif.weekly_summary_template": [
-    "<b>Итоги недели</b>\n\n<b>Уровень:</b> {level}\n<b>Серия:</b> {streak} дн.\n<b>Выучено слов:</b> {vocab_count}\n<b>Сессий за неделю:</b> {sessions_week}\n\nТак держать, {name}!"
+    "<b>Итоги недели</b>\n\n<b>Уровень:</b> {level}\n<b>Выучено слов:</b> {vocab_count}\n<b>Сессий за неделю:</b> {sessions_week}\n\nТак держать, {name}!"
   ],
   "notif.weak_area_drill": [
     "{name}, ты давно не практиковал(а) <b>{topic}</b>. Готов(а) к целенаправленной тренировке?",
@@ -410,27 +410,27 @@
   "notif.streak_warning": "Серия {streak} дн. под угрозой! ",
   "notif.plan_info": "\n\n📊 План {plan_levels}: {plan_pct}% ({completed}/{total} тем)",
   "notif.practice_reminder": [
-    "Привет, {name}! {streak_info}Время для урока {target_language}. Давай не терять темп!{plan_info}",
-    "{name}, пора на занятие! {streak_info}Готов(-а) к уроку {target_language}?{plan_info}",
-    "Время урока, {name}! {streak_info}Твоё занятие по {target_language} ждёт.{plan_info}"
+    "Привет, {name}! {streak_info}Пора позаниматься — {target_language} ждёт!{plan_info}",
+    "{name}, время для занятия! {streak_info}Продолжим учить {target_language}?{plan_info}",
+    "Время урока, {name}! {streak_info}Давай продолжим {target_language}.{plan_info}"
   ],
   "notif.practice_reminder_another": [
-    "Отлично позанимался(-ась) сегодня, {name}! Хочешь ещё один урок {target_language}?",
+    "Сегодня ты уже занимался(-ась), {name}! Хочешь ещё один урок?",
     "{name}, ты уже занимался(-ась) сегодня — молодец! Как насчёт ещё одного подхода?"
   ],
   "notif.practice_reminder_followup": [
-    "Всё ещё тут, {name}? Твой урок {target_language} ждёт!",
-    "Не забудь про урок, {name}! Даже 5 минут практики {target_language} — это польза.",
-    "Последнее напоминание, {name}! Урок {target_language} готов, когда будешь готов(-а)."
+    "Всё ещё тут, {name}? Урок ждёт!",
+    "Не забудь про урок, {name}! Даже 5 минут — это польза.",
+    "Последнее напоминание, {name}! Урок готов, когда будешь готов(-а)."
   ],
   "notif.quiz": [
-    "Время квиза, {name}! Проверим твои знания {target_language}.",
-    "Готов(-а) к быстрому квизу по {target_language}, {name}? Посмотрим, что помнишь!",
-    "{name}, пора для квиза! Быстрая проверка прогресса по {target_language}."
+    "Время квиза, {name}! Проверим, что ты запомнил(-а).",
+    "Готов(-а) к быстрому квизу, {name}? Посмотрим, что помнишь!",
+    "{name}, пора для квиза! Быстрая проверка прогресса."
   ],
   "notif.custom": [
-    "Привет, {name}! Время для запланированного занятия по {target_language}.",
-    "{name}, у тебя запланировано задание по {target_language}!"
+    "Привет, {name}! Время для запланированного занятия.",
+    "{name}, у тебя запланировано задание!"
   ],
   "pipeline.plan_completed": "Вы завершили план обучения с целью {target_level}! Пора составить новый план для следующего уровня.",
 
