@@ -23,7 +23,7 @@ services:
     build: .
     command: python -m adaptive_lang_study_bot.entrypoints.run_admin
     ports:
-      - "7860:7860"
+      - "127.0.0.1:7860:7860"
     env_file: .env
     environment:
       POSTGRES_HOST: postgres
